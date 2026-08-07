@@ -1,0 +1,430 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CyberGrid</title>
+    <link rel="stylesheet" href="../../node_modules/xterm/css/xterm.css" />
+    <style>
+      :root {
+        color-scheme: dark;
+        --background: #080d14;
+        --panel: #0d1520;
+        --panel-raised: #111c29;
+        --border: #213044;
+        --text: #d7e2ef;
+        --muted: #7f91a7;
+        --accent: #23d5ab;
+        --accent-soft: rgba(35, 213, 171, 0.12);
+        --danger: #ff6b7a;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        overflow: hidden;
+        background: var(--background);
+        color: var(--text);
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+          sans-serif;
+      }
+
+      button,
+      input {
+        font: inherit;
+      }
+
+      button {
+        color: inherit;
+      }
+
+      .app-shell {
+        display: grid;
+        grid-template-columns: 248px minmax(0, 1fr);
+        width: 100%;
+        height: 100%;
+      }
+
+      .sidebar {
+        display: flex;
+        min-height: 0;
+        flex-direction: column;
+        border-right: 1px solid var(--border);
+        background: #0a111a;
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        height: 64px;
+        padding: 0 20px;
+        border-bottom: 1px solid var(--border);
+        font-weight: 700;
+        letter-spacing: 0.08em;
+      }
+
+      .brand-mark {
+        display: grid;
+        width: 30px;
+        height: 30px;
+        place-items: center;
+        border: 1px solid var(--accent);
+        border-radius: 8px;
+        color: var(--accent);
+        font-size: 13px;
+        box-shadow: 0 0 20px rgba(35, 213, 171, 0.12);
+      }
+
+      .server-tree {
+        flex: 1;
+        overflow: auto;
+        padding: 18px 12px;
+      }
+
+      .server-group {
+        margin-bottom: 22px;
+      }
+
+      .server-group h2 {
+        margin: 0 8px 8px;
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+
+      .server-item {
+        display: flex;
+        width: 100%;
+        align-items: center;
+        gap: 10px;
+        padding: 9px 10px;
+        border: 1px solid transparent;
+        border-radius: 8px;
+        background: transparent;
+        cursor: pointer;
+        text-align: left;
+      }
+
+      .server-item:hover,
+      .server-item:focus-visible {
+        border-color: var(--border);
+        background: var(--panel-raised);
+        outline: none;
+      }
+
+      .server-dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 999px;
+        background: var(--accent);
+        box-shadow: 0 0 8px rgba(35, 213, 171, 0.55);
+      }
+
+      .server-meta {
+        min-width: 0;
+      }
+
+      .server-name,
+      .server-host {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .server-name {
+        font-size: 13px;
+        font-weight: 600;
+      }
+
+      .server-host {
+        margin-top: 2px;
+        color: var(--muted);
+        font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+        font-size: 11px;
+      }
+
+      .workspace {
+        display: grid;
+        min-width: 0;
+        min-height: 0;
+        grid-template-rows: auto auto minmax(0, 1fr);
+      }
+
+      .connection-bar {
+        display: grid;
+        grid-template-columns: minmax(180px, 1.2fr) 88px minmax(140px, 0.8fr) minmax(160px, 0.8fr) auto;
+        gap: 10px;
+        align-items: end;
+        padding: 12px 16px;
+        border-bottom: 1px solid var(--border);
+        background: var(--panel);
+      }
+
+      .field {
+        display: grid;
+        gap: 5px;
+      }
+
+      .field label {
+        color: var(--muted);
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .field input {
+        min-width: 0;
+        height: 34px;
+        padding: 0 10px;
+        border: 1px solid var(--border);
+        border-radius: 7px;
+        outline: none;
+        background: #09111a;
+        color: var(--text);
+      }
+
+      .field input:focus {
+        border-color: var(--accent);
+        box-shadow: 0 0 0 3px var(--accent-soft);
+      }
+
+      .connect-button {
+        height: 34px;
+        padding: 0 16px;
+        border: 1px solid #2fe3bc;
+        border-radius: 7px;
+        background: var(--accent);
+        color: #04120f;
+        cursor: pointer;
+        font-weight: 800;
+      }
+
+      .connect-button:hover {
+        filter: brightness(1.08);
+      }
+
+      .tabs-row {
+        display: flex;
+        min-width: 0;
+        align-items: stretch;
+        border-bottom: 1px solid var(--border);
+        background: #0a111a;
+      }
+
+      .tabs {
+        display: flex;
+        min-width: 0;
+        flex: 1;
+        overflow-x: auto;
+      }
+
+      .tab {
+        display: flex;
+        min-width: 150px;
+        max-width: 240px;
+        align-items: center;
+        gap: 8px;
+        padding: 0 10px 0 14px;
+        border: 0;
+        border-right: 1px solid var(--border);
+        border-bottom: 2px solid transparent;
+        background: transparent;
+        cursor: pointer;
+      }
+
+      .tab.active {
+        border-bottom-color: var(--accent);
+        background: var(--panel-raised);
+      }
+
+      .tab-label {
+        overflow: hidden;
+        flex: 1;
+        padding: 11px 0;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .tab-status {
+        width: 7px;
+        height: 7px;
+        flex: 0 0 auto;
+        border-radius: 50%;
+        background: var(--muted);
+      }
+
+      .tab-status.connected {
+        background: var(--accent);
+      }
+
+      .tab-status.error {
+        background: var(--danger);
+      }
+
+      .tab-close {
+        display: grid;
+        width: 22px;
+        height: 22px;
+        place-items: center;
+        border: 0;
+        border-radius: 5px;
+        background: transparent;
+        color: var(--muted);
+        cursor: pointer;
+      }
+
+      .tab-close:hover {
+        background: rgba(255, 255, 255, 0.07);
+        color: var(--text);
+      }
+
+      .connection-state {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        padding: 0 16px;
+        color: var(--muted);
+        font-size: 12px;
+        white-space: nowrap;
+      }
+
+      .terminal-stack {
+        position: relative;
+        min-width: 0;
+        min-height: 0;
+        background: var(--background);
+      }
+
+      .terminal-pane {
+        position: absolute;
+        inset: 0;
+        display: none;
+        padding: 12px;
+      }
+
+      .terminal-pane.active {
+        display: block;
+      }
+
+      .terminal-pane .xterm {
+        height: 100%;
+      }
+
+      .sidebar-footer {
+        padding: 14px 18px;
+        border-top: 1px solid var(--border);
+        color: var(--muted);
+        font-size: 11px;
+      }
+
+      @media (max-width: 1120px) {
+        .app-shell {
+          grid-template-columns: 205px minmax(0, 1fr);
+        }
+
+        .connection-bar {
+          grid-template-columns: minmax(150px, 1fr) 78px minmax(120px, 0.8fr) auto;
+        }
+
+        .password-field {
+          display: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="app-shell">
+      <aside class="sidebar" aria-label="Server groups">
+        <div class="brand">
+          <span class="brand-mark">CG</span>
+          <span>CYBERGRID</span>
+        </div>
+
+        <nav class="server-tree">
+          <section class="server-group">
+            <h2>Favorites</h2>
+            <button class="server-item" type="button" data-host="devbox.local" data-user="admin">
+              <span class="server-dot"></span>
+              <span class="server-meta">
+                <span class="server-name">Development Box</span>
+                <span class="server-host">admin@devbox.local</span>
+              </span>
+            </button>
+          </section>
+
+          <section class="server-group">
+            <h2>Lab</h2>
+            <button class="server-item" type="button" data-host="192.168.1.40" data-user="root">
+              <span class="server-dot"></span>
+              <span class="server-meta">
+                <span class="server-name">Lab Gateway</span>
+                <span class="server-host">root@192.168.1.40</span>
+              </span>
+            </button>
+          </section>
+
+          <section class="server-group">
+            <h2>Production</h2>
+            <button class="server-item" type="button" data-host="app-01.example.com" data-user="deploy">
+              <span class="server-dot"></span>
+              <span class="server-meta">
+                <span class="server-name">Application 01</span>
+                <span class="server-host">deploy@app-01.example.com</span>
+              </span>
+            </button>
+          </section>
+        </nav>
+
+        <div class="sidebar-footer">Credentials stay in memory for this foundation build.</div>
+      </aside>
+
+      <section class="workspace">
+        <form class="connection-bar" id="connection-form">
+          <div class="field">
+            <label for="host">Host</label>
+            <input id="host" name="host" placeholder="server.example.com" required autocomplete="off" />
+          </div>
+          <div class="field">
+            <label for="port">Port</label>
+            <input id="port" name="port" type="number" min="1" max="65535" value="22" required />
+          </div>
+          <div class="field">
+            <label for="username">Username</label>
+            <input id="username" name="username" required autocomplete="username" />
+          </div>
+          <div class="field password-field">
+            <label for="password">Password</label>
+            <input id="password" name="password" type="password" autocomplete="current-password" />
+          </div>
+          <button class="connect-button" type="submit">Connect</button>
+        </form>
+
+        <div class="tabs-row">
+          <div class="tabs" id="tabs" role="tablist" aria-label="Terminal sessions"></div>
+          <div class="connection-state" id="connection-state">Ready</div>
+        </div>
+
+        <div class="terminal-stack" id="terminal-stack"></div>
+      </section>
+    </main>
+
+    <script src="../../node_modules/xterm/lib/xterm.js" defer></script>
+    <script src="../../node_modules/xterm-addon-fit/lib/xterm-addon-fit.js" defer></script>
+    <script src="./renderer.js" defer></script>
+  </body>
+</html>
