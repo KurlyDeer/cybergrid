@@ -1,15 +1,27 @@
-import { app, BrowserWindow, ipcMain, type IpcMainEvent, type IpcMainInvokeEvent } from "electron";
+import {
+  app,
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  type IpcMainEvent,
+  type IpcMainInvokeEvent,
+} from "electron";
+import { readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import {
   IPC_CHANNELS,
+  type ServerProfileInput,
   type SshConnectionConfig,
   type SshResizeRequest,
   type SshWriteRequest,
 } from "../shared/ipc";
 import { SshController } from "./ssh";
+import { VaultController } from "./vault";
 
 const sshController = new SshController();
+let vaultController: VaultController | null = null;
 let mainWindow: BrowserWindow | null = null;
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
 
 function createMainWindow(): BrowserWindow {
   const window = new BrowserWindow({
@@ -50,6 +62,19 @@ function isTrustedSender(event: IpcMainEvent | IpcMainInvokeEvent): boolean {
   return Boolean(mainWindow && event.sender === mainWindow.webContents);
 }
 
+function assertTrustedSender(event: IpcMainInvokeEvent): void {
+  if (!isTrustedSender(event)) {
+    throw new Error("Rejected IPC request from an untrusted renderer.");
+  }
+}
+
+function requireVault(): VaultController {
+  if (!vaultController) {
+    throw new Error("Credential vault is not initialized.");
+  }
+  return vaultController;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
@@ -78,6 +103,14 @@ function readString(
   return normalized;
 }
 
+function readPort(value: unknown): number {
+  const port = typeof value === "number" ? value : Number(value ?? 22);
+  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+    throw new Error("Port must be an integer between 1 and 65535.");
+  }
+  return port;
+}
+
 function normalizeConnectionConfig(value: unknown): SshConnectionConfig {
   if (!isRecord(value)) {
     throw new Error("Invalid SSH connection configuration.");
@@ -100,15 +133,10 @@ function normalizeConnectionConfig(value: unknown): SshConnectionConfig {
     maxLength: 4_096,
     trim: false,
   });
-  const port = typeof value.port === "number" ? value.port : Number(value.port ?? 22);
-
-  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
-    throw new Error("Port must be an integer between 1 and 65535.");
-  }
 
   return {
     host: host as string,
-    port,
+    port: readPort(value.port),
     username: username as string,
     password,
     privateKey,
@@ -117,26 +145,181 @@ function normalizeConnectionConfig(value: unknown): SshConnectionConfig {
   };
 }
 
-function readSessionId(value: unknown): string {
-  if (typeof value !== "string" || !/^[0-9a-f-]{36}$/i.test(value)) {
-    throw new Error("Invalid SSH session ID.");
+function normalizeProfileInput(value: unknown): ServerProfileInput {
+  if (!isRecord(value)) {
+    throw new Error("Invalid server profile.");
+  }
+
+  const name = readString(value.name, "Display name", { required: true, maxLength: 100 });
+  const host = readString(value.host, "Host", { required: true, maxLength: 253 });
+  const username = readString(value.username, "Username", {
+    required: true,
+    maxLength: 128,
+  });
+  const group = readString(value.group, "Folder", { maxLength: 100 }) ?? "Ungrouped";
+
+  if (value.authType === "password") {
+    const password = readString(value.password, "Password", {
+      required: true,
+      maxLength: 4_096,
+      trim: false,
+    });
+    return {
+      name: name as string,
+      host: host as string,
+      port: readPort(value.port),
+      username: username as string,
+      group,
+      authType: "password",
+      password: password as string,
+    };
+  }
+
+  if (value.authType === "privateKey") {
+    const privateKeyPath = readString(value.privateKeyPath, "Private key path", {
+      required: true,
+      maxLength: 2_048,
+    });
+    const passphrase = readString(value.passphrase, "Key passphrase", {
+      maxLength: 4_096,
+      trim: false,
+    });
+    return {
+      name: name as string,
+      host: host as string,
+      port: readPort(value.port),
+      username: username as string,
+      group,
+      authType: "privateKey",
+      privateKeyPath: privateKeyPath as string,
+      passphrase,
+    };
+  }
+
+  throw new Error("Authentication method must be password or private key.");
+}
+
+function readMasterPassword(value: unknown): string {
+  if (typeof value !== "string" || value.length > 1_024) {
+    throw new Error("Invalid master password.");
   }
   return value;
 }
 
+function readUuid(value: unknown, field: string): string {
+  if (
+    typeof value !== "string" ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      value,
+    )
+  ) {
+    throw new Error(`Invalid ${field}.`);
+  }
+  return value;
+}
+
+async function connectionConfigForProfile(profileId: string): Promise<SshConnectionConfig> {
+  const profile = requireVault().getConnectionProfile(profileId);
+  const baseConfig: SshConnectionConfig = {
+    host: profile.host,
+    port: profile.port,
+    username: profile.username,
+    readyTimeout: 15_000,
+  };
+
+  if (profile.authType === "password") {
+    return { ...baseConfig, password: profile.password };
+  }
+
+  const privateKeyPath = profile.privateKeyPath as string;
+  const keyInfo = await stat(privateKeyPath).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") {
+      throw new Error(`Private key file not found: ${privateKeyPath}`);
+    }
+    throw error;
+  });
+  if (!keyInfo.isFile() || keyInfo.size > 1_048_576) {
+    throw new Error("Private key must be a file smaller than 1 MB.");
+  }
+
+  return {
+    ...baseConfig,
+    privateKey: await readFile(privateKeyPath, "utf8"),
+    passphrase: profile.passphrase,
+  };
+}
+
+function readSessionId(value: unknown): string {
+  return readUuid(value, "SSH session ID");
+}
+
 function registerIpcHandlers(): void {
   ipcMain.handle(IPC_CHANNELS.sshConnect, (event, config: unknown) => {
-    if (!isTrustedSender(event)) {
-      throw new Error("Rejected IPC request from an untrusted renderer.");
-    }
+    assertTrustedSender(event);
     return sshController.connect(normalizeConnectionConfig(config), event.sender);
   });
 
+  ipcMain.handle(IPC_CHANNELS.sshConnectProfile, async (event, profileId: unknown) => {
+    assertTrustedSender(event);
+    const config = await connectionConfigForProfile(readUuid(profileId, "server profile ID"));
+    return sshController.connect(config, event.sender);
+  });
+
   ipcMain.handle(IPC_CHANNELS.sshDisconnect, (event, sessionId: unknown) => {
-    if (!isTrustedSender(event)) {
-      throw new Error("Rejected IPC request from an untrusted renderer.");
-    }
+    assertTrustedSender(event);
     sshController.disconnect(readSessionId(sessionId));
+  });
+
+  ipcMain.handle(IPC_CHANNELS.vaultStatus, async (event) => {
+    assertTrustedSender(event);
+    return requireVault().status();
+  });
+
+  ipcMain.handle(IPC_CHANNELS.vaultCreate, async (event, masterPassword: unknown) => {
+    assertTrustedSender(event);
+    await requireVault().create(readMasterPassword(masterPassword));
+  });
+
+  ipcMain.handle(IPC_CHANNELS.vaultUnlock, async (event, masterPassword: unknown) => {
+    assertTrustedSender(event);
+    await requireVault().unlock(readMasterPassword(masterPassword));
+  });
+
+  ipcMain.handle(IPC_CHANNELS.vaultLock, (event) => {
+    assertTrustedSender(event);
+    sshController.disconnectAll();
+    requireVault().lock();
+  });
+
+  ipcMain.handle(IPC_CHANNELS.vaultListProfiles, (event) => {
+    assertTrustedSender(event);
+    return requireVault().listProfiles();
+  });
+
+  ipcMain.handle(IPC_CHANNELS.vaultSaveProfile, async (event, profile: unknown) => {
+    assertTrustedSender(event);
+    return requireVault().saveProfile(normalizeProfileInput(profile));
+  });
+
+  ipcMain.handle(IPC_CHANNELS.vaultDeleteProfile, async (event, profileId: unknown) => {
+    assertTrustedSender(event);
+    await requireVault().deleteProfile(readUuid(profileId, "server profile ID"));
+  });
+
+  ipcMain.handle(IPC_CHANNELS.selectPrivateKey, async (event) => {
+    assertTrustedSender(event);
+    if (!mainWindow) {
+      return null;
+    }
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: "Select SSH private key",
+      properties: ["openFile"],
+      filters: [
+        { name: "SSH private keys", extensions: ["pem", "key", "ppk"] },
+        { name: "All files", extensions: ["*"] },
+      ],
+    });
+    return result.canceled ? null : (result.filePaths[0] ?? null);
   });
 
   ipcMain.on(IPC_CHANNELS.sshWrite, (event, request: unknown) => {
@@ -188,20 +371,42 @@ function registerIpcHandlers(): void {
   });
 }
 
-app.whenReady().then(() => {
-  registerIpcHandlers();
-  mainWindow = createMainWindow();
-
-  app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      mainWindow = createMainWindow();
+if (!hasSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on("second-instance", () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) {
+        mainWindow.restore();
+      }
+      mainWindow.show();
+      mainWindow.focus();
     }
   });
+
+  void app.whenReady().then(() => {
+    vaultController = new VaultController(
+      join(app.getPath("userData"), "cybergrid-vault.json"),
+    );
+    registerIpcHandlers();
+    mainWindow = createMainWindow();
+
+    app.on("activate", () => {
+      if (BrowserWindow.getAllWindows().length === 0) {
+        mainWindow = createMainWindow();
+      }
+    });
+  });
+}
+
+app.on("before-quit", () => {
+  sshController.disconnectAll();
+  vaultController?.lock();
 });
 
-app.on("before-quit", () => sshController.disconnectAll());
-
 app.on("window-all-closed", () => {
+  sshController.disconnectAll();
+  vaultController?.lock();
   if (process.platform !== "darwin") {
     app.quit();
   }

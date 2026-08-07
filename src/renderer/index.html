@@ -27,6 +27,10 @@
         box-sizing: border-box;
       }
 
+      [hidden] {
+        display: none !important;
+      }
+
       html,
       body {
         width: 100%;
@@ -41,7 +45,8 @@
       }
 
       button,
-      input {
+      input,
+      select {
         font: inherit;
       }
 
@@ -51,7 +56,7 @@
 
       .app-shell {
         display: grid;
-        grid-template-columns: 248px minmax(0, 1fr);
+        grid-template-columns: 270px minmax(0, 1fr);
         width: 100%;
         height: 100%;
       }
@@ -69,7 +74,7 @@
         align-items: center;
         gap: 10px;
         height: 64px;
-        padding: 0 20px;
+        padding: 0 18px;
         border-bottom: 1px solid var(--border);
         font-weight: 700;
         letter-spacing: 0.08em;
@@ -87,31 +92,127 @@
         box-shadow: 0 0 20px rgba(35, 213, 171, 0.12);
       }
 
-      .server-tree {
-        flex: 1;
-        overflow: auto;
-        padding: 18px 12px;
+      .sidebar-toolbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 14px 14px 8px 18px;
       }
 
-      .server-group {
-        margin-bottom: 22px;
-      }
-
-      .server-group h2 {
-        margin: 0 8px 8px;
+      .sidebar-toolbar h1 {
+        margin: 0;
         color: var(--muted);
         font-size: 11px;
-        font-weight: 700;
         letter-spacing: 0.12em;
         text-transform: uppercase;
       }
 
+      .icon-button,
+      .secondary-button,
+      .primary-button,
+      .lock-button {
+        border-radius: 7px;
+        cursor: pointer;
+        font-weight: 700;
+      }
+
+      .icon-button {
+        display: grid;
+        width: 30px;
+        height: 30px;
+        place-items: center;
+        border: 1px solid var(--border);
+        background: var(--panel-raised);
+        color: var(--accent);
+        font-size: 19px;
+      }
+
+      .icon-button:hover,
+      .icon-button:focus-visible {
+        border-color: var(--accent);
+        outline: none;
+      }
+
+      .server-tree {
+        flex: 1;
+        overflow: auto;
+        padding: 8px 10px 18px;
+      }
+
+      .sidebar-empty {
+        margin: 14px 8px;
+        padding: 16px;
+        border: 1px dashed var(--border);
+        border-radius: 9px;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.5;
+      }
+
+      .server-group {
+        margin-bottom: 8px;
+      }
+
+      .folder-header {
+        display: grid;
+        width: 100%;
+        grid-template-columns: 14px minmax(0, 1fr) auto;
+        gap: 6px;
+        align-items: center;
+        padding: 7px 8px;
+        border: 0;
+        border-radius: 6px;
+        background: transparent;
+        color: var(--muted);
+        cursor: pointer;
+        text-align: left;
+      }
+
+      .folder-header:hover {
+        background: rgba(255, 255, 255, 0.035);
+        color: var(--text);
+      }
+
+      .folder-chevron {
+        font-family: ui-monospace, monospace;
+        font-size: 10px;
+      }
+
+      .folder-name {
+        overflow: hidden;
+        font-size: 11px;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+        text-overflow: ellipsis;
+        text-transform: uppercase;
+        white-space: nowrap;
+      }
+
+      .folder-count {
+        min-width: 20px;
+        padding: 2px 6px;
+        border-radius: 999px;
+        background: var(--panel-raised);
+        font-size: 10px;
+        text-align: center;
+      }
+
+      .server-group.collapsed .server-list {
+        display: none;
+      }
+
+      .server-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 28px;
+        align-items: center;
+      }
+
       .server-item {
         display: flex;
-        width: 100%;
+        min-width: 0;
         align-items: center;
         gap: 10px;
-        padding: 9px 10px;
+        padding: 9px 8px 9px 12px;
         border: 1px solid transparent;
         border-radius: 8px;
         background: transparent;
@@ -126,15 +227,39 @@
         outline: none;
       }
 
+      .server-delete {
+        display: grid;
+        width: 24px;
+        height: 24px;
+        place-items: center;
+        border: 0;
+        border-radius: 5px;
+        background: transparent;
+        color: transparent;
+        cursor: pointer;
+      }
+
+      .server-row:hover .server-delete,
+      .server-delete:focus-visible {
+        color: var(--muted);
+      }
+
+      .server-delete:hover {
+        background: rgba(255, 107, 122, 0.12);
+        color: var(--danger);
+      }
+
       .server-dot {
         width: 7px;
         height: 7px;
+        flex: 0 0 auto;
         border-radius: 999px;
         background: var(--accent);
         box-shadow: 0 0 8px rgba(35, 213, 171, 0.55);
       }
 
       .server-meta {
+        display: grid;
         min-width: 0;
       }
 
@@ -154,7 +279,33 @@
         margin-top: 2px;
         color: var(--muted);
         font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-        font-size: 11px;
+        font-size: 10px;
+      }
+
+      .sidebar-footer {
+        padding: 12px;
+        border-top: 1px solid var(--border);
+      }
+
+      .lock-button {
+        width: 100%;
+        padding: 8px 10px;
+        border: 1px solid var(--border);
+        background: var(--panel-raised);
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .lock-button:hover {
+        border-color: var(--accent);
+        color: var(--text);
+      }
+
+      .sidebar-hint {
+        margin: 8px 3px 0;
+        color: #53657a;
+        font-size: 10px;
+        text-align: center;
       }
 
       .workspace {
@@ -187,9 +338,10 @@
         text-transform: uppercase;
       }
 
-      .field input {
+      .field input,
+      .field select {
         min-width: 0;
-        height: 34px;
+        height: 36px;
         padding: 0 10px;
         border: 1px solid var(--border);
         border-radius: 7px;
@@ -198,24 +350,38 @@
         color: var(--text);
       }
 
-      .field input:focus {
+      .field input:focus,
+      .field select:focus {
         border-color: var(--accent);
         box-shadow: 0 0 0 3px var(--accent-soft);
       }
 
-      .connect-button {
-        height: 34px;
+      .primary-button {
+        min-height: 36px;
         padding: 0 16px;
         border: 1px solid #2fe3bc;
-        border-radius: 7px;
         background: var(--accent);
         color: #04120f;
-        cursor: pointer;
-        font-weight: 800;
       }
 
-      .connect-button:hover {
+      .primary-button:hover:not(:disabled) {
         filter: brightness(1.08);
+      }
+
+      .primary-button:disabled {
+        cursor: wait;
+        opacity: 0.65;
+      }
+
+      .secondary-button {
+        min-height: 36px;
+        padding: 0 14px;
+        border: 1px solid var(--border);
+        background: var(--panel-raised);
+      }
+
+      .secondary-button:hover {
+        border-color: var(--accent);
       }
 
       .tabs-row {
@@ -281,11 +447,8 @@
         width: 22px;
         height: 22px;
         place-items: center;
-        border: 0;
         border-radius: 5px;
-        background: transparent;
         color: var(--muted);
-        cursor: pointer;
       }
 
       .tab-close:hover {
@@ -297,9 +460,12 @@
         display: flex;
         align-items: center;
         gap: 7px;
+        max-width: 360px;
+        overflow: hidden;
         padding: 0 16px;
         color: var(--muted);
         font-size: 12px;
+        text-overflow: ellipsis;
         white-space: nowrap;
       }
 
@@ -325,16 +491,143 @@
         height: 100%;
       }
 
-      .sidebar-footer {
-        padding: 14px 18px;
-        border-top: 1px solid var(--border);
+      dialog {
+        width: min(620px, calc(100vw - 48px));
+        padding: 0;
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        background: var(--panel);
+        color: var(--text);
+        box-shadow: 0 24px 80px rgba(0, 0, 0, 0.6);
+      }
+
+      dialog::backdrop {
+        background: rgba(3, 7, 12, 0.76);
+        backdrop-filter: blur(3px);
+      }
+
+      .modal-header {
+        padding: 20px 22px 16px;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .modal-header h2 {
+        margin: 0 0 5px;
+        font-size: 18px;
+      }
+
+      .modal-header p {
+        margin: 0;
         color: var(--muted);
-        font-size: 11px;
+        font-size: 12px;
+      }
+
+      .modal-body {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 14px;
+        padding: 20px 22px;
+      }
+
+      .field.full-width,
+      .auth-section,
+      .form-error {
+        grid-column: 1 / -1;
+      }
+
+      .auth-section {
+        display: grid;
+        gap: 14px;
+      }
+
+      .path-picker {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 8px;
+      }
+
+      .form-error {
+        padding: 10px 12px;
+        border: 1px solid rgba(255, 107, 122, 0.35);
+        border-radius: 7px;
+        background: rgba(255, 107, 122, 0.08);
+        color: #ff98a3;
+        font-size: 12px;
+      }
+
+      .form-error:empty {
+        display: none;
+      }
+
+      .modal-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 10px;
+        padding: 14px 22px 20px;
+      }
+
+      .vault-overlay {
+        position: fixed;
+        z-index: 1000;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        padding: 24px;
+        background:
+          radial-gradient(circle at 50% 42%, rgba(35, 213, 171, 0.08), transparent 32%),
+          rgba(4, 8, 13, 0.98);
+      }
+
+      .vault-card {
+        width: min(430px, 100%);
+        padding: 30px;
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        background: #0b131d;
+        box-shadow: 0 26px 90px rgba(0, 0, 0, 0.55);
+      }
+
+      .vault-logo {
+        display: grid;
+        width: 46px;
+        height: 46px;
+        margin-bottom: 20px;
+        place-items: center;
+        border: 1px solid var(--accent);
+        border-radius: 12px;
+        color: var(--accent);
+        font-weight: 800;
+        box-shadow: 0 0 28px rgba(35, 213, 171, 0.15);
+      }
+
+      .vault-card h1 {
+        margin: 0 0 8px;
+        font-size: 24px;
+      }
+
+      .vault-card > p {
+        margin: 0 0 22px;
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.55;
+      }
+
+      .vault-card form {
+        display: grid;
+        gap: 14px;
+      }
+
+      .vault-security-note {
+        margin-top: 18px;
+        color: #53657a;
+        font-size: 10px;
+        line-height: 1.5;
+        text-align: center;
       }
 
       @media (max-width: 1120px) {
         .app-shell {
-          grid-template-columns: 205px minmax(0, 1fr);
+          grid-template-columns: 225px minmax(0, 1fr);
         }
 
         .connection-bar {
@@ -348,49 +641,32 @@
     </style>
   </head>
   <body>
-    <main class="app-shell">
-      <aside class="sidebar" aria-label="Server groups">
+    <main class="app-shell" id="app-shell" inert>
+      <aside class="sidebar" aria-label="Saved server profiles">
         <div class="brand">
           <span class="brand-mark">CG</span>
           <span>CYBERGRID</span>
         </div>
 
-        <nav class="server-tree">
-          <section class="server-group">
-            <h2>Favorites</h2>
-            <button class="server-item" type="button" data-host="devbox.local" data-user="admin">
-              <span class="server-dot"></span>
-              <span class="server-meta">
-                <span class="server-name">Development Box</span>
-                <span class="server-host">admin@devbox.local</span>
-              </span>
-            </button>
-          </section>
+        <div class="sidebar-toolbar">
+          <h1>Servers</h1>
+          <button
+            class="icon-button"
+            id="add-server-button"
+            type="button"
+            title="Add server"
+            aria-label="Add server"
+          >
+            +
+          </button>
+        </div>
 
-          <section class="server-group">
-            <h2>Lab</h2>
-            <button class="server-item" type="button" data-host="192.168.1.40" data-user="root">
-              <span class="server-dot"></span>
-              <span class="server-meta">
-                <span class="server-name">Lab Gateway</span>
-                <span class="server-host">root@192.168.1.40</span>
-              </span>
-            </button>
-          </section>
+        <nav class="server-tree" id="profile-tree" aria-label="Server folders"></nav>
 
-          <section class="server-group">
-            <h2>Production</h2>
-            <button class="server-item" type="button" data-host="app-01.example.com" data-user="deploy">
-              <span class="server-dot"></span>
-              <span class="server-meta">
-                <span class="server-name">Application 01</span>
-                <span class="server-host">deploy@app-01.example.com</span>
-              </span>
-            </button>
-          </section>
-        </nav>
-
-        <div class="sidebar-footer">Credentials stay in memory for this foundation build.</div>
+        <div class="sidebar-footer">
+          <button class="lock-button" id="lock-button" type="button">Lock credential vault</button>
+          <div class="sidebar-hint">Double-click a server to connect</div>
+        </div>
       </aside>
 
       <section class="workspace">
@@ -411,7 +687,7 @@
             <label for="password">Password</label>
             <input id="password" name="password" type="password" autocomplete="current-password" />
           </div>
-          <button class="connect-button" type="submit">Connect</button>
+          <button class="primary-button" type="submit">Quick connect</button>
         </form>
 
         <div class="tabs-row">
@@ -422,6 +698,127 @@
         <div class="terminal-stack" id="terminal-stack"></div>
       </section>
     </main>
+
+    <div class="vault-overlay" id="vault-overlay">
+      <section class="vault-card" aria-labelledby="vault-title">
+        <div class="vault-logo">CG</div>
+        <h1 id="vault-title">Unlock CyberGrid</h1>
+        <p id="vault-subtitle">
+          Enter your master password to decrypt saved servers and credentials.
+        </p>
+        <form id="vault-form">
+          <div class="field">
+            <label for="master-password">Master password</label>
+            <input
+              id="master-password"
+              type="password"
+              required
+              maxlength="1024"
+              autocomplete="current-password"
+            />
+          </div>
+          <div class="field" id="confirm-password-field" hidden>
+            <label for="master-password-confirm">Confirm master password</label>
+            <input
+              id="master-password-confirm"
+              type="password"
+              maxlength="1024"
+              autocomplete="new-password"
+            />
+          </div>
+          <div class="form-error" id="vault-error" role="alert"></div>
+          <button class="primary-button" id="vault-submit" type="submit">Unlock vault</button>
+        </form>
+        <div class="vault-security-note">
+          AES-256-GCM encryption. The master password is never written to disk.
+        </div>
+      </section>
+    </div>
+
+    <dialog id="server-modal" aria-labelledby="server-modal-title">
+      <form id="server-form">
+        <header class="modal-header">
+          <h2 id="server-modal-title">Add server</h2>
+          <p>Credentials are encrypted before the profile is persisted.</p>
+        </header>
+
+        <div class="modal-body">
+          <div class="field">
+            <label for="server-name">Display name</label>
+            <input id="server-name" required maxlength="100" autocomplete="off" />
+          </div>
+          <div class="field">
+            <label for="server-group">Folder</label>
+            <input
+              id="server-group"
+              list="group-options"
+              maxlength="100"
+              placeholder="Production"
+              autocomplete="off"
+            />
+            <datalist id="group-options"></datalist>
+          </div>
+          <div class="field">
+            <label for="server-host">Hostname or IP</label>
+            <input id="server-host" required maxlength="253" autocomplete="off" />
+          </div>
+          <div class="field">
+            <label for="server-port">Port</label>
+            <input id="server-port" type="number" min="1" max="65535" value="22" required />
+          </div>
+          <div class="field">
+            <label for="server-username">Username</label>
+            <input id="server-username" required maxlength="128" autocomplete="username" />
+          </div>
+          <div class="field">
+            <label for="auth-type">Authentication</label>
+            <select id="auth-type">
+              <option value="password">Password</option>
+              <option value="privateKey">SSH private key</option>
+            </select>
+          </div>
+
+          <div class="auth-section" id="server-password-section">
+            <div class="field full-width">
+              <label for="server-password">Password</label>
+              <input
+                id="server-password"
+                type="password"
+                maxlength="4096"
+                required
+                autocomplete="new-password"
+              />
+            </div>
+          </div>
+
+          <div class="auth-section" id="server-key-section" hidden>
+            <div class="field full-width">
+              <label for="server-key-path">Private key path</label>
+              <div class="path-picker">
+                <input id="server-key-path" maxlength="2048" autocomplete="off" />
+                <button class="secondary-button" id="browse-key-button" type="button">Browse</button>
+              </div>
+            </div>
+            <div class="field full-width">
+              <label for="server-passphrase">Key passphrase (optional)</label>
+              <input
+                id="server-passphrase"
+                type="password"
+                maxlength="4096"
+                autocomplete="new-password"
+              />
+            </div>
+          </div>
+
+          <div class="form-error" id="server-form-error" role="alert"></div>
+        </div>
+
+        <footer class="modal-actions">
+          <button class="secondary-button" id="cancel-server-button" type="button">Cancel</button>
+          <button class="primary-button" type="submit">Save server</button>
+        </footer>
+      </form>
+    </dialog>
 
     <script src="../../node_modules/xterm/lib/xterm.js" defer></script>
     <script src="../../node_modules/xterm-addon-fit/lib/xterm-addon-fit.js" defer></script>
