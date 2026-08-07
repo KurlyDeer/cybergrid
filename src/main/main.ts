@@ -7,18 +7,21 @@ import {
   type IpcMainInvokeEvent,
 } from "electron";
 import { readFile, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { basename, join, posix } from "node:path";
 import {
   IPC_CHANNELS,
+  type RdpConnectionConfig,
   type ServerProfileInput,
   type SshConnectionConfig,
   type SshResizeRequest,
   type SshWriteRequest,
 } from "../shared/ipc";
+import { RdpController } from "./rdp";
 import { SshController } from "./ssh";
 import { VaultController } from "./vault";
 
 const sshController = new SshController();
+let rdpController: RdpController | null = null;
 let vaultController: VaultController | null = null;
 let mainWindow: BrowserWindow | null = null;
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
@@ -75,6 +78,13 @@ function requireVault(): VaultController {
   return vaultController;
 }
 
+function requireRdp(): RdpController {
+  if (!rdpController) {
+    throw new Error("RDP controller is not initialized.");
+  }
+  return rdpController;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
@@ -82,7 +92,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function readString(
   value: unknown,
   field: string,
-  options: { required?: boolean; maxLength: number; trim?: boolean },
+  options: { required?: boolean; maxLength: number; trim?: boolean; singleLine?: boolean },
 ): string | undefined {
   if (value === undefined || value === null || value === "") {
     if (options.required) {
@@ -100,11 +110,14 @@ function readString(
   if (normalized.length > options.maxLength) {
     throw new Error(`${field} is too long.`);
   }
+  if (options.singleLine && /[\r\n\0]/.test(normalized)) {
+    throw new Error(`${field} must be a single line.`);
+  }
   return normalized;
 }
 
-function readPort(value: unknown): number {
-  const port = typeof value === "number" ? value : Number(value ?? 22);
+function readPort(value: unknown, defaultPort = 22): number {
+  const port = typeof value === "number" ? value : Number(value ?? defaultPort);
   if (!Number.isInteger(port) || port < 1 || port > 65_535) {
     throw new Error("Port must be an integer between 1 and 65535.");
   }
@@ -116,10 +129,15 @@ function normalizeConnectionConfig(value: unknown): SshConnectionConfig {
     throw new Error("Invalid SSH connection configuration.");
   }
 
-  const host = readString(value.host, "Host", { required: true, maxLength: 253 });
+  const host = readString(value.host, "Host", {
+    required: true,
+    maxLength: 253,
+    singleLine: true,
+  });
   const username = readString(value.username, "Username", {
     required: true,
     maxLength: 128,
+    singleLine: true,
   });
   const password = readString(value.password, "Password", {
     maxLength: 4_096,
@@ -145,16 +163,42 @@ function normalizeConnectionConfig(value: unknown): SshConnectionConfig {
   };
 }
 
+function normalizeRdpConfig(value: unknown): RdpConnectionConfig {
+  if (!isRecord(value)) {
+    throw new Error("Invalid RDP connection configuration.");
+  }
+  const host = readString(value.host, "Host", {
+    required: true,
+    maxLength: 253,
+    singleLine: true,
+  });
+  const username = readString(value.username, "Username", {
+    required: true,
+    maxLength: 256,
+    singleLine: true,
+  });
+  return {
+    host: host as string,
+    port: readPort(value.port, 3389),
+    username: username as string,
+  };
+}
+
 function normalizeProfileInput(value: unknown): ServerProfileInput {
   if (!isRecord(value)) {
     throw new Error("Invalid server profile.");
   }
 
   const name = readString(value.name, "Display name", { required: true, maxLength: 100 });
-  const host = readString(value.host, "Host", { required: true, maxLength: 253 });
+  const host = readString(value.host, "Host", {
+    required: true,
+    maxLength: 253,
+    singleLine: true,
+  });
   const username = readString(value.username, "Username", {
     required: true,
     maxLength: 128,
+    singleLine: true,
   });
   const group = readString(value.group, "Folder", { maxLength: 100 }) ?? "Ungrouped";
 
@@ -218,6 +262,13 @@ function readUuid(value: unknown, field: string): string {
   return value;
 }
 
+function readRemotePath(value: unknown): string {
+  if (typeof value !== "string" || value.length === 0 || value.length > 4_096 || value.includes("\0")) {
+    throw new Error("Invalid remote path.");
+  }
+  return value;
+}
+
 async function connectionConfigForProfile(profileId: string): Promise<SshConnectionConfig> {
   const profile = requireVault().getConnectionProfile(profileId);
   const baseConfig: SshConnectionConfig = {
@@ -249,10 +300,6 @@ async function connectionConfigForProfile(profileId: string): Promise<SshConnect
   };
 }
 
-function readSessionId(value: unknown): string {
-  return readUuid(value, "SSH session ID");
-}
-
 function registerIpcHandlers(): void {
   ipcMain.handle(IPC_CHANNELS.sshConnect, (event, config: unknown) => {
     assertTrustedSender(event);
@@ -267,7 +314,81 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle(IPC_CHANNELS.sshDisconnect, (event, sessionId: unknown) => {
     assertTrustedSender(event);
-    sshController.disconnect(readSessionId(sessionId));
+    sshController.disconnect(readUuid(sessionId, "SSH session ID"));
+  });
+
+  ipcMain.handle(
+    IPC_CHANNELS.sftpList,
+    async (event, sessionId: unknown, remotePath: unknown) => {
+      assertTrustedSender(event);
+      return sshController.listDirectory(
+        readUuid(sessionId, "SSH session ID"),
+        readRemotePath(remotePath),
+      );
+    },
+  );
+
+  ipcMain.handle(
+    IPC_CHANNELS.sftpUpload,
+    async (event, sessionId: unknown, remoteDirectory: unknown) => {
+      assertTrustedSender(event);
+      if (!mainWindow) {
+        return [];
+      }
+      const id = readUuid(sessionId, "SSH session ID");
+      const directory = readRemotePath(remoteDirectory);
+      const selection = await dialog.showOpenDialog(mainWindow, {
+        title: "Upload files over SFTP",
+        properties: ["openFile", "multiSelections"],
+      });
+      if (selection.canceled) {
+        return [];
+      }
+
+      const uploadedPaths: string[] = [];
+      for (const localPath of selection.filePaths) {
+        const remotePath = posix.join(directory, basename(localPath));
+        await sshController.uploadFile(id, localPath, remotePath);
+        uploadedPaths.push(remotePath);
+      }
+      return uploadedPaths;
+    },
+  );
+
+  ipcMain.handle(
+    IPC_CHANNELS.sftpDownload,
+    async (event, sessionId: unknown, remotePath: unknown) => {
+      assertTrustedSender(event);
+      if (!mainWindow) {
+        return null;
+      }
+      const id = readUuid(sessionId, "SSH session ID");
+      const sourcePath = readRemotePath(remotePath);
+      const selection = await dialog.showSaveDialog(mainWindow, {
+        title: "Download file over SFTP",
+        defaultPath: posix.basename(sourcePath),
+      });
+      if (selection.canceled || !selection.filePath) {
+        return null;
+      }
+      await sshController.downloadFile(id, sourcePath, selection.filePath);
+      return selection.filePath;
+    },
+  );
+
+  ipcMain.handle(IPC_CHANNELS.rdpIsSupported, (event) => {
+    assertTrustedSender(event);
+    return requireRdp().isSupported();
+  });
+
+  ipcMain.handle(IPC_CHANNELS.rdpConnect, async (event, config: unknown) => {
+    assertTrustedSender(event);
+    return requireRdp().connect(normalizeRdpConfig(config), event.sender);
+  });
+
+  ipcMain.handle(IPC_CHANNELS.rdpDisconnect, (event, sessionId: unknown) => {
+    assertTrustedSender(event);
+    requireRdp().disconnect(readUuid(sessionId, "RDP session ID"));
   });
 
   ipcMain.handle(IPC_CHANNELS.vaultStatus, async (event) => {
@@ -287,7 +408,8 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle(IPC_CHANNELS.vaultLock, (event) => {
     assertTrustedSender(event);
-    sshController.disconnectAll();
+    sshController.disconnectAll("Credential vault locked.");
+    requireRdp().disconnectAll();
     requireVault().lock();
   });
 
@@ -331,7 +453,7 @@ function registerIpcHandlers(): void {
         throw new Error("Invalid SSH write request.");
       }
       const payload: SshWriteRequest = {
-        sessionId: readSessionId(request.sessionId),
+        sessionId: readUuid(request.sessionId, "SSH session ID"),
         data: request.data,
       };
       sshController.write(payload.sessionId, payload.data);
@@ -350,7 +472,7 @@ function registerIpcHandlers(): void {
       }
 
       const payload: SshResizeRequest = {
-        sessionId: readSessionId(request.sessionId),
+        sessionId: readUuid(request.sessionId, "SSH session ID"),
         cols: Number(request.cols),
         rows: Number(request.rows),
       };
@@ -388,6 +510,7 @@ if (!hasSingleInstanceLock) {
     vaultController = new VaultController(
       join(app.getPath("userData"), "cybergrid-vault.json"),
     );
+    rdpController = new RdpController(join(app.getPath("temp"), "CyberGrid", "rdp"));
     registerIpcHandlers();
     mainWindow = createMainWindow();
 
@@ -401,11 +524,13 @@ if (!hasSingleInstanceLock) {
 
 app.on("before-quit", () => {
   sshController.disconnectAll();
+  rdpController?.disconnectAll();
   vaultController?.lock();
 });
 
 app.on("window-all-closed", () => {
   sshController.disconnectAll();
+  rdpController?.disconnectAll();
   vaultController?.lock();
   if (process.platform !== "darwin") {
     app.quit();

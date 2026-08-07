@@ -19,8 +19,20 @@
         --text: #d7e2ef;
         --muted: #7f91a7;
         --accent: #23d5ab;
-        --accent-soft: rgba(35, 213, 171, 0.12);
+        --accent-soft: color-mix(in srgb, var(--accent) 14%, transparent);
         --danger: #ff6b7a;
+      }
+
+      :root[data-theme="monochrome"] {
+        --background: #000000;
+        --panel: #050505;
+        --panel-raised: #101010;
+        --border: #ffffff;
+        --text: #ffffff;
+        --muted: #d0d0d0;
+        --accent: #ffffff;
+        --accent-soft: rgba(255, 255, 255, 0.14);
+        --danger: #ffffff;
       }
 
       * {
@@ -69,6 +81,10 @@
         background: #0a111a;
       }
 
+      :root[data-theme="monochrome"] .sidebar {
+        background: #000000;
+      }
+
       .brand {
         display: flex;
         align-items: center;
@@ -80,16 +96,21 @@
         letter-spacing: 0.08em;
       }
 
-      .brand-mark {
+      .brand-mark,
+      .vault-logo {
         display: grid;
-        width: 30px;
-        height: 30px;
         place-items: center;
         border: 1px solid var(--accent);
         border-radius: 8px;
         color: var(--accent);
+        font-weight: 800;
+        box-shadow: 0 0 20px var(--accent-soft);
+      }
+
+      .brand-mark {
+        width: 30px;
+        height: 30px;
         font-size: 13px;
-        box-shadow: 0 0 20px rgba(35, 213, 171, 0.12);
       }
 
       .sidebar-toolbar {
@@ -110,7 +131,8 @@
       .icon-button,
       .secondary-button,
       .primary-button,
-      .lock-button {
+      .lock-button,
+      .toolbar-button {
         border-radius: 7px;
         cursor: pointer;
         font-weight: 700;
@@ -139,7 +161,8 @@
         padding: 8px 10px 18px;
       }
 
-      .sidebar-empty {
+      .sidebar-empty,
+      .sftp-empty {
         margin: 14px 8px;
         padding: 16px;
         border: 1px dashed var(--border);
@@ -245,7 +268,7 @@
       }
 
       .server-delete:hover {
-        background: rgba(255, 107, 122, 0.12);
+        background: color-mix(in srgb, var(--danger) 14%, transparent);
         color: var(--danger);
       }
 
@@ -255,7 +278,7 @@
         flex: 0 0 auto;
         border-radius: 999px;
         background: var(--accent);
-        box-shadow: 0 0 8px rgba(35, 213, 171, 0.55);
+        box-shadow: 0 0 8px var(--accent-soft);
       }
 
       .server-meta {
@@ -315,31 +338,28 @@
         grid-template-rows: auto auto minmax(0, 1fr);
       }
 
-      .connection-bar {
+      .quick-connect-bar {
         display: grid;
-        grid-template-columns: minmax(180px, 1.2fr) 88px minmax(140px, 0.8fr) minmax(160px, 0.8fr) auto;
+        grid-template-columns: auto minmax(260px, 1fr) minmax(130px, 220px) auto;
         gap: 10px;
-        align-items: end;
-        padding: 12px 16px;
+        align-items: center;
+        padding: 10px 14px;
         border-bottom: 1px solid var(--border);
         background: var(--panel);
       }
 
-      .field {
-        display: grid;
-        gap: 5px;
-      }
-
-      .field label {
-        color: var(--muted);
+      .quick-label {
+        color: var(--accent);
         font-size: 10px;
-        font-weight: 700;
-        letter-spacing: 0.08em;
+        font-weight: 800;
+        letter-spacing: 0.1em;
         text-transform: uppercase;
       }
 
+      .quick-connect-bar input,
       .field input,
-      .field select {
+      .field select,
+      .sftp-path-input {
         min-width: 0;
         height: 36px;
         padding: 0 10px;
@@ -350,8 +370,17 @@
         color: var(--text);
       }
 
+      :root[data-theme="monochrome"] .quick-connect-bar input,
+      :root[data-theme="monochrome"] .field input,
+      :root[data-theme="monochrome"] .field select,
+      :root[data-theme="monochrome"] .sftp-path-input {
+        background: #000000;
+      }
+
+      .quick-connect-bar input:focus,
       .field input:focus,
-      .field select:focus {
+      .field select:focus,
+      .sftp-path-input:focus {
         border-color: var(--accent);
         box-shadow: 0 0 0 3px var(--accent-soft);
       }
@@ -359,9 +388,13 @@
       .primary-button {
         min-height: 36px;
         padding: 0 16px;
-        border: 1px solid #2fe3bc;
+        border: 1px solid var(--accent);
         background: var(--accent);
         color: #04120f;
+      }
+
+      :root[data-theme="monochrome"] .primary-button {
+        color: #000000;
       }
 
       .primary-button:hover:not(:disabled) {
@@ -392,6 +425,10 @@
         background: #0a111a;
       }
 
+      :root[data-theme="monochrome"] .tabs-row {
+        background: #000000;
+      }
+
       .tabs {
         display: flex;
         min-width: 0;
@@ -401,11 +438,11 @@
 
       .tab {
         display: flex;
-        min-width: 150px;
-        max-width: 240px;
+        min-width: 170px;
+        max-width: 250px;
         align-items: center;
-        gap: 8px;
-        padding: 0 10px 0 14px;
+        gap: 7px;
+        padding: 0 9px 0 12px;
         border: 0;
         border-right: 1px solid var(--border);
         border-bottom: 2px solid transparent;
@@ -424,6 +461,15 @@
         padding: 11px 0;
         text-overflow: ellipsis;
         white-space: nowrap;
+      }
+
+      .tab-protocol {
+        padding: 2px 4px;
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        color: var(--muted);
+        font-size: 8px;
+        font-weight: 800;
       }
 
       .tab-status {
@@ -456,39 +502,282 @@
         color: var(--text);
       }
 
+      .tab-actions {
+        display: flex;
+        align-items: stretch;
+        border-left: 1px solid var(--border);
+      }
+
+      .toolbar-button {
+        min-width: 70px;
+        border: 0;
+        border-right: 1px solid var(--border);
+        border-radius: 0;
+        background: transparent;
+        color: var(--muted);
+        font-size: 11px;
+      }
+
+      .toolbar-button:hover:not(:disabled),
+      .toolbar-button.active {
+        background: var(--panel-raised);
+        color: var(--accent);
+      }
+
+      .toolbar-button:disabled {
+        cursor: not-allowed;
+        opacity: 0.35;
+      }
+
       .connection-state {
         display: flex;
+        max-width: 260px;
         align-items: center;
-        gap: 7px;
-        max-width: 360px;
         overflow: hidden;
-        padding: 0 16px;
+        padding: 0 14px;
         color: var(--muted);
-        font-size: 12px;
+        font-size: 11px;
         text-overflow: ellipsis;
         white-space: nowrap;
+      }
+
+      .content-area {
+        display: grid;
+        min-width: 0;
+        min-height: 0;
+        grid-template-columns: minmax(0, 1fr) 0;
+        background: var(--background);
+        transition: grid-template-columns 160ms ease;
+      }
+
+      .content-area.sftp-open {
+        grid-template-columns: minmax(0, 1fr) minmax(320px, 30vw);
       }
 
       .terminal-stack {
         position: relative;
         min-width: 0;
         min-height: 0;
-        background: var(--background);
       }
 
-      .terminal-pane {
+      .workspace-pane {
         position: absolute;
         inset: 0;
         display: none;
-        padding: 12px;
       }
 
-      .terminal-pane.active {
+      .workspace-pane.active {
         display: block;
+      }
+
+      .terminal-pane {
+        padding: 12px;
       }
 
       .terminal-pane .xterm {
         height: 100%;
+      }
+
+      .rdp-pane {
+        padding: 24px;
+        background:
+          linear-gradient(rgba(35, 213, 171, 0.035) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(35, 213, 171, 0.035) 1px, transparent 1px),
+          var(--background);
+        background-size: 30px 30px;
+      }
+
+      .rdp-canvas {
+        display: grid;
+        width: min(600px, 100%);
+        margin: 8vh auto 0;
+        justify-items: center;
+        padding: 42px;
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        background: var(--panel);
+        text-align: center;
+        box-shadow: 0 28px 90px rgba(0, 0, 0, 0.38);
+      }
+
+      .rdp-mark {
+        display: grid;
+        width: 74px;
+        height: 54px;
+        margin-bottom: 18px;
+        place-items: center;
+        border: 2px solid var(--accent);
+        border-radius: 8px;
+        color: var(--accent);
+        font-family: ui-monospace, monospace;
+        font-weight: 900;
+        box-shadow: 0 0 32px var(--accent-soft);
+      }
+
+      .rdp-canvas h2 {
+        margin: 0 0 8px;
+        font-size: 19px;
+      }
+
+      .rdp-canvas p {
+        margin: 0 0 16px;
+        color: var(--muted);
+      }
+
+      .rdp-native-note {
+        max-width: 440px;
+        margin-bottom: 20px;
+        color: #53657a;
+        font-size: 11px;
+        line-height: 1.5;
+      }
+
+      .sftp-drawer {
+        min-width: 0;
+        overflow: hidden;
+        border-left: 1px solid var(--border);
+        background: var(--panel);
+      }
+
+      .sftp-inner {
+        display: grid;
+        width: max(320px, 30vw);
+        height: 100%;
+        grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+      }
+
+      .sftp-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 13px 14px;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .sftp-header h2 {
+        margin: 0;
+        font-size: 12px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .sftp-toolbar,
+      .sftp-path-form {
+        display: flex;
+        gap: 7px;
+        padding: 9px 10px;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .sftp-path-form .sftp-path-input {
+        flex: 1;
+        font-family: ui-monospace, monospace;
+        font-size: 11px;
+      }
+
+      .sftp-toolbar button,
+      .sftp-path-form button {
+        min-height: 30px;
+        padding: 0 9px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        background: var(--panel-raised);
+        cursor: pointer;
+        font-size: 10px;
+        font-weight: 700;
+      }
+
+      .sftp-toolbar button:hover,
+      .sftp-path-form button:hover {
+        border-color: var(--accent);
+      }
+
+      .sftp-columns,
+      .sftp-row {
+        display: grid;
+        grid-template-columns: 40px minmax(100px, 1fr) 62px 72px;
+        gap: 8px;
+        align-items: center;
+      }
+
+      .sftp-columns {
+        padding: 7px 10px;
+        border-bottom: 1px solid var(--border);
+        color: var(--muted);
+        font-size: 9px;
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+
+      .sftp-listing {
+        min-height: 0;
+        overflow: auto;
+        padding: 4px;
+      }
+
+      .sftp-body {
+        display: grid;
+        min-height: 0;
+        grid-template-rows: auto minmax(0, 1fr);
+      }
+
+      .sftp-row {
+        width: 100%;
+        padding: 7px 6px;
+        border: 1px solid transparent;
+        border-radius: 6px;
+        background: transparent;
+        cursor: default;
+        text-align: left;
+      }
+
+      .sftp-row:hover,
+      .sftp-row:focus-visible {
+        border-color: var(--border);
+        background: var(--panel-raised);
+        outline: none;
+      }
+
+      .sftp-kind {
+        color: var(--muted);
+        font-family: ui-monospace, monospace;
+        font-size: 8px;
+        font-weight: 800;
+      }
+
+      .sftp-kind.directory {
+        color: var(--accent);
+      }
+
+      .sftp-name {
+        overflow: hidden;
+        font-family: ui-monospace, monospace;
+        font-size: 11px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .sftp-size,
+      .sftp-date {
+        color: var(--muted);
+        font-size: 9px;
+        text-align: right;
+      }
+
+      .sftp-footer {
+        display: grid;
+        gap: 6px;
+        padding: 9px 10px;
+        border-top: 1px solid var(--border);
+        color: var(--muted);
+        font-size: 10px;
+      }
+
+      .sftp-footer progress {
+        width: 100%;
+        height: 5px;
+        accent-color: var(--accent);
       }
 
       dialog {
@@ -529,14 +818,31 @@
         padding: 20px 22px;
       }
 
+      .field {
+        display: grid;
+        gap: 5px;
+      }
+
+      .field label,
+      .checkbox-label {
+        color: var(--muted);
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
       .field.full-width,
       .auth-section,
-      .form-error {
+      .form-error,
+      .custom-palette {
         grid-column: 1 / -1;
       }
 
-      .auth-section {
+      .auth-section,
+      .custom-palette {
         display: grid;
+        grid-template-columns: 1fr 1fr;
         gap: 14px;
       }
 
@@ -546,12 +852,32 @@
         gap: 8px;
       }
 
+      .checkbox-field {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        min-height: 36px;
+        padding-top: 14px;
+      }
+
+      .checkbox-field input {
+        width: 16px;
+        height: 16px;
+        accent-color: var(--accent);
+      }
+
+      .color-field input[type="color"] {
+        width: 100%;
+        padding: 3px;
+        cursor: pointer;
+      }
+
       .form-error {
         padding: 10px 12px;
-        border: 1px solid rgba(255, 107, 122, 0.35);
+        border: 1px solid color-mix(in srgb, var(--danger) 35%, transparent);
         border-radius: 7px;
-        background: rgba(255, 107, 122, 0.08);
-        color: #ff98a3;
+        background: color-mix(in srgb, var(--danger) 8%, transparent);
+        color: var(--danger);
         font-size: 12px;
       }
 
@@ -574,7 +900,7 @@
         place-items: center;
         padding: 24px;
         background:
-          radial-gradient(circle at 50% 42%, rgba(35, 213, 171, 0.08), transparent 32%),
+          radial-gradient(circle at 50% 42%, var(--accent-soft), transparent 32%),
           rgba(4, 8, 13, 0.98);
       }
 
@@ -587,17 +913,15 @@
         box-shadow: 0 26px 90px rgba(0, 0, 0, 0.55);
       }
 
+      :root[data-theme="monochrome"] .vault-card {
+        background: #000000;
+      }
+
       .vault-logo {
-        display: grid;
         width: 46px;
         height: 46px;
         margin-bottom: 20px;
-        place-items: center;
-        border: 1px solid var(--accent);
         border-radius: 12px;
-        color: var(--accent);
-        font-weight: 800;
-        box-shadow: 0 0 28px rgba(35, 213, 171, 0.15);
       }
 
       .vault-card h1 {
@@ -630,11 +954,15 @@
           grid-template-columns: 225px minmax(0, 1fr);
         }
 
-        .connection-bar {
-          grid-template-columns: minmax(150px, 1fr) 78px minmax(120px, 0.8fr) auto;
+        .quick-connect-bar {
+          grid-template-columns: minmax(220px, 1fr) 150px auto;
         }
 
-        .password-field {
+        .quick-label {
+          display: none;
+        }
+
+        .connection-state {
           display: none;
         }
       }
@@ -649,16 +977,8 @@
         </div>
 
         <div class="sidebar-toolbar">
-          <h1>Servers</h1>
-          <button
-            class="icon-button"
-            id="add-server-button"
-            type="button"
-            title="Add server"
-            aria-label="Add server"
-          >
-            +
-          </button>
+          <h1>SSH Servers</h1>
+          <button class="icon-button" id="add-server-button" type="button" title="Add server" aria-label="Add server">+</button>
         </div>
 
         <nav class="server-tree" id="profile-tree" aria-label="Server folders"></nav>
@@ -670,32 +990,66 @@
       </aside>
 
       <section class="workspace">
-        <form class="connection-bar" id="connection-form">
-          <div class="field">
-            <label for="host">Host</label>
-            <input id="host" name="host" placeholder="server.example.com" required autocomplete="off" />
-          </div>
-          <div class="field">
-            <label for="port">Port</label>
-            <input id="port" name="port" type="number" min="1" max="65535" value="22" required />
-          </div>
-          <div class="field">
-            <label for="username">Username</label>
-            <input id="username" name="username" required autocomplete="username" />
-          </div>
-          <div class="field password-field">
-            <label for="password">Password</label>
-            <input id="password" name="password" type="password" autocomplete="current-password" />
-          </div>
-          <button class="primary-button" type="submit">Quick connect</button>
+        <form class="quick-connect-bar" id="quick-connect-form">
+          <span class="quick-label">Quick Connect</span>
+          <input
+            id="quick-connect-uri"
+            required
+            autocomplete="off"
+            spellcheck="false"
+            placeholder="ssh://user@host:22 or rdp://user@host:3389"
+            aria-label="Quick Connect URL"
+          />
+          <input
+            id="quick-connect-password"
+            type="password"
+            autocomplete="current-password"
+            placeholder="SSH password (optional)"
+            aria-label="SSH password"
+          />
+          <button class="primary-button" type="submit">Connect</button>
         </form>
 
         <div class="tabs-row">
-          <div class="tabs" id="tabs" role="tablist" aria-label="Terminal sessions"></div>
+          <div class="tabs" id="tabs" role="tablist" aria-label="Connection sessions"></div>
+          <div class="tab-actions">
+            <button class="toolbar-button" id="toggle-sftp-button" type="button" disabled>Files</button>
+            <button class="toolbar-button" id="settings-button" type="button">Settings</button>
+          </div>
           <div class="connection-state" id="connection-state">Ready</div>
         </div>
 
-        <div class="terminal-stack" id="terminal-stack"></div>
+        <div class="content-area" id="content-area">
+          <div class="terminal-stack" id="terminal-stack"></div>
+
+          <aside class="sftp-drawer" id="sftp-drawer" aria-label="SFTP file browser" hidden>
+            <div class="sftp-inner">
+              <header class="sftp-header">
+                <h2>SFTP Browser</h2>
+                <button class="icon-button" id="sftp-close-button" type="button" aria-label="Close SFTP browser">&times;</button>
+              </header>
+              <form class="sftp-path-form" id="sftp-path-form">
+                <button id="sftp-up-button" type="button" title="Parent directory">Up</button>
+                <input class="sftp-path-input" id="sftp-path" value="." aria-label="Remote path" />
+                <button type="submit">Go</button>
+              </form>
+              <div class="sftp-toolbar">
+                <button id="sftp-refresh-button" type="button">Refresh</button>
+                <button id="sftp-upload-button" type="button">Upload files</button>
+              </div>
+              <div class="sftp-body">
+                <div class="sftp-columns" aria-hidden="true">
+                  <span>Type</span><span>Name</span><span>Size</span><span>Modified</span>
+                </div>
+                <div class="sftp-listing" id="sftp-listing"></div>
+              </div>
+              <footer class="sftp-footer">
+                <div id="sftp-status">Ready</div>
+                <progress id="sftp-progress" max="1" value="0" hidden></progress>
+              </footer>
+            </div>
+          </aside>
+        </div>
       </section>
     </main>
 
@@ -703,119 +1057,74 @@
       <section class="vault-card" aria-labelledby="vault-title">
         <div class="vault-logo">CG</div>
         <h1 id="vault-title">Unlock CyberGrid</h1>
-        <p id="vault-subtitle">
-          Enter your master password to decrypt saved servers and credentials.
-        </p>
+        <p id="vault-subtitle">Enter your master password to decrypt saved servers and credentials.</p>
         <form id="vault-form">
           <div class="field">
             <label for="master-password">Master password</label>
-            <input
-              id="master-password"
-              type="password"
-              required
-              maxlength="1024"
-              autocomplete="current-password"
-            />
+            <input id="master-password" type="password" required maxlength="1024" autocomplete="current-password" />
           </div>
           <div class="field" id="confirm-password-field" hidden>
             <label for="master-password-confirm">Confirm master password</label>
-            <input
-              id="master-password-confirm"
-              type="password"
-              maxlength="1024"
-              autocomplete="new-password"
-            />
+            <input id="master-password-confirm" type="password" maxlength="1024" autocomplete="new-password" />
           </div>
           <div class="form-error" id="vault-error" role="alert"></div>
           <button class="primary-button" id="vault-submit" type="submit">Unlock vault</button>
         </form>
-        <div class="vault-security-note">
-          AES-256-GCM encryption. The master password is never written to disk.
-        </div>
+        <div class="vault-security-note">AES-256-GCM encryption. The master password is never written to disk.</div>
       </section>
     </div>
 
     <dialog id="server-modal" aria-labelledby="server-modal-title">
       <form id="server-form">
         <header class="modal-header">
-          <h2 id="server-modal-title">Add server</h2>
+          <h2 id="server-modal-title">Add SSH server</h2>
           <p>Credentials are encrypted before the profile is persisted.</p>
         </header>
-
         <div class="modal-body">
-          <div class="field">
-            <label for="server-name">Display name</label>
-            <input id="server-name" required maxlength="100" autocomplete="off" />
-          </div>
-          <div class="field">
-            <label for="server-group">Folder</label>
-            <input
-              id="server-group"
-              list="group-options"
-              maxlength="100"
-              placeholder="Production"
-              autocomplete="off"
-            />
-            <datalist id="group-options"></datalist>
-          </div>
-          <div class="field">
-            <label for="server-host">Hostname or IP</label>
-            <input id="server-host" required maxlength="253" autocomplete="off" />
-          </div>
-          <div class="field">
-            <label for="server-port">Port</label>
-            <input id="server-port" type="number" min="1" max="65535" value="22" required />
-          </div>
-          <div class="field">
-            <label for="server-username">Username</label>
-            <input id="server-username" required maxlength="128" autocomplete="username" />
-          </div>
-          <div class="field">
-            <label for="auth-type">Authentication</label>
-            <select id="auth-type">
-              <option value="password">Password</option>
-              <option value="privateKey">SSH private key</option>
-            </select>
-          </div>
-
+          <div class="field"><label for="server-name">Display name</label><input id="server-name" required maxlength="100" autocomplete="off" /></div>
+          <div class="field"><label for="server-group">Folder</label><input id="server-group" list="group-options" maxlength="100" placeholder="Production" autocomplete="off" /><datalist id="group-options"></datalist></div>
+          <div class="field"><label for="server-host">Hostname or IP</label><input id="server-host" required maxlength="253" autocomplete="off" /></div>
+          <div class="field"><label for="server-port">Port</label><input id="server-port" type="number" min="1" max="65535" value="22" required /></div>
+          <div class="field"><label for="server-username">Username</label><input id="server-username" required maxlength="128" autocomplete="username" /></div>
+          <div class="field"><label for="auth-type">Authentication</label><select id="auth-type"><option value="password">Password</option><option value="privateKey">SSH private key</option></select></div>
           <div class="auth-section" id="server-password-section">
-            <div class="field full-width">
-              <label for="server-password">Password</label>
-              <input
-                id="server-password"
-                type="password"
-                maxlength="4096"
-                required
-                autocomplete="new-password"
-              />
-            </div>
+            <div class="field full-width"><label for="server-password">Password</label><input id="server-password" type="password" maxlength="4096" required autocomplete="new-password" /></div>
           </div>
-
           <div class="auth-section" id="server-key-section" hidden>
-            <div class="field full-width">
-              <label for="server-key-path">Private key path</label>
-              <div class="path-picker">
-                <input id="server-key-path" maxlength="2048" autocomplete="off" />
-                <button class="secondary-button" id="browse-key-button" type="button">Browse</button>
-              </div>
-            </div>
-            <div class="field full-width">
-              <label for="server-passphrase">Key passphrase (optional)</label>
-              <input
-                id="server-passphrase"
-                type="password"
-                maxlength="4096"
-                autocomplete="new-password"
-              />
-            </div>
+            <div class="field full-width"><label for="server-key-path">Private key path</label><div class="path-picker"><input id="server-key-path" maxlength="2048" autocomplete="off" /><button class="secondary-button" id="browse-key-button" type="button">Browse</button></div></div>
+            <div class="field full-width"><label for="server-passphrase">Key passphrase (optional)</label><input id="server-passphrase" type="password" maxlength="4096" autocomplete="new-password" /></div>
           </div>
-
           <div class="form-error" id="server-form-error" role="alert"></div>
         </div>
-
         <footer class="modal-actions">
           <button class="secondary-button" id="cancel-server-button" type="button">Cancel</button>
           <button class="primary-button" type="submit">Save server</button>
+        </footer>
+      </form>
+    </dialog>
+
+    <dialog id="settings-modal" aria-labelledby="settings-modal-title">
+      <form id="settings-form">
+        <header class="modal-header">
+          <h2 id="settings-modal-title">Appearance &amp; Terminal</h2>
+          <p>Settings apply immediately to every open terminal and are saved locally.</p>
+        </header>
+        <div class="modal-body">
+          <div class="field"><label for="theme-mode">Theme</label><select id="theme-mode"><option value="dark">CyberGrid Dark</option><option value="monochrome">High-contrast monochrome</option><option value="custom">Custom palette</option></select></div>
+          <div class="checkbox-field"><input id="terminal-cursor-blink" type="checkbox" /><label class="checkbox-label" for="terminal-cursor-blink">Blinking cursor</label></div>
+          <div class="field full-width"><label for="terminal-font-family">Terminal font family</label><input id="terminal-font-family" maxlength="200" /></div>
+          <div class="field"><label for="terminal-font-size">Font size</label><input id="terminal-font-size" type="number" min="10" max="28" required /></div>
+          <div class="custom-palette" id="custom-palette-fields" hidden>
+            <div class="field color-field"><label for="terminal-background">Terminal background</label><input id="terminal-background" type="color" /></div>
+            <div class="field color-field"><label for="terminal-foreground">Terminal foreground</label><input id="terminal-foreground" type="color" /></div>
+            <div class="field color-field"><label for="terminal-cursor">Terminal cursor</label><input id="terminal-cursor" type="color" /></div>
+            <div class="field color-field"><label for="ui-accent">Interface accent</label><input id="ui-accent" type="color" /></div>
+          </div>
+        </div>
+        <footer class="modal-actions">
+          <button class="secondary-button" id="reset-settings-button" type="button">Reset defaults</button>
+          <button class="secondary-button" id="cancel-settings-button" type="button">Cancel</button>
+          <button class="primary-button" type="submit">Apply settings</button>
         </footer>
       </form>
     </dialog>

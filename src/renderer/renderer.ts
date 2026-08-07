@@ -1,10 +1,17 @@
 type ITerminalOptions = import("xterm").ITerminalOptions;
+type ITheme = import("xterm").ITheme;
 type XtermTerminal = import("xterm").Terminal;
 type XtermFitAddon = import("xterm-addon-fit").FitAddon;
 type CyberGridApi = import("../shared/ipc").CyberGridApi;
+type RdpConnectionConfig = import("../shared/ipc").RdpConnectionConfig;
+type RdpConnectionStatus = import("../shared/ipc").RdpConnectionStatus;
+type RdpStatusEvent = import("../shared/ipc").RdpStatusEvent;
 type ServerAuthType = import("../shared/ipc").ServerAuthType;
 type ServerProfileInput = import("../shared/ipc").ServerProfileInput;
 type ServerProfileSummary = import("../shared/ipc").ServerProfileSummary;
+type SftpDirectoryListing = import("../shared/ipc").SftpDirectoryListing;
+type SftpEntry = import("../shared/ipc").SftpEntry;
+type SftpProgressEvent = import("../shared/ipc").SftpProgressEvent;
 type SshConnectionConfig = import("../shared/ipc").SshConnectionConfig;
 type SshConnectionStatus = import("../shared/ipc").SshConnectionStatus;
 type SshDataEvent = import("../shared/ipc").SshDataEvent;
@@ -17,26 +24,63 @@ interface Window {
   cybergrid: CyberGridApi;
 }
 
-interface TerminalTab {
+type WorkspaceTabKind = "ssh" | "rdp" | "welcome";
+type WorkspaceStatus =
+  | SshConnectionStatus
+  | RdpConnectionStatus
+  | "idle";
+
+interface WorkspaceTab {
   id: string;
+  kind: WorkspaceTabKind;
   sessionId?: string;
-  terminal: XtermTerminal;
-  fitAddon: XtermFitAddon;
+  rdpSessionId?: string;
+  terminal?: XtermTerminal;
+  fitAddon?: XtermFitAddon;
   tabElement: HTMLButtonElement;
   statusElement: HTMLSpanElement;
   paneElement: HTMLDivElement;
-  status: SshConnectionStatus | "idle";
+  rdpMessageElement?: HTMLParagraphElement;
+  status: WorkspaceStatus;
+  sftp?: SftpDirectoryListing;
 }
 
-const tabs = new Map<string, TerminalTab>();
-const sessions = new Map<string, TerminalTab>();
-const queuedData = new Map<string, string[]>();
-const queuedStatus = new Map<string, SshStatusEvent>();
+interface UserSettings {
+  theme: "dark" | "monochrome" | "custom";
+  fontFamily: string;
+  fontSize: number;
+  cursorBlink: boolean;
+  background: string;
+  foreground: string;
+  cursor: string;
+  accent: string;
+}
+
+const DEFAULT_SETTINGS: UserSettings = {
+  theme: "dark",
+  fontFamily: "Cascadia Mono, JetBrains Mono, Consolas, monospace",
+  fontSize: 14,
+  cursorBlink: true,
+  background: "#080d14",
+  foreground: "#d7e2ef",
+  cursor: "#23d5ab",
+  accent: "#23d5ab",
+};
+const SETTINGS_KEY = "cybergrid:terminal-settings:v1";
+
+const tabs = new Map<string, WorkspaceTab>();
+const sshSessions = new Map<string, WorkspaceTab>();
+const rdpSessions = new Map<string, WorkspaceTab>();
+const queuedSshData = new Map<string, string[]>();
+const queuedSshStatus = new Map<string, SshStatusEvent>();
+const queuedRdpStatus = new Map<string, RdpStatusEvent>();
 const collapsedGroups = new Set<string>();
 let savedProfiles: ServerProfileSummary[] = [];
 let activeTabId: string | null = null;
 let tabSequence = 0;
 let vaultMode: "create" | "unlock" = "unlock";
+let sftpDrawerOpen = false;
+let currentSettings = loadSettings();
 
 function elementById<T extends HTMLElement>(id: string): T {
   const element = document.getElementById(id);
@@ -47,17 +91,29 @@ function elementById<T extends HTMLElement>(id: string): T {
 }
 
 const appShell = elementById<HTMLElement>("app-shell");
-const connectionForm = elementById<HTMLFormElement>("connection-form");
-const hostInput = elementById<HTMLInputElement>("host");
-const portInput = elementById<HTMLInputElement>("port");
-const usernameInput = elementById<HTMLInputElement>("username");
-const passwordInput = elementById<HTMLInputElement>("password");
+const quickConnectForm = elementById<HTMLFormElement>("quick-connect-form");
+const quickConnectInput = elementById<HTMLInputElement>("quick-connect-uri");
+const quickPasswordInput = elementById<HTMLInputElement>("quick-connect-password");
 const tabsElement = elementById<HTMLDivElement>("tabs");
+const contentArea = elementById<HTMLDivElement>("content-area");
 const terminalStack = elementById<HTMLDivElement>("terminal-stack");
 const connectionState = elementById<HTMLDivElement>("connection-state");
 const profileTree = elementById<HTMLDivElement>("profile-tree");
 const addServerButton = elementById<HTMLButtonElement>("add-server-button");
 const lockButton = elementById<HTMLButtonElement>("lock-button");
+const settingsButton = elementById<HTMLButtonElement>("settings-button");
+const toggleSftpButton = elementById<HTMLButtonElement>("toggle-sftp-button");
+
+const sftpDrawer = elementById<HTMLElement>("sftp-drawer");
+const sftpCloseButton = elementById<HTMLButtonElement>("sftp-close-button");
+const sftpPathForm = elementById<HTMLFormElement>("sftp-path-form");
+const sftpPathInput = elementById<HTMLInputElement>("sftp-path");
+const sftpUpButton = elementById<HTMLButtonElement>("sftp-up-button");
+const sftpRefreshButton = elementById<HTMLButtonElement>("sftp-refresh-button");
+const sftpUploadButton = elementById<HTMLButtonElement>("sftp-upload-button");
+const sftpListing = elementById<HTMLDivElement>("sftp-listing");
+const sftpStatus = elementById<HTMLDivElement>("sftp-status");
+const sftpProgress = elementById<HTMLProgressElement>("sftp-progress");
 
 const vaultOverlay = elementById<HTMLDivElement>("vault-overlay");
 const vaultForm = elementById<HTMLFormElement>("vault-form");
@@ -87,6 +143,138 @@ const browseKeyButton = elementById<HTMLButtonElement>("browse-key-button");
 const cancelServerButton = elementById<HTMLButtonElement>("cancel-server-button");
 const serverFormError = elementById<HTMLDivElement>("server-form-error");
 
+const settingsModal = elementById<HTMLDialogElement>("settings-modal");
+const settingsForm = elementById<HTMLFormElement>("settings-form");
+const themeInput = elementById<HTMLSelectElement>("theme-mode");
+const fontFamilyInput = elementById<HTMLInputElement>("terminal-font-family");
+const fontSizeInput = elementById<HTMLInputElement>("terminal-font-size");
+const cursorBlinkInput = elementById<HTMLInputElement>("terminal-cursor-blink");
+const backgroundInput = elementById<HTMLInputElement>("terminal-background");
+const foregroundInput = elementById<HTMLInputElement>("terminal-foreground");
+const cursorInput = elementById<HTMLInputElement>("terminal-cursor");
+const accentInput = elementById<HTMLInputElement>("ui-accent");
+const customPaletteFields = elementById<HTMLDivElement>("custom-palette-fields");
+const resetSettingsButton = elementById<HTMLButtonElement>("reset-settings-button");
+const cancelSettingsButton = elementById<HTMLButtonElement>("cancel-settings-button");
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isHexColor(value: unknown): value is string {
+  return typeof value === "string" && /^#[0-9a-f]{6}$/i.test(value);
+}
+
+function loadSettings(): UserSettings {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? "null") as unknown;
+    if (!isRecord(parsed)) {
+      return { ...DEFAULT_SETTINGS };
+    }
+    const theme = parsed.theme === "monochrome" || parsed.theme === "custom"
+      ? parsed.theme
+      : "dark";
+    const fontSize = Number(parsed.fontSize);
+    return {
+      theme,
+      fontFamily:
+        typeof parsed.fontFamily === "string" && parsed.fontFamily.trim().length > 0
+          ? parsed.fontFamily.slice(0, 200)
+          : DEFAULT_SETTINGS.fontFamily,
+      fontSize:
+        Number.isFinite(fontSize) && fontSize >= 10 && fontSize <= 28
+          ? Math.round(fontSize)
+          : DEFAULT_SETTINGS.fontSize,
+      cursorBlink:
+        typeof parsed.cursorBlink === "boolean"
+          ? parsed.cursorBlink
+          : DEFAULT_SETTINGS.cursorBlink,
+      background: isHexColor(parsed.background) ? parsed.background : DEFAULT_SETTINGS.background,
+      foreground: isHexColor(parsed.foreground) ? parsed.foreground : DEFAULT_SETTINGS.foreground,
+      cursor: isHexColor(parsed.cursor) ? parsed.cursor : DEFAULT_SETTINGS.cursor,
+      accent: isHexColor(parsed.accent) ? parsed.accent : DEFAULT_SETTINGS.accent,
+    };
+  } catch {
+    return { ...DEFAULT_SETTINGS };
+  }
+}
+
+function terminalTheme(settings: UserSettings): ITheme {
+  if (settings.theme === "monochrome") {
+    return {
+      background: "#000000",
+      foreground: "#ffffff",
+      cursor: "#ffffff",
+      cursorAccent: "#000000",
+      selectionBackground: "#ffffff55",
+      black: "#000000",
+      red: "#ffffff",
+      green: "#ffffff",
+      yellow: "#ffffff",
+      blue: "#ffffff",
+      magenta: "#ffffff",
+      cyan: "#ffffff",
+      white: "#ffffff",
+      brightBlack: "#808080",
+      brightRed: "#ffffff",
+      brightGreen: "#ffffff",
+      brightYellow: "#ffffff",
+      brightBlue: "#ffffff",
+      brightMagenta: "#ffffff",
+      brightCyan: "#ffffff",
+      brightWhite: "#ffffff",
+    };
+  }
+
+  const background = settings.theme === "custom" ? settings.background : DEFAULT_SETTINGS.background;
+  const foreground = settings.theme === "custom" ? settings.foreground : DEFAULT_SETTINGS.foreground;
+  const cursor = settings.theme === "custom" ? settings.cursor : DEFAULT_SETTINGS.cursor;
+  return {
+    background,
+    foreground,
+    cursor,
+    cursorAccent: background,
+    selectionBackground: "#244b55",
+    black: "#0a1018",
+    red: "#ff6b7a",
+    green: "#23d5ab",
+    yellow: "#e6c86e",
+    blue: "#65a9ff",
+    magenta: "#bf8cff",
+    cyan: "#5eddeb",
+    white: foreground,
+    brightBlack: "#53657a",
+    brightRed: "#ff8995",
+    brightGreen: "#56e6c2",
+    brightYellow: "#f2d98f",
+    brightBlue: "#8abfff",
+    brightMagenta: "#d1a9ff",
+    brightCyan: "#86e8f2",
+    brightWhite: "#f5f9ff",
+  };
+}
+
+function applySettings(settings: UserSettings, persist: boolean): void {
+  currentSettings = settings;
+  document.documentElement.dataset.theme = settings.theme;
+  document.documentElement.style.setProperty(
+    "--accent",
+    settings.theme === "custom" ? settings.accent : DEFAULT_SETTINGS.accent,
+  );
+  for (const tab of tabs.values()) {
+    if (tab.terminal) {
+      tab.terminal.options.fontFamily = settings.fontFamily;
+      tab.terminal.options.fontSize = settings.fontSize;
+      tab.terminal.options.cursorBlink = settings.cursorBlink;
+      tab.terminal.options.theme = terminalTheme(settings);
+      tab.fitAddon?.fit();
+    }
+  }
+  if (persist) {
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+  }
+}
+
 function errorMessage(error: unknown): string {
   const raw = error instanceof Error ? error.message : String(error);
   return raw
@@ -94,7 +282,7 @@ function errorMessage(error: unknown): string {
     .replace(/^Error:\s*/i, "");
 }
 
-function createTerminalTab(label: string): TerminalTab {
+function createWorkspaceTab(kind: WorkspaceTabKind, label: string): WorkspaceTab {
   const id = `tab-${++tabSequence}`;
   const tabElement = document.createElement("button");
   tabElement.className = "tab";
@@ -106,6 +294,10 @@ function createTerminalTab(label: string): TerminalTab {
   statusElement.className = "tab-status";
   statusElement.setAttribute("aria-hidden", "true");
 
+  const protocolElement = document.createElement("span");
+  protocolElement.className = "tab-protocol";
+  protocolElement.textContent = kind === "rdp" ? "RDP" : kind === "ssh" ? "SSH" : "CG";
+
   const labelElement = document.createElement("span");
   labelElement.className = "tab-label";
   labelElement.textContent = label;
@@ -116,72 +308,24 @@ function createTerminalTab(label: string): TerminalTab {
   closeElement.setAttribute("aria-label", `Close ${label}`);
   closeElement.textContent = "\u00d7";
 
-  tabElement.append(statusElement, labelElement, closeElement);
+  tabElement.append(statusElement, protocolElement, labelElement, closeElement);
   tabsElement.append(tabElement);
 
   const paneElement = document.createElement("div");
-  paneElement.className = "terminal-pane";
+  paneElement.className = "workspace-pane";
   paneElement.id = `pane-${id}`;
   paneElement.role = "tabpanel";
   terminalStack.append(paneElement);
 
-  const terminal = new Terminal({
-    cursorBlink: true,
-    cursorStyle: "bar",
-    fontFamily: "Cascadia Mono, JetBrains Mono, Consolas, monospace",
-    fontSize: 14,
-    lineHeight: 1.18,
-    scrollback: 10_000,
-    allowTransparency: true,
-    theme: {
-      background: "#080d14",
-      foreground: "#d7e2ef",
-      cursor: "#23d5ab",
-      cursorAccent: "#080d14",
-      selectionBackground: "#244b55",
-      black: "#0a1018",
-      red: "#ff6b7a",
-      green: "#23d5ab",
-      yellow: "#e6c86e",
-      blue: "#65a9ff",
-      magenta: "#bf8cff",
-      cyan: "#5eddeb",
-      white: "#d7e2ef",
-      brightBlack: "#53657a",
-      brightRed: "#ff8995",
-      brightGreen: "#56e6c2",
-      brightYellow: "#f2d98f",
-      brightBlue: "#8abfff",
-      brightMagenta: "#d1a9ff",
-      brightCyan: "#86e8f2",
-      brightWhite: "#f5f9ff",
-    },
-  });
-  const fitAddon = new FitAddon.FitAddon();
-  terminal.loadAddon(fitAddon);
-  terminal.open(paneElement);
-
-  const tab: TerminalTab = {
+  const tab: WorkspaceTab = {
     id,
-    terminal,
-    fitAddon,
+    kind,
     tabElement,
     statusElement,
     paneElement,
     status: "idle",
   };
   tabs.set(id, tab);
-
-  terminal.onData((data) => {
-    if (tab.sessionId) {
-      window.cybergrid.ssh.write(tab.sessionId, data);
-    }
-  });
-  terminal.onResize(({ cols, rows }) => {
-    if (tab.sessionId) {
-      window.cybergrid.ssh.resize(tab.sessionId, cols, rows);
-    }
-  });
 
   tabElement.addEventListener("click", (event) => {
     const target = event.target as HTMLElement;
@@ -193,6 +337,70 @@ function createTerminalTab(label: string): TerminalTab {
   });
 
   activateTab(id);
+  return tab;
+}
+
+function createTerminalTab(label: string, kind: "ssh" | "welcome" = "ssh"): WorkspaceTab {
+  const tab = createWorkspaceTab(kind, label);
+  tab.paneElement.classList.add("terminal-pane");
+  const terminal = new Terminal({
+    cursorBlink: currentSettings.cursorBlink,
+    cursorStyle: "bar",
+    fontFamily: currentSettings.fontFamily,
+    fontSize: currentSettings.fontSize,
+    lineHeight: 1.18,
+    scrollback: 10_000,
+    allowTransparency: true,
+    theme: terminalTheme(currentSettings),
+  });
+  const fitAddon = new FitAddon.FitAddon();
+  terminal.loadAddon(fitAddon);
+  terminal.open(tab.paneElement);
+  tab.terminal = terminal;
+  tab.fitAddon = fitAddon;
+
+  terminal.onData((data) => {
+    if (tab.kind === "ssh" && tab.sessionId) {
+      window.cybergrid.ssh.write(tab.sessionId, data);
+    }
+  });
+  terminal.onResize(({ cols, rows }) => {
+    if (tab.kind === "ssh" && tab.sessionId) {
+      window.cybergrid.ssh.resize(tab.sessionId, cols, rows);
+    }
+  });
+  return tab;
+}
+
+function createRdpTab(label: string, config: RdpConnectionConfig): WorkspaceTab {
+  const tab = createWorkspaceTab("rdp", label);
+  tab.paneElement.classList.add("rdp-pane");
+
+  const canvas = document.createElement("div");
+  canvas.className = "rdp-canvas";
+  const mark = document.createElement("div");
+  mark.className = "rdp-mark";
+  mark.textContent = "RDP";
+  const title = document.createElement("h2");
+  title.textContent = `${config.username}@${config.host}:${config.port}`;
+  const message = document.createElement("p");
+  message.textContent = "Preparing the native Windows Remote Desktop client...";
+  tab.rdpMessageElement = message;
+  const note = document.createElement("div");
+  note.className = "rdp-native-note";
+  note.textContent =
+    "The secure desktop surface runs in the Windows RDP client. This tab tracks its lifecycle.";
+  const disconnectButton = document.createElement("button");
+  disconnectButton.className = "secondary-button";
+  disconnectButton.type = "button";
+  disconnectButton.textContent = "Close RDP session";
+  disconnectButton.addEventListener("click", () => {
+    if (tab.rdpSessionId) {
+      void window.cybergrid.rdp.disconnect(tab.rdpSessionId);
+    }
+  });
+  canvas.append(mark, title, message, note, disconnectButton);
+  tab.paneElement.append(canvas);
   return tab;
 }
 
@@ -211,10 +419,18 @@ function activateTab(id: string): void {
   }
 
   updateConnectionState(tab);
+  updateSftpAvailability();
   requestAnimationFrame(() => {
-    tab.fitAddon.fit();
-    tab.terminal.focus();
+    tab.fitAddon?.fit();
+    tab.terminal?.focus();
   });
+  if (sftpDrawerOpen && tab.kind === "ssh" && tab.sessionId && tab.status === "connected") {
+    if (tab.sftp) {
+      renderSftpListing(tab.sftp);
+    } else {
+      void loadSftpDirectory(tab, ".");
+    }
+  }
 }
 
 async function closeTab(id: string): Promise<void> {
@@ -227,11 +443,20 @@ async function closeTab(id: string): Promise<void> {
   const closedIndex = tabOrder.indexOf(id);
   tabs.delete(id);
   if (tab.sessionId) {
-    sessions.delete(tab.sessionId);
-    await window.cybergrid.ssh.disconnect(tab.sessionId).catch(() => undefined);
+    const sessionId = tab.sessionId;
+    sshSessions.delete(sessionId);
+    await window.cybergrid.ssh.disconnect(sessionId).catch(() => undefined);
+    queuedSshData.delete(sessionId);
+    queuedSshStatus.delete(sessionId);
+  }
+  if (tab.rdpSessionId) {
+    const sessionId = tab.rdpSessionId;
+    rdpSessions.delete(sessionId);
+    await window.cybergrid.rdp.disconnect(sessionId).catch(() => undefined);
+    queuedRdpStatus.delete(sessionId);
   }
 
-  tab.terminal.dispose();
+  tab.terminal?.dispose();
   tab.tabElement.remove();
   tab.paneElement.remove();
 
@@ -243,94 +468,140 @@ async function closeTab(id: string): Promise<void> {
     } else {
       activeTabId = null;
       connectionState.textContent = "Ready";
+      setSftpDrawerOpen(false);
     }
   }
 }
 
-function updateTabStatus(tab: TerminalTab, event: SshStatusEvent): void {
+function updateSshTabStatus(tab: WorkspaceTab, event: SshStatusEvent): void {
   tab.status = event.status;
   tab.statusElement.classList.toggle("connected", event.status === "connected");
   tab.statusElement.classList.toggle("error", event.status === "error");
   if (event.status === "error") {
-    tab.terminal.writeln(
+    tab.terminal?.writeln(
       `\r\n\x1b[31mConnection error: ${event.message ?? "Unknown error"}\x1b[0m`,
     );
   } else if (event.status === "disconnected") {
-    tab.terminal.writeln(`\r\n\x1b[90m${event.message ?? "Disconnected."}\x1b[0m`);
+    tab.terminal?.writeln(`\r\n\x1b[90m${event.message ?? "Disconnected."}\x1b[0m`);
   }
 
+  if (activeTabId === tab.id) {
+    updateConnectionState(tab, event.message);
+    updateSftpAvailability();
+  }
+}
+
+function updateRdpTabStatus(tab: WorkspaceTab, event: RdpStatusEvent): void {
+  tab.status = event.status;
+  tab.statusElement.classList.toggle("connected", event.status === "running");
+  tab.statusElement.classList.toggle("error", event.status === "error");
+  if (tab.rdpMessageElement) {
+    tab.rdpMessageElement.textContent = event.message ?? event.status;
+  }
   if (activeTabId === tab.id) {
     updateConnectionState(tab, event.message);
   }
 }
 
-function updateConnectionState(tab: TerminalTab, message?: string): void {
-  const labels: Record<TerminalTab["status"], string> = {
+function updateConnectionState(tab: WorkspaceTab, message?: string): void {
+  const labels: Record<WorkspaceStatus, string> = {
     idle: "Ready",
     connecting: "Connecting...",
     connected: "Connected",
     disconnected: "Disconnected",
+    launching: "Launching RDP...",
+    running: "RDP running",
+    closed: "RDP closed",
     error: "Connection error",
   };
   connectionState.textContent = message ?? labels[tab.status];
 }
 
-function setTabConnecting(tab: TerminalTab, description: string): void {
+function setTabConnecting(tab: WorkspaceTab, description: string): void {
   tab.status = "connecting";
   updateConnectionState(tab);
-  tab.terminal.writeln(`\x1b[36mCyberGrid\x1b[0m ${description}`);
+  tab.terminal?.writeln(`\x1b[36mCyberGrid\x1b[0m ${description}`);
 }
 
-function attachSession(tab: TerminalTab, sessionId: string): void {
+function attachSshSession(tab: WorkspaceTab, sessionId: string): void {
   tab.sessionId = sessionId;
-  sessions.set(sessionId, tab);
+  sshSessions.set(sessionId, tab);
 
-  const buffered = queuedData.get(sessionId);
+  const buffered = queuedSshData.get(sessionId);
   if (buffered) {
     for (const data of buffered) {
-      tab.terminal.write(data);
+      tab.terminal?.write(data);
     }
-    queuedData.delete(sessionId);
+    queuedSshData.delete(sessionId);
   }
 
-  const status = queuedStatus.get(sessionId);
+  const status = queuedSshStatus.get(sessionId);
   if (status) {
-    updateTabStatus(tab, status);
-    queuedStatus.delete(sessionId);
+    updateSshTabStatus(tab, status);
+    queuedSshStatus.delete(sessionId);
   }
 
-  tab.fitAddon.fit();
-  window.cybergrid.ssh.resize(sessionId, tab.terminal.cols, tab.terminal.rows);
+  tab.fitAddon?.fit();
+  if (tab.terminal) {
+    window.cybergrid.ssh.resize(sessionId, tab.terminal.cols, tab.terminal.rows);
+  }
 }
 
-function handleConnectionFailure(tab: TerminalTab, error: unknown): void {
-  updateTabStatus(tab, {
-    sessionId: tab.sessionId ?? "pending",
-    status: "error",
-    message: errorMessage(error),
-  });
+function attachRdpSession(tab: WorkspaceTab, sessionId: string): void {
+  tab.rdpSessionId = sessionId;
+  rdpSessions.set(sessionId, tab);
+  const status = queuedRdpStatus.get(sessionId);
+  if (status) {
+    updateRdpTabStatus(tab, status);
+    queuedRdpStatus.delete(sessionId);
+  }
+}
+
+function handleConnectionFailure(tab: WorkspaceTab, error: unknown): void {
+  if (tab.kind === "rdp") {
+    updateRdpTabStatus(tab, {
+      sessionId: tab.rdpSessionId ?? "pending",
+      status: "error",
+      message: errorMessage(error),
+    });
+  } else {
+    updateSshTabStatus(tab, {
+      sessionId: tab.sessionId ?? "pending",
+      status: "error",
+      message: errorMessage(error),
+    });
+  }
 }
 
 function handleSshData(event: SshDataEvent): void {
-  const tab = sessions.get(event.sessionId);
+  const tab = sshSessions.get(event.sessionId);
   if (tab) {
-    tab.terminal.write(event.data);
+    tab.terminal?.write(event.data);
     return;
   }
 
-  const buffered = queuedData.get(event.sessionId) ?? [];
+  const buffered = queuedSshData.get(event.sessionId) ?? [];
   if (buffered.reduce((size, chunk) => size + chunk.length, 0) < 1_000_000) {
     buffered.push(event.data);
-    queuedData.set(event.sessionId, buffered);
+    queuedSshData.set(event.sessionId, buffered);
   }
 }
 
 function handleSshStatus(event: SshStatusEvent): void {
-  const tab = sessions.get(event.sessionId);
+  const tab = sshSessions.get(event.sessionId);
   if (tab) {
-    updateTabStatus(tab, event);
+    updateSshTabStatus(tab, event);
   } else {
-    queuedStatus.set(event.sessionId, event);
+    queuedSshStatus.set(event.sessionId, event);
+  }
+}
+
+function handleRdpStatus(event: RdpStatusEvent): void {
+  const tab = rdpSessions.get(event.sessionId);
+  if (tab) {
+    updateRdpTabStatus(tab, event);
+  } else {
+    queuedRdpStatus.set(event.sessionId, event);
   }
 }
 
@@ -342,10 +613,72 @@ async function connectSavedProfile(profile: ServerProfileSummary): Promise<void>
   );
 
   try {
-    attachSession(tab, await window.cybergrid.ssh.connectProfile(profile.id));
+    attachSshSession(tab, await window.cybergrid.ssh.connectProfile(profile.id));
   } catch (error) {
     handleConnectionFailure(tab, error);
   }
+}
+
+async function connectQuickSsh(config: SshConnectionConfig): Promise<void> {
+  const tab = createTerminalTab(config.host);
+  setTabConnecting(tab, `connecting to ${config.username}@${config.host}:${config.port}...`);
+  try {
+    attachSshSession(tab, await window.cybergrid.ssh.connect(config));
+  } catch (error) {
+    handleConnectionFailure(tab, error);
+  }
+}
+
+async function connectQuickRdp(config: RdpConnectionConfig): Promise<void> {
+  const tab = createRdpTab(config.host, config);
+  tab.status = "launching";
+  updateConnectionState(tab);
+  try {
+    attachRdpSession(tab, await window.cybergrid.rdp.connect(config));
+  } catch (error) {
+    handleConnectionFailure(tab, error);
+  }
+}
+
+function parseQuickConnect(value: string):
+  | { protocol: "ssh"; config: SshConnectionConfig }
+  | { protocol: "rdp"; config: RdpConnectionConfig } {
+  let url: URL;
+  try {
+    url = new URL(value.trim());
+  } catch {
+    throw new Error("Use protocol://user@host:port, for example ssh://admin@server:22.");
+  }
+
+  const protocol = url.protocol.replace(":", "");
+  if (protocol !== "ssh" && protocol !== "rdp") {
+    throw new Error("Quick Connect supports ssh:// and rdp:// URLs.");
+  }
+  const username = decodeURIComponent(url.username);
+  const host = url.hostname.replace(/^\[|\]$/g, "");
+  if (!username || !host) {
+    throw new Error("Quick Connect requires both a username and host.");
+  }
+
+  if (protocol === "ssh") {
+    return {
+      protocol,
+      config: {
+        host,
+        port: url.port ? Number(url.port) : 22,
+        username,
+        password: decodeURIComponent(url.password) || quickPasswordInput.value || undefined,
+      },
+    };
+  }
+  return {
+    protocol,
+    config: {
+      host,
+      port: url.port ? Number(url.port) : 3389,
+      username,
+    },
+  };
 }
 
 function createTextElement(tag: "span" | "div", className: string, text: string): HTMLElement {
@@ -356,10 +689,8 @@ function createTextElement(tag: "span" | "div", className: string, text: string)
 }
 
 function populateQuickConnect(profile: ServerProfileSummary): void {
-  hostInput.value = profile.host;
-  portInput.value = String(profile.port);
-  usernameInput.value = profile.username;
-  passwordInput.value = "";
+  quickConnectInput.value = `ssh://${encodeURIComponent(profile.username)}@${profile.host}:${profile.port}`;
+  quickPasswordInput.value = "";
 }
 
 function renderProfiles(): void {
@@ -369,7 +700,7 @@ function renderProfiles(): void {
   if (savedProfiles.length === 0) {
     const emptyState = document.createElement("div");
     emptyState.className = "sidebar-empty";
-    emptyState.textContent = "No saved servers yet. Add one to create your first folder.";
+    emptyState.textContent = "No saved SSH servers yet. Add one to create your first folder.";
     profileTree.append(emptyState);
     return;
   }
@@ -399,11 +730,7 @@ function renderProfiles(): void {
     folderButton.append(
       createTextElement("span", "folder-chevron", collapsedGroups.has(group) ? ">" : "v"),
       createTextElement("span", "folder-name", group),
-      createTextElement(
-        "span",
-        "folder-count",
-        String(profilesByGroup.get(group)?.length ?? 0),
-      ),
+      createTextElement("span", "folder-count", String(profilesByGroup.get(group)?.length ?? 0)),
     );
     folderButton.addEventListener("click", () => {
       if (collapsedGroups.has(group)) {
@@ -424,21 +751,16 @@ function renderProfiles(): void {
       serverButton.className = "server-item";
       serverButton.type = "button";
       serverButton.title = "Double-click to connect";
-      serverButton.append(
-        createTextElement("span", "server-dot", ""),
-        (() => {
-          const meta = createTextElement("span", "server-meta", "");
-          meta.append(
-            createTextElement("span", "server-name", profile.name),
-            createTextElement(
-              "span",
-              "server-host",
-              `${profile.username}@${profile.host}:${profile.port}`,
-            ),
-          );
-          return meta;
-        })(),
+      const meta = createTextElement("span", "server-meta", "");
+      meta.append(
+        createTextElement("span", "server-name", profile.name),
+        createTextElement(
+          "span",
+          "server-host",
+          `${profile.username}@${profile.host}:${profile.port}`,
+        ),
       );
+      serverButton.append(createTextElement("span", "server-dot", ""), meta);
       serverButton.addEventListener("click", () => populateQuickConnect(profile));
       serverButton.addEventListener("dblclick", () => void connectSavedProfile(profile));
 
@@ -472,6 +794,139 @@ function renderProfiles(): void {
 async function refreshProfiles(): Promise<void> {
   savedProfiles = await window.cybergrid.vault.listProfiles();
   renderProfiles();
+}
+
+function activeSshTab(): WorkspaceTab | undefined {
+  const tab = activeTabId ? tabs.get(activeTabId) : undefined;
+  return tab?.kind === "ssh" && tab.status === "connected" && tab.sessionId ? tab : undefined;
+}
+
+function updateSftpAvailability(): void {
+  const available = Boolean(activeSshTab());
+  toggleSftpButton.disabled = !available;
+  if (!available && sftpDrawerOpen) {
+    setSftpDrawerOpen(false);
+  }
+}
+
+function setSftpDrawerOpen(open: boolean): void {
+  sftpDrawerOpen = open;
+  contentArea.classList.toggle("sftp-open", open);
+  sftpDrawer.hidden = !open;
+  toggleSftpButton.classList.toggle("active", open);
+  const tab = activeSshTab();
+  if (open && tab) {
+    if (tab.sftp) {
+      renderSftpListing(tab.sftp);
+    } else {
+      void loadSftpDirectory(tab, ".");
+    }
+  }
+  requestAnimationFrame(() => tabs.get(activeTabId ?? "")?.fitAddon?.fit());
+}
+
+function parentRemotePath(remotePath: string): string {
+  if (remotePath === "/") {
+    return "/";
+  }
+  const parts = remotePath.replace(/\/$/, "").split("/");
+  parts.pop();
+  return parts.join("/") || "/";
+}
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1_024) {
+    return `${bytes} B`;
+  }
+  const units = ["KB", "MB", "GB", "TB"];
+  let value = bytes / 1_024;
+  let unit = units[0];
+  for (let index = 1; index < units.length && value >= 1_024; index += 1) {
+    value /= 1_024;
+    unit = units[index];
+  }
+  return `${value.toFixed(value >= 10 ? 0 : 1)} ${unit}`;
+}
+
+function renderSftpListing(listing: SftpDirectoryListing): void {
+  sftpPathInput.value = listing.path;
+  sftpListing.replaceChildren();
+  if (listing.entries.length === 0) {
+    sftpListing.append(createTextElement("div", "sftp-empty", "This directory is empty."));
+    return;
+  }
+
+  for (const entry of listing.entries) {
+    const row = document.createElement("button");
+    row.className = "sftp-row";
+    row.type = "button";
+    row.title = entry.type === "directory" ? "Double-click to open" : "Double-click to download";
+    const icon = entry.type === "directory" ? "DIR" : entry.type === "file" ? "FILE" : "LINK";
+    row.append(
+      createTextElement("span", `sftp-kind ${entry.type}`, icon),
+      createTextElement("span", "sftp-name", entry.name),
+      createTextElement("span", "sftp-size", entry.type === "directory" ? "" : formatFileSize(entry.size)),
+      createTextElement("span", "sftp-date", new Date(entry.modifiedAt).toLocaleDateString()),
+    );
+    row.addEventListener("dblclick", () => void openSftpEntry(entry));
+    sftpListing.append(row);
+  }
+}
+
+async function loadSftpDirectory(tab: WorkspaceTab, remotePath: string): Promise<void> {
+  if (!tab.sessionId) {
+    return;
+  }
+  sftpStatus.textContent = "Loading directory...";
+  try {
+    const listing = await window.cybergrid.sftp.listDirectory(tab.sessionId, remotePath);
+    tab.sftp = listing;
+    if (activeTabId === tab.id && sftpDrawerOpen) {
+      renderSftpListing(listing);
+      sftpStatus.textContent = `${listing.entries.length} item${listing.entries.length === 1 ? "" : "s"}`;
+    }
+  } catch (error) {
+    sftpStatus.textContent = errorMessage(error);
+  }
+}
+
+async function openSftpEntry(entry: SftpEntry): Promise<void> {
+  const tab = activeSshTab();
+  if (!tab || !tab.sessionId) {
+    return;
+  }
+  if (entry.type === "directory") {
+    await loadSftpDirectory(tab, entry.path);
+    return;
+  }
+  if (entry.type !== "file") {
+    sftpStatus.textContent = "Only regular files can be downloaded.";
+    return;
+  }
+  sftpStatus.textContent = `Downloading ${entry.name}...`;
+  try {
+    const localPath = await window.cybergrid.sftp.downloadFile(tab.sessionId, entry.path);
+    sftpStatus.textContent = localPath ? `Downloaded to ${localPath}` : "Download canceled.";
+  } catch (error) {
+    sftpStatus.textContent = errorMessage(error);
+  }
+}
+
+function handleSftpProgress(event: SftpProgressEvent): void {
+  const tab = activeSshTab();
+  if (!tab || tab.sessionId !== event.sessionId) {
+    return;
+  }
+  sftpProgress.hidden = false;
+  sftpProgress.max = Math.max(1, event.total);
+  sftpProgress.value = event.transferred;
+  const percent = event.total > 0 ? Math.round((event.transferred / event.total) * 100) : 0;
+  sftpStatus.textContent = `${event.direction === "upload" ? "Uploading" : "Downloading"} ${event.fileName} (${percent}%)`;
+  if (event.total > 0 && event.transferred >= event.total) {
+    window.setTimeout(() => {
+      sftpProgress.hidden = true;
+    }, 700);
+  }
 }
 
 function setVaultPrompt(shouldExist: boolean): void {
@@ -532,27 +987,82 @@ function openServerModal(): void {
   requestAnimationFrame(() => serverNameInput.focus());
 }
 
-connectionForm.addEventListener("submit", async (event) => {
+function populateSettingsForm(settings: UserSettings): void {
+  themeInput.value = settings.theme;
+  fontFamilyInput.value = settings.fontFamily;
+  fontSizeInput.value = String(settings.fontSize);
+  cursorBlinkInput.checked = settings.cursorBlink;
+  backgroundInput.value = settings.background;
+  foregroundInput.value = settings.foreground;
+  cursorInput.value = settings.cursor;
+  accentInput.value = settings.accent;
+  customPaletteFields.hidden = settings.theme !== "custom";
+}
+
+function openSettingsModal(): void {
+  populateSettingsForm(currentSettings);
+  if (!settingsModal.open) {
+    settingsModal.showModal();
+  }
+}
+
+quickConnectForm.addEventListener("submit", async (event) => {
   event.preventDefault();
-
-  const config: SshConnectionConfig = {
-    host: hostInput.value.trim(),
-    port: Number(portInput.value),
-    username: usernameInput.value.trim(),
-    password: passwordInput.value || undefined,
-  };
-  const tab = createTerminalTab(config.host);
-  setTabConnecting(
-    tab,
-    `connecting to ${config.username}@${config.host}:${config.port}...`,
-  );
-
+  connectionState.textContent = "Parsing Quick Connect URL...";
   try {
-    attachSession(tab, await window.cybergrid.ssh.connect(config));
+    const parsed = parseQuickConnect(quickConnectInput.value);
+    if (parsed.protocol === "ssh") {
+      await connectQuickSsh(parsed.config);
+    } else {
+      await connectQuickRdp(parsed.config);
+    }
   } catch (error) {
-    handleConnectionFailure(tab, error);
+    connectionState.textContent = errorMessage(error);
   } finally {
-    passwordInput.value = "";
+    quickPasswordInput.value = "";
+  }
+});
+
+toggleSftpButton.addEventListener("click", () => setSftpDrawerOpen(!sftpDrawerOpen));
+sftpCloseButton.addEventListener("click", () => setSftpDrawerOpen(false));
+sftpRefreshButton.addEventListener("click", () => {
+  const tab = activeSshTab();
+  if (tab) {
+    void loadSftpDirectory(tab, tab.sftp?.path ?? ".");
+  }
+});
+sftpUpButton.addEventListener("click", () => {
+  const tab = activeSshTab();
+  if (tab) {
+    void loadSftpDirectory(tab, parentRemotePath(tab.sftp?.path ?? "/"));
+  }
+});
+sftpPathForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  const tab = activeSshTab();
+  if (tab) {
+    void loadSftpDirectory(tab, sftpPathInput.value.trim() || ".");
+  }
+});
+sftpUploadButton.addEventListener("click", async () => {
+  const tab = activeSshTab();
+  if (!tab?.sessionId) {
+    return;
+  }
+  sftpStatus.textContent = "Choose files to upload...";
+  try {
+    const uploaded = await window.cybergrid.sftp.uploadFiles(
+      tab.sessionId,
+      tab.sftp?.path ?? ".",
+    );
+    sftpStatus.textContent = uploaded.length > 0
+      ? `Uploaded ${uploaded.length} file${uploaded.length === 1 ? "" : "s"}.`
+      : "Upload canceled.";
+    if (uploaded.length > 0) {
+      await loadSftpDirectory(tab, tab.sftp?.path ?? ".");
+    }
+  } catch (error) {
+    sftpStatus.textContent = errorMessage(error);
   }
 });
 
@@ -597,6 +1107,10 @@ lockButton.addEventListener("click", async () => {
     if (serverModal.open) {
       serverModal.close();
     }
+    if (settingsModal.open) {
+      settingsModal.close();
+    }
+    setSftpDrawerOpen(false);
     await window.cybergrid.vault.lock();
     savedProfiles = [];
     renderProfiles();
@@ -614,13 +1128,11 @@ browseKeyButton.addEventListener("click", async () => {
     serverKeyPathInput.value = selectedPath;
   }
 });
-
 serverModal.addEventListener("click", (event) => {
   if (event.target === serverModal) {
     serverModal.close();
   }
 });
-
 serverForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   serverFormError.textContent = "";
@@ -633,8 +1145,7 @@ serverForm.addEventListener("submit", async (event) => {
     group: serverGroupInput.value.trim() || "Ungrouped",
     authType,
     password: authType === "password" ? serverPasswordInput.value : undefined,
-    privateKeyPath:
-      authType === "privateKey" ? serverKeyPathInput.value.trim() : undefined,
+    privateKeyPath: authType === "privateKey" ? serverKeyPathInput.value.trim() : undefined,
     passphrase: authType === "privateKey" ? serverPassphraseInput.value : undefined,
   };
 
@@ -649,19 +1160,49 @@ serverForm.addEventListener("submit", async (event) => {
   }
 });
 
+settingsButton.addEventListener("click", openSettingsModal);
+themeInput.addEventListener("change", () => {
+  customPaletteFields.hidden = themeInput.value !== "custom";
+});
+cancelSettingsButton.addEventListener("click", () => settingsModal.close());
+resetSettingsButton.addEventListener("click", () => populateSettingsForm(DEFAULT_SETTINGS));
+settingsModal.addEventListener("click", (event) => {
+  if (event.target === settingsModal) {
+    settingsModal.close();
+  }
+});
+settingsForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  const settings: UserSettings = {
+    theme: themeInput.value as UserSettings["theme"],
+    fontFamily: fontFamilyInput.value.trim() || DEFAULT_SETTINGS.fontFamily,
+    fontSize: Math.min(28, Math.max(10, Math.round(Number(fontSizeInput.value)))),
+    cursorBlink: cursorBlinkInput.checked,
+    background: backgroundInput.value,
+    foreground: foregroundInput.value,
+    cursor: cursorInput.value,
+    accent: accentInput.value,
+  };
+  applySettings(settings, true);
+  settingsModal.close();
+});
+
 window.cybergrid.ssh.onData(handleSshData);
 window.cybergrid.ssh.onStatus(handleSshStatus);
+window.cybergrid.sftp.onProgress(handleSftpProgress);
+window.cybergrid.rdp.onStatus(handleRdpStatus);
 
 const resizeObserver = new ResizeObserver(() => {
   if (activeTabId) {
-    tabs.get(activeTabId)?.fitAddon.fit();
+    tabs.get(activeTabId)?.fitAddon?.fit();
   }
 });
 resizeObserver.observe(terminalStack);
 
-const welcomeTab = createTerminalTab("Welcome");
-welcomeTab.terminal.writeln("\x1b[36mCyberGrid\x1b[0m");
-welcomeTab.terminal.writeln("Encrypted server profiles in a secure, tabbed workspace.\r\n");
-welcomeTab.terminal.writeln("Unlock the vault, then double-click a saved server to connect.");
-
+applySettings(currentSettings, false);
+const welcomeTab = createTerminalTab("Welcome", "welcome");
+welcomeTab.terminal?.writeln("\x1b[36mCyberGrid\x1b[0m");
+welcomeTab.terminal?.writeln("SSH, SFTP, and native Windows RDP in one tabbed workspace.\r\n");
+welcomeTab.terminal?.writeln("Use Quick Connect: ssh://user@host:22 or rdp://user@host:3389");
+updateSftpAvailability();
 void initializeVault();

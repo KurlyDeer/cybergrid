@@ -1,8 +1,16 @@
 import { randomUUID } from "node:crypto";
-import { Client, type ClientChannel, type ConnectConfig } from "ssh2";
+import {
+  Client,
+  type ClientChannel,
+  type ConnectConfig,
+  type SFTPWrapper,
+} from "ssh2";
 import type { WebContents } from "electron";
 import {
   IPC_CHANNELS,
+  type SftpDirectoryListing,
+  type SftpEntry,
+  type SftpProgressEvent,
   type SshConnectionConfig,
   type SshConnectionStatus,
   type SshStatusEvent,
@@ -13,6 +21,8 @@ interface SshSession {
   client: Client;
   sender: WebContents;
   stream?: ClientChannel;
+  sftp?: SFTPWrapper;
+  sftpPromise?: Promise<SFTPWrapper>;
   closed: boolean;
 }
 
@@ -93,8 +103,6 @@ export class SshController {
       tryKeyboard: Boolean(config.password),
     };
 
-    // Defer the network connection so the renderer can associate the returned
-    // session ID with its terminal before output begins arriving over IPC.
     setImmediate(() => {
       if (!session.closed) {
         client.connect(connectConfig);
@@ -105,13 +113,107 @@ export class SshController {
   }
 
   write(sessionId: string, data: string): void {
-    const stream = this.getOpenStream(sessionId);
-    stream?.write(data);
+    this.getOpenSession(sessionId).stream?.write(data);
   }
 
   resize(sessionId: string, cols: number, rows: number): void {
-    const stream = this.getOpenStream(sessionId);
-    stream?.setWindow(rows, cols, 0, 0);
+    this.getOpenSession(sessionId).stream?.setWindow(rows, cols, 0, 0);
+  }
+
+  async listDirectory(sessionId: string, remotePath: string): Promise<SftpDirectoryListing> {
+    const session = this.getOpenSession(sessionId);
+    const sftp = await this.getSftp(session);
+    const resolvedPath = await new Promise<string>((resolve, reject) => {
+      sftp.realpath(remotePath, (error, absolutePath) => {
+        if (error) {
+          reject(error);
+        } else {
+          resolve(absolutePath);
+        }
+      });
+    });
+    const entries = await new Promise<SftpEntry[]>((resolve, reject) => {
+      sftp.readdir(resolvedPath, (error, list) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolve(
+          list
+            .filter((entry) => entry.filename !== "." && entry.filename !== "..")
+            .map((entry): SftpEntry => ({
+              name: entry.filename,
+              path: this.joinRemotePath(resolvedPath, entry.filename),
+              type: entry.attrs.isDirectory()
+                ? "directory"
+                : entry.attrs.isFile()
+                  ? "file"
+                  : entry.attrs.isSymbolicLink()
+                    ? "symlink"
+                    : "other",
+              size: entry.attrs.size,
+              modifiedAt: entry.attrs.mtime * 1_000,
+              permissions: entry.attrs.mode,
+            }))
+            .sort((left, right) => {
+              if (left.type === "directory" && right.type !== "directory") {
+                return -1;
+              }
+              if (left.type !== "directory" && right.type === "directory") {
+                return 1;
+              }
+              return left.name.localeCompare(right.name);
+            }),
+        );
+      });
+    });
+    return { path: resolvedPath, entries };
+  }
+
+  async uploadFile(sessionId: string, localPath: string, remotePath: string): Promise<void> {
+    const session = this.getOpenSession(sessionId);
+    const sftp = await this.getSftp(session);
+    await new Promise<void>((resolve, reject) => {
+      sftp.fastPut(
+        localPath,
+        remotePath,
+        {
+          step: (transferred, _chunk, total) => {
+            this.emitSftpProgress(session, "upload", remotePath, transferred, total);
+          },
+        },
+        (error) => {
+          if (error) {
+            reject(error);
+          } else {
+            resolve();
+          }
+        },
+      );
+    });
+  }
+
+  async downloadFile(sessionId: string, remotePath: string, localPath: string): Promise<void> {
+    const session = this.getOpenSession(sessionId);
+    const sftp = await this.getSftp(session);
+    await new Promise<void>((resolve, reject) => {
+      sftp.fastGet(
+        remotePath,
+        localPath,
+        {
+          step: (transferred, _chunk, total) => {
+            this.emitSftpProgress(session, "download", remotePath, transferred, total);
+          },
+        },
+        (error) => {
+          if (error) {
+            reject(error);
+          } else {
+            resolve();
+          }
+        },
+      );
+    });
   }
 
   disconnect(sessionId: string): void {
@@ -121,9 +223,9 @@ export class SshController {
     }
   }
 
-  disconnectAll(): void {
+  disconnectAll(message = "Application is closing."): void {
     for (const session of [...this.sessions.values()]) {
-      this.closeSession(session, "disconnected", "Application is closing.");
+      this.closeSession(session, "disconnected", message);
     }
   }
 
@@ -135,9 +237,41 @@ export class SshController {
     }
   }
 
-  private getOpenStream(sessionId: string): ClientChannel | undefined {
+  private getOpenSession(sessionId: string): SshSession {
     const session = this.sessions.get(sessionId);
-    return session && !session.closed ? session.stream : undefined;
+    if (!session || session.closed || !session.stream) {
+      throw new Error("SSH session is not connected.");
+    }
+    return session;
+  }
+
+  private getSftp(session: SshSession): Promise<SFTPWrapper> {
+    if (session.sftp) {
+      return Promise.resolve(session.sftp);
+    }
+    if (session.sftpPromise) {
+      return session.sftpPromise;
+    }
+
+    session.sftpPromise = new Promise<SFTPWrapper>((resolve, reject) => {
+      session.client.sftp((error, sftp) => {
+        session.sftpPromise = undefined;
+        if (error) {
+          reject(error);
+          return;
+        }
+        session.sftp = sftp;
+        sftp.once("end", () => {
+          session.sftp = undefined;
+        });
+        resolve(sftp);
+      });
+    });
+    return session.sftpPromise;
+  }
+
+  private joinRemotePath(directory: string, name: string): string {
+    return directory === "/" ? `/${name}` : `${directory.replace(/\/$/, "")}/${name}`;
   }
 
   private emitData(session: SshSession, data: string): void {
@@ -166,6 +300,26 @@ export class SshController {
     session.sender.send(IPC_CHANNELS.sshStatus, payload);
   }
 
+  private emitSftpProgress(
+    session: SshSession,
+    direction: "upload" | "download",
+    remotePath: string,
+    transferred: number,
+    total: number,
+  ): void {
+    if (session.closed || session.sender.isDestroyed()) {
+      return;
+    }
+    const payload: SftpProgressEvent = {
+      sessionId: session.id,
+      direction,
+      fileName: remotePath.split("/").pop() || remotePath,
+      transferred,
+      total,
+    };
+    session.sender.send(IPC_CHANNELS.sftpProgress, payload);
+  }
+
   private closeSession(
     session: SshSession,
     status: "disconnected" | "error",
@@ -179,6 +333,7 @@ export class SshController {
     this.sessions.delete(session.id);
     this.emitStatus(session, status, message);
 
+    session.sftp?.end();
     if (session.stream && !session.stream.destroyed) {
       session.stream.close();
     }

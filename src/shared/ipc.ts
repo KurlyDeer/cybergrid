@@ -6,6 +6,14 @@ export const IPC_CHANNELS = {
   sshResize: "cybergrid:ssh:resize",
   sshData: "cybergrid:ssh:data",
   sshStatus: "cybergrid:ssh:status",
+  sftpList: "cybergrid:sftp:list",
+  sftpUpload: "cybergrid:sftp:upload",
+  sftpDownload: "cybergrid:sftp:download",
+  sftpProgress: "cybergrid:sftp:progress",
+  rdpIsSupported: "cybergrid:rdp:is-supported",
+  rdpConnect: "cybergrid:rdp:connect",
+  rdpDisconnect: "cybergrid:rdp:disconnect",
+  rdpStatus: "cybergrid:rdp:status",
   vaultStatus: "cybergrid:vault:status",
   vaultCreate: "cybergrid:vault:create",
   vaultUnlock: "cybergrid:vault:unlock",
@@ -54,6 +62,44 @@ export interface SshResizeRequest {
   rows: number;
 }
 
+export type SftpEntryType = "directory" | "file" | "symlink" | "other";
+
+export interface SftpEntry {
+  name: string;
+  path: string;
+  type: SftpEntryType;
+  size: number;
+  modifiedAt: number;
+  permissions: number;
+}
+
+export interface SftpDirectoryListing {
+  path: string;
+  entries: SftpEntry[];
+}
+
+export interface SftpProgressEvent {
+  sessionId: string;
+  direction: "upload" | "download";
+  fileName: string;
+  transferred: number;
+  total: number;
+}
+
+export interface RdpConnectionConfig {
+  host: string;
+  port: number;
+  username: string;
+}
+
+export type RdpConnectionStatus = "launching" | "running" | "closed" | "error";
+
+export interface RdpStatusEvent {
+  sessionId: string;
+  status: RdpConnectionStatus;
+  message?: string;
+}
+
 export type ServerAuthType = "password" | "privateKey";
 
 export interface ServerProfileInput {
@@ -94,6 +140,18 @@ export interface CyberGridApi {
     resize(sessionId: string, cols: number, rows: number): void;
     onData(listener: (event: SshDataEvent) => void): Unsubscribe;
     onStatus(listener: (event: SshStatusEvent) => void): Unsubscribe;
+  };
+  sftp: {
+    listDirectory(sessionId: string, remotePath: string): Promise<SftpDirectoryListing>;
+    uploadFiles(sessionId: string, remoteDirectory: string): Promise<string[]>;
+    downloadFile(sessionId: string, remotePath: string): Promise<string | null>;
+    onProgress(listener: (event: SftpProgressEvent) => void): Unsubscribe;
+  };
+  rdp: {
+    isSupported(): Promise<boolean>;
+    connect(config: RdpConnectionConfig): Promise<string>;
+    disconnect(sessionId: string): Promise<void>;
+    onStatus(listener: (event: RdpStatusEvent) => void): Unsubscribe;
   };
   vault: {
     status(): Promise<VaultStatus>;

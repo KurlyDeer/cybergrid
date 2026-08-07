@@ -1,7 +1,9 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
 import type {
   CyberGridApi,
+  RdpStatusEvent,
   ServerProfileInput,
+  SftpProgressEvent,
   SshDataEvent,
   SshResizeRequest,
   SshStatusEvent,
@@ -18,6 +20,14 @@ const IPC_CHANNELS: typeof import("../shared/ipc").IPC_CHANNELS = {
   sshResize: "cybergrid:ssh:resize",
   sshData: "cybergrid:ssh:data",
   sshStatus: "cybergrid:ssh:status",
+  sftpList: "cybergrid:sftp:list",
+  sftpUpload: "cybergrid:sftp:upload",
+  sftpDownload: "cybergrid:sftp:download",
+  sftpProgress: "cybergrid:sftp:progress",
+  rdpIsSupported: "cybergrid:rdp:is-supported",
+  rdpConnect: "cybergrid:rdp:connect",
+  rdpDisconnect: "cybergrid:rdp:disconnect",
+  rdpStatus: "cybergrid:rdp:status",
   vaultStatus: "cybergrid:vault:status",
   vaultCreate: "cybergrid:vault:create",
   vaultUnlock: "cybergrid:vault:unlock",
@@ -51,6 +61,30 @@ const api: CyberGridApi = {
       const handler = (_event: IpcRendererEvent, payload: SshStatusEvent) => listener(payload);
       ipcRenderer.on(IPC_CHANNELS.sshStatus, handler);
       return () => ipcRenderer.removeListener(IPC_CHANNELS.sshStatus, handler);
+    },
+  },
+  sftp: {
+    listDirectory: (sessionId, remotePath) =>
+      ipcRenderer.invoke(IPC_CHANNELS.sftpList, sessionId, remotePath),
+    uploadFiles: (sessionId, remoteDirectory) =>
+      ipcRenderer.invoke(IPC_CHANNELS.sftpUpload, sessionId, remoteDirectory),
+    downloadFile: (sessionId, remotePath) =>
+      ipcRenderer.invoke(IPC_CHANNELS.sftpDownload, sessionId, remotePath),
+    onProgress: (listener) => {
+      const handler = (_event: IpcRendererEvent, payload: SftpProgressEvent) =>
+        listener(payload);
+      ipcRenderer.on(IPC_CHANNELS.sftpProgress, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.sftpProgress, handler);
+    },
+  },
+  rdp: {
+    isSupported: () => ipcRenderer.invoke(IPC_CHANNELS.rdpIsSupported),
+    connect: (config) => ipcRenderer.invoke(IPC_CHANNELS.rdpConnect, config),
+    disconnect: (sessionId) => ipcRenderer.invoke(IPC_CHANNELS.rdpDisconnect, sessionId),
+    onStatus: (listener) => {
+      const handler = (_event: IpcRendererEvent, payload: RdpStatusEvent) => listener(payload);
+      ipcRenderer.on(IPC_CHANNELS.rdpStatus, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.rdpStatus, handler);
     },
   },
   vault: {
