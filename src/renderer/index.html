@@ -601,7 +601,9 @@
 
       .tab-actions {
         display: flex;
+        max-width: 62vw;
         align-items: stretch;
+        overflow-x: auto;
         border-left: 1px solid var(--border);
       }
 
@@ -662,6 +664,35 @@
         position: relative;
         min-width: 0;
         min-height: 0;
+      }
+
+      .terminal-stack.tiled-layout {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        grid-template-rows: repeat(2, minmax(0, 1fr));
+        gap: 1px;
+        padding: 1px;
+        background: var(--border);
+      }
+
+      .terminal-stack.tiled-layout .workspace-pane.tiled-pane {
+        position: relative;
+        inset: auto;
+        display: block;
+        min-width: 0;
+        min-height: 0;
+        overflow: hidden;
+        background: var(--background);
+        box-shadow: inset 0 0 0 1px transparent;
+      }
+
+      .terminal-stack.tiled-layout .workspace-pane.primary-pane {
+        z-index: 1;
+        box-shadow: inset 0 0 0 2px var(--accent);
+      }
+
+      .terminal-stack.tiled-layout .terminal-pane {
+        padding: 9px;
       }
 
       .workspace-pane {
@@ -1115,6 +1146,98 @@
         font-size: 11px;
       }
 
+      .server-context-menu {
+        position: fixed;
+        z-index: 1200;
+        display: grid;
+        width: 220px;
+        padding: 6px;
+        border: 1px solid var(--border);
+        border-radius: 9px;
+        background: var(--panel);
+        box-shadow: 0 18px 55px rgba(0, 0, 0, 0.58);
+      }
+
+      .server-context-menu button {
+        min-height: 32px;
+        padding: 0 9px;
+        border: 0;
+        border-radius: 6px;
+        background: transparent;
+        cursor: pointer;
+        font-size: 11px;
+        text-align: left;
+      }
+
+      .server-context-menu button:hover:not(:disabled),
+      .server-context-menu button:focus-visible {
+        background: var(--panel-raised);
+        color: var(--accent);
+        outline: none;
+      }
+
+      .server-context-menu button:disabled {
+        color: var(--muted);
+        cursor: not-allowed;
+        opacity: 0.45;
+      }
+
+      .context-separator {
+        height: 1px;
+        margin: 5px 2px;
+        background: var(--border);
+      }
+
+      .diagnostic-inline {
+        display: grid;
+        gap: 6px;
+        margin: 3px 5px 8px 11px;
+        padding: 8px;
+        border: 1px solid var(--border);
+        border-left: 2px solid var(--muted);
+        border-radius: 7px;
+        background: color-mix(in srgb, var(--panel-raised) 75%, transparent);
+      }
+
+      .diagnostic-inline.success {
+        border-left-color: var(--accent);
+      }
+
+      .diagnostic-inline.error {
+        border-left-color: var(--danger);
+      }
+
+      .diagnostic-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 6px;
+      }
+
+      .diagnostic-header button {
+        border: 0;
+        background: transparent;
+        color: var(--muted);
+        cursor: pointer;
+      }
+
+      .diagnostic-summary {
+        color: var(--muted);
+        font-size: 10px;
+        font-weight: 700;
+      }
+
+      .diagnostic-inline pre {
+        max-height: 180px;
+        margin: 0;
+        overflow: auto;
+        color: var(--text);
+        font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+        font-size: 9px;
+        line-height: 1.45;
+        white-space: pre-wrap;
+      }
+
       dialog {
         width: min(620px, calc(100vw - 48px));
         padding: 0;
@@ -1127,6 +1250,177 @@
 
       dialog.wide-dialog {
         width: min(1000px, calc(100vw - 48px));
+      }
+
+      dialog.settings-dialog {
+        width: min(820px, calc(100vw - 48px));
+      }
+
+      .settings-layout {
+        display: grid;
+        min-height: 430px;
+        grid-template-columns: 170px minmax(0, 1fr);
+      }
+
+      .settings-nav {
+        display: grid;
+        align-content: start;
+        gap: 4px;
+        padding: 14px;
+        border-right: 1px solid var(--border);
+        background: color-mix(in srgb, var(--background) 58%, transparent);
+      }
+
+      .settings-nav button {
+        min-height: 36px;
+        padding: 0 11px;
+        border: 0;
+        border-radius: 7px;
+        background: transparent;
+        color: var(--muted);
+        cursor: pointer;
+        font-size: 11px;
+        font-weight: 700;
+        text-align: left;
+      }
+
+      .settings-nav button:hover,
+      .settings-nav button.active {
+        background: var(--panel-raised);
+        color: var(--accent);
+      }
+
+      .settings-panels {
+        min-width: 0;
+        padding: 20px 22px;
+      }
+
+      .settings-panel {
+        display: grid;
+        gap: 16px;
+      }
+
+      .settings-panel h3 {
+        margin: 0;
+        font-size: 15px;
+      }
+
+      .settings-panel > p {
+        margin: -9px 0 4px;
+        color: var(--muted);
+        font-size: 11px;
+        line-height: 1.5;
+      }
+
+      .settings-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 14px;
+      }
+
+      .settings-panels > .form-error {
+        margin-top: 16px;
+      }
+
+      .checkbox-field.full-width {
+        grid-column: 1 / -1;
+      }
+
+      dialog.command-palette {
+        width: min(720px, calc(100vw - 36px));
+        margin-top: 12vh;
+        border-radius: 13px;
+      }
+
+      .command-palette-shell {
+        display: grid;
+        max-height: 68vh;
+        grid-template-rows: auto minmax(0, 1fr) auto;
+      }
+
+      .command-palette-input-row {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr) auto;
+        gap: 10px;
+        align-items: center;
+        padding: 13px 15px;
+        border-bottom: 1px solid var(--border);
+        color: var(--accent);
+        font-size: 18px;
+      }
+
+      .command-palette-input-row input {
+        height: 38px;
+        border: 0;
+        outline: none;
+        background: transparent;
+        color: var(--text);
+        font-size: 14px;
+      }
+
+      .command-palette-input-row kbd {
+        padding: 3px 6px;
+        border: 1px solid var(--border);
+        border-radius: 5px;
+        color: var(--muted);
+        font-size: 9px;
+      }
+
+      .command-palette-results {
+        min-height: 100px;
+        overflow: auto;
+        padding: 7px;
+      }
+
+      .palette-result {
+        display: grid;
+        width: 100%;
+        grid-template-columns: 48px minmax(120px, 1.1fr) minmax(150px, 1fr) minmax(90px, 0.7fr);
+        gap: 10px;
+        align-items: center;
+        padding: 10px;
+        border: 1px solid transparent;
+        border-radius: 7px;
+        background: transparent;
+        cursor: pointer;
+        text-align: left;
+      }
+
+      .palette-result:hover,
+      .palette-result.selected {
+        border-color: var(--border);
+        background: var(--panel-raised);
+      }
+
+      .palette-protocol {
+        color: var(--accent);
+        font-size: 9px;
+        font-weight: 800;
+      }
+
+      .palette-name {
+        overflow: hidden;
+        font-size: 12px;
+        font-weight: 750;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .palette-endpoint,
+      .palette-group {
+        overflow: hidden;
+        color: var(--muted);
+        font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+        font-size: 10px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .command-palette-status {
+        padding: 8px 14px;
+        border-top: 1px solid var(--border);
+        color: var(--muted);
+        font-size: 10px;
       }
 
       dialog::backdrop {
@@ -1560,6 +1854,8 @@
         <div class="tabs-row">
           <div class="tabs" id="tabs" role="tablist" aria-label="Connection sessions"></div>
           <div class="tab-actions">
+            <button class="toolbar-button" id="command-palette-button" type="button" title="Search saved servers (Ctrl+K)">Search Ctrl+K</button>
+            <button class="toolbar-button" id="layout-button" type="button" aria-pressed="false" disabled>Grid 2x2</button>
             <button class="toolbar-button" id="broadcast-toggle-button" type="button" aria-pressed="false" disabled>Broadcast Off</button>
             <button class="toolbar-button" id="broadcast-targets-button" type="button" disabled>Targets (0/0)</button>
             <button class="toolbar-button" id="toggle-snippets-button" type="button">Snippets</button>
@@ -1634,6 +1930,8 @@
       </section>
     </main>
 
+    <div class="server-context-menu" id="server-context-menu" role="menu" hidden></div>
+
     <div class="vault-overlay" id="vault-overlay">
       <section class="vault-card" aria-labelledby="vault-title">
         <div class="vault-logo">CG</div>
@@ -1664,6 +1962,8 @@
         <div class="modal-body">
           <div class="field"><label for="server-name">Display name</label><input id="server-name" required maxlength="100" autocomplete="off" /></div>
           <div class="field"><label for="server-group">Folder</label><input id="server-group" list="group-options" maxlength="100" placeholder="Production" autocomplete="off" /><datalist id="group-options"></datalist></div>
+          <div class="field full-width"><label for="server-tags">Search tags</label><input id="server-tags" maxlength="680" placeholder="database, production, east-coast" autocomplete="off" /></div>
+          <div class="checkbox-field full-width"><input id="server-favorite" type="checkbox" /><label class="checkbox-label" for="server-favorite">Favorite in system tray</label></div>
           <div class="field"><label for="server-protocol">Protocol</label><select id="server-protocol"><option value="ssh">SSH</option><option value="rdp">Windows RDP</option><option value="telnet">Telnet</option><option value="raw">RAW TCP</option><option value="vnc">VNC Desktop</option><option value="https">HTTPS Web</option><option value="http">HTTP Web</option><option value="serial">Serial / COM</option></select></div>
           <div class="field"><label for="server-host" id="server-host-label">Hostname or IP</label><input id="server-host" required maxlength="2048" autocomplete="off" /></div>
           <div class="field"><label for="server-port">Port</label><input id="server-port" type="number" min="1" max="65535" value="22" required /></div>
@@ -1795,22 +2095,56 @@
       </form>
     </dialog>
 
-    <dialog id="settings-modal" aria-labelledby="settings-modal-title">
+    <dialog class="settings-dialog" id="settings-modal" aria-labelledby="settings-modal-title">
       <form id="settings-form">
         <header class="modal-header">
-          <h2 id="settings-modal-title">Appearance &amp; Terminal</h2>
-          <p>Settings apply immediately to every open terminal and are saved locally.</p>
+          <h2 id="settings-modal-title">CyberGrid Settings</h2>
+          <p>Global preferences are stored locally and applied across the workspace.</p>
         </header>
-        <div class="modal-body">
-          <div class="field"><label for="theme-mode">Theme</label><select id="theme-mode"><option value="dark">CyberGrid Dark</option><option value="monochrome">High-contrast monochrome</option><option value="custom">Custom palette</option></select></div>
-          <div class="checkbox-field"><input id="terminal-cursor-blink" type="checkbox" /><label class="checkbox-label" for="terminal-cursor-blink">Blinking cursor</label></div>
-          <div class="field full-width"><label for="terminal-font-family">Terminal font family</label><input id="terminal-font-family" maxlength="200" /></div>
-          <div class="field"><label for="terminal-font-size">Font size</label><input id="terminal-font-size" type="number" min="10" max="28" required /></div>
-          <div class="custom-palette" id="custom-palette-fields" hidden>
-            <div class="field color-field"><label for="terminal-background">Terminal background</label><input id="terminal-background" type="color" /></div>
-            <div class="field color-field"><label for="terminal-foreground">Terminal foreground</label><input id="terminal-foreground" type="color" /></div>
-            <div class="field color-field"><label for="terminal-cursor">Terminal cursor</label><input id="terminal-cursor" type="color" /></div>
-            <div class="field color-field"><label for="ui-accent">Interface accent</label><input id="ui-accent" type="color" /></div>
+        <div class="settings-layout">
+          <nav class="settings-nav" aria-label="Settings sections">
+            <button type="button" data-settings-tab="general">General</button>
+            <button type="button" data-settings-tab="terminal">Terminal</button>
+            <button type="button" data-settings-tab="security">Security</button>
+            <button type="button" data-settings-tab="network">Network</button>
+          </nav>
+          <div class="settings-panels">
+            <section class="settings-panel" data-settings-panel="general">
+              <h3>General</h3>
+              <p>Control how CyberGrid behaves when the application window is minimized or closed.</p>
+              <div class="checkbox-field"><input id="minimize-to-tray" type="checkbox" /><label class="checkbox-label" for="minimize-to-tray">Minimize and close to system tray</label></div>
+            </section>
+            <section class="settings-panel" data-settings-panel="terminal" hidden>
+              <h3>Terminal Theme &amp; Fonts</h3>
+              <p>Changes apply to every open and future terminal session.</p>
+              <div class="settings-grid">
+                <div class="field"><label for="theme-mode">Theme</label><select id="theme-mode"><option value="dark">CyberGrid Dark</option><option value="monochrome">High-contrast monochrome</option><option value="custom">Custom palette</option></select></div>
+                <div class="checkbox-field"><input id="terminal-cursor-blink" type="checkbox" /><label class="checkbox-label" for="terminal-cursor-blink">Blinking cursor</label></div>
+                <div class="field full-width"><label for="terminal-font-family">Terminal font family</label><input id="terminal-font-family" maxlength="200" /></div>
+                <div class="field"><label for="terminal-font-size">Font size</label><input id="terminal-font-size" type="number" min="10" max="28" required /></div>
+                <div class="custom-palette" id="custom-palette-fields" hidden>
+                  <div class="field color-field"><label for="terminal-background">Terminal background</label><input id="terminal-background" type="color" /></div>
+                  <div class="field color-field"><label for="terminal-foreground">Terminal foreground</label><input id="terminal-foreground" type="color" /></div>
+                  <div class="field color-field"><label for="terminal-cursor">Terminal cursor</label><input id="terminal-cursor" type="color" /></div>
+                  <div class="field color-field"><label for="ui-accent">Interface accent</label><input id="ui-accent" type="color" /></div>
+                </div>
+              </div>
+            </section>
+            <section class="settings-panel" data-settings-panel="security" hidden>
+              <h3>Security Auto-Lock</h3>
+              <p>Disconnect active sessions and clear decrypted credentials after application inactivity.</p>
+              <div class="field"><label for="auto-lock-minutes">Inactivity timeout</label><select id="auto-lock-minutes"><option value="0">Never</option><option value="1">1 minute</option><option value="5">5 minutes</option><option value="15">15 minutes</option><option value="30">30 minutes</option><option value="60">1 hour</option><option value="120">2 hours</option><option value="480">8 hours</option></select></div>
+            </section>
+            <section class="settings-panel" data-settings-panel="network" hidden>
+              <h3>Network Proxy</h3>
+              <p>Proxy settings apply to embedded Chromium management tabs. SSH and native protocols use direct sockets.</p>
+              <div class="field"><label for="proxy-mode">Proxy mode</label><select id="proxy-mode"><option value="system">Use system proxy</option><option value="direct">Direct connection</option><option value="manual">Manual proxy</option></select></div>
+              <div class="settings-grid" id="proxy-manual-fields" hidden>
+                <div class="field full-width"><label for="proxy-url">Proxy URL</label><input id="proxy-url" maxlength="2048" placeholder="http://proxy.example.com:8080" spellcheck="false" autocomplete="off" /></div>
+                <div class="field full-width"><label for="proxy-bypass-rules">Bypass rules</label><input id="proxy-bypass-rules" maxlength="2048" placeholder="&lt;local&gt;, *.internal.example.com" spellcheck="false" autocomplete="off" /></div>
+              </div>
+            </section>
+            <div class="form-error" id="settings-error" role="alert"></div>
           </div>
         </div>
         <footer class="modal-actions">
@@ -1819,6 +2153,18 @@
           <button class="primary-button" type="submit">Apply settings</button>
         </footer>
       </form>
+    </dialog>
+
+    <dialog class="command-palette" id="command-palette" aria-label="Search saved servers">
+      <div class="command-palette-shell">
+        <div class="command-palette-input-row">
+          <span aria-hidden="true">⌕</span>
+          <input id="command-palette-input" type="search" placeholder="Search hostname, IP, group, or tag…" autocomplete="off" spellcheck="false" aria-controls="command-palette-results" />
+          <kbd>Esc</kbd>
+        </div>
+        <div class="command-palette-results" id="command-palette-results" role="listbox"></div>
+        <div class="command-palette-status" id="command-palette-status" role="status"></div>
+      </div>
     </dialog>
 
     <script src="../../node_modules/xterm/lib/xterm.js" defer></script>

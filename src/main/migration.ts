@@ -82,6 +82,8 @@ function profileFromFields(fields: Record<string, unknown>, fallbackGroup: strin
     dataBits: protocol === "serial" ? Number(fields.dataBits ?? fields.databits ?? 8) as 5 | 6 | 7 | 8 : undefined,
     stopBits: protocol === "serial" ? Number(fields.stopBits ?? fields.stopbits ?? 1) as 1 | 2 : undefined,
     parity: protocol === "serial" ? (text(fields.parity) || "none") as ServerProfileInput["parity"] : undefined,
+    tags: text(fields.tags).split(/[;,]/).map((tag) => tag.trim()).filter(Boolean),
+    favorite: /^(?:true|1|yes)$/i.test(text(fields.favorite)),
   };
 }
 
@@ -340,11 +342,12 @@ function csvCell(value: unknown): string {
 }
 
 function exportCsv(profiles: ServerProfileInput[]): ExportPayload {
-  const header = ["protocol", "name", "group", "host", "port", "username", "authType", "password", "privateKeyPath", "passphrase", "baudRate", "dataBits", "stopBits", "parity"];
+  const header = ["protocol", "name", "group", "host", "port", "username", "authType", "password", "privateKeyPath", "passphrase", "baudRate", "dataBits", "stopBits", "parity", "tags", "favorite"];
   const rows = profiles.map((profile) => [
     profile.protocol, profile.name, profile.group, profile.host, profile.port, profile.username,
     profile.authType, portableSecret(profile.password), profile.privateKeyPath ?? "",
     portableSecret(profile.passphrase), profile.baudRate, profile.dataBits, profile.stopBits, profile.parity,
+    profile.tags?.join(";"), profile.favorite ?? false,
   ].map(csvCell).join(","));
   return { count: profiles.length, content: `${header.join(",")}\n${rows.join("\n")}\n` };
 }

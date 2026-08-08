@@ -27,6 +27,13 @@ export const IPC_CHANNELS = {
   vaultListSnippets: "cybergrid:vault:list-snippets",
   vaultSaveSnippet: "cybergrid:vault:save-snippet",
   vaultDeleteSnippet: "cybergrid:vault:delete-snippet",
+  vaultSetFavorite: "cybergrid:vault:set-favorite",
+  preferencesGet: "cybergrid:preferences:get",
+  preferencesUpdate: "cybergrid:preferences:update",
+  preferencesActivity: "cybergrid:preferences:activity",
+  diagnosticsRun: "cybergrid:diagnostics:run",
+  vaultLocked: "cybergrid:app:vault-locked",
+  trayQuickConnect: "cybergrid:app:tray-quick-connect",
   discoveryStart: "cybergrid:discovery:start",
   discoveryCancel: "cybergrid:discovery:cancel",
   discoveryProgress: "cybergrid:discovery:progress",
@@ -164,6 +171,8 @@ export interface ServerProfileInput {
   dataBits?: 5 | 6 | 7 | 8;
   stopBits?: 1 | 2;
   parity?: SerialParity;
+  tags?: string[];
+  favorite?: boolean;
 }
 
 export interface ServerProfileSummary {
@@ -179,6 +188,8 @@ export interface ServerProfileSummary {
   dataBits?: 5 | 6 | 7 | 8;
   stopBits?: 1 | 2;
   parity?: SerialParity;
+  tags: string[];
+  favorite: boolean;
 }
 
 export interface StreamConnectionConfig {
@@ -414,6 +425,37 @@ export interface SnippetRecord extends Omit<SnippetInput, "id"> {
   updatedAt: string;
 }
 
+export type TerminalThemeName = "dark" | "monochrome" | "custom";
+export type ProxyMode = "system" | "direct" | "manual";
+
+export interface AppPreferences {
+  minimizeToTray: boolean;
+  autoLockMinutes: number;
+  theme: TerminalThemeName;
+  fontFamily: string;
+  fontSize: number;
+  cursorBlink: boolean;
+  background: string;
+  foreground: string;
+  cursor: string;
+  accent: string;
+  proxyMode: ProxyMode;
+  proxyUrl: string;
+  proxyBypassRules: string;
+}
+
+export type DiagnosticKind = "ping" | "traceroute" | "dns" | "port";
+
+export interface DiagnosticResult {
+  profileId: string;
+  kind: DiagnosticKind;
+  success: boolean;
+  summary: string;
+  output: string;
+  durationMs: number;
+  checkedAt: string;
+}
+
 export type Unsubscribe = () => void;
 
 export interface CyberGridApi {
@@ -482,6 +524,15 @@ export interface CyberGridApi {
     listSnippets(): Promise<SnippetRecord[]>;
     saveSnippet(snippet: SnippetInput): Promise<SnippetRecord>;
     deleteSnippet(snippetId: string): Promise<void>;
+    setFavorite(profileId: string, favorite: boolean): Promise<ServerProfileSummary>;
+  };
+  preferences: {
+    get(): Promise<AppPreferences>;
+    update(preferences: AppPreferences): Promise<AppPreferences>;
+    activity(): void;
+  };
+  diagnostics: {
+    run(profileId: string, kind: DiagnosticKind): Promise<DiagnosticResult>;
   };
   discovery: {
     start(target: string): Promise<string>;
@@ -501,5 +552,7 @@ export interface CyberGridApi {
   };
   system: {
     selectPrivateKey(): Promise<string | null>;
+    onVaultLocked(listener: (reason: string) => void): Unsubscribe;
+    onTrayQuickConnect(listener: (profileId: string) => void): Unsubscribe;
   };
 }

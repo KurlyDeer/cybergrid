@@ -1,12 +1,14 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
 import type {
   AssetInput,
+  AppPreferences,
   CyberGridApi,
   DiscoveryCompleteEvent,
   DiscoveryProgressEvent,
   DiscoveryResultEvent,
   HealthStatusEvent,
   HealthTarget,
+  DiagnosticKind,
   MigrationRequest,
   RdpStatusEvent,
   SerialConnectionConfig,
@@ -60,6 +62,13 @@ const IPC_CHANNELS: typeof import("../shared/ipc").IPC_CHANNELS = {
   vaultListSnippets: "cybergrid:vault:list-snippets",
   vaultSaveSnippet: "cybergrid:vault:save-snippet",
   vaultDeleteSnippet: "cybergrid:vault:delete-snippet",
+  vaultSetFavorite: "cybergrid:vault:set-favorite",
+  preferencesGet: "cybergrid:preferences:get",
+  preferencesUpdate: "cybergrid:preferences:update",
+  preferencesActivity: "cybergrid:preferences:activity",
+  diagnosticsRun: "cybergrid:diagnostics:run",
+  vaultLocked: "cybergrid:app:vault-locked",
+  trayQuickConnect: "cybergrid:app:tray-quick-connect",
   discoveryStart: "cybergrid:discovery:start",
   discoveryCancel: "cybergrid:discovery:cancel",
   discoveryProgress: "cybergrid:discovery:progress",
@@ -218,6 +227,18 @@ const api: CyberGridApi = {
       ipcRenderer.invoke(IPC_CHANNELS.vaultSaveSnippet, snippet),
     deleteSnippet: (snippetId) =>
       ipcRenderer.invoke(IPC_CHANNELS.vaultDeleteSnippet, snippetId),
+    setFavorite: (profileId, favorite) =>
+      ipcRenderer.invoke(IPC_CHANNELS.vaultSetFavorite, profileId, favorite),
+  },
+  preferences: {
+    get: () => ipcRenderer.invoke(IPC_CHANNELS.preferencesGet),
+    update: (preferences: AppPreferences) =>
+      ipcRenderer.invoke(IPC_CHANNELS.preferencesUpdate, preferences),
+    activity: () => ipcRenderer.send(IPC_CHANNELS.preferencesActivity),
+  },
+  diagnostics: {
+    run: (profileId, kind: DiagnosticKind) =>
+      ipcRenderer.invoke(IPC_CHANNELS.diagnosticsRun, profileId, kind),
   },
   discovery: {
     start: (target) => ipcRenderer.invoke(IPC_CHANNELS.discoveryStart, target),
@@ -258,6 +279,16 @@ const api: CyberGridApi = {
   },
   system: {
     selectPrivateKey: () => ipcRenderer.invoke(IPC_CHANNELS.selectPrivateKey),
+    onVaultLocked: (listener) => {
+      const handler = (_event: IpcRendererEvent, reason: string) => listener(reason);
+      ipcRenderer.on(IPC_CHANNELS.vaultLocked, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.vaultLocked, handler);
+    },
+    onTrayQuickConnect: (listener) => {
+      const handler = (_event: IpcRendererEvent, profileId: string) => listener(profileId);
+      ipcRenderer.on(IPC_CHANNELS.trayQuickConnect, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.trayQuickConnect, handler);
+    },
   },
 };
 

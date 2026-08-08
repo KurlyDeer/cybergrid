@@ -3,20 +3,28 @@ import {
   BrowserWindow,
   dialog,
   ipcMain,
+  Menu,
+  nativeImage,
+  session,
+  Tray,
+  type MenuItemConstructorOptions,
   type IpcMainEvent,
   type IpcMainInvokeEvent,
+  type ProxyConfig,
   type WebContents,
 } from "electron";
 import { readFile, stat } from "node:fs/promises";
 import { basename, join, posix } from "node:path";
 import {
   IPC_CHANNELS,
+  type AppPreferences,
   type AdministrationProtocol,
   type AssetInput,
   type AssetMetadata,
   type ConnectionProtocol,
   type DeviceIcon,
   type DeviceOsFamily,
+  type DiagnosticKind,
   type HealthTarget,
   type MigrationRequest,
   type OpenPortInfo,
@@ -36,8 +44,10 @@ import {
   type WebConnectionConfig,
 } from "../shared/ipc";
 import { AuditController, type AuditSessionContext } from "./audit";
+import { runDiagnostic } from "./diagnostics";
 import { HealthController } from "./health";
 import { MigrationController } from "./migration";
+import { DEFAULT_APP_PREFERENCES, PreferencesController } from "./preferences";
 import { RdpController } from "./rdp";
 import { ScannerController } from "./scanner";
 import { SerialController } from "./serial";
@@ -58,7 +68,11 @@ let rdpController: RdpController | null = null;
 let vaultController: VaultController | null = null;
 let webController: WebController | null = null;
 let migrationController: MigrationController | null = null;
+let preferencesController: PreferencesController | null = null;
 let mainWindow: BrowserWindow | null = null;
+let tray: Tray | null = null;
+let autoLockTimer: NodeJS.Timeout | undefined;
+let isQuitting = false;
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 app.setAppUserModelId("com.kurlydeer.cybergrid");
 
@@ -80,6 +94,20 @@ function createMainWindow(): BrowserWindow {
   });
 
   window.once("ready-to-show", () => window.show());
+  window.on("minimize", () => {
+    if (requirePreferences().get().minimizeToTray && !isQuitting) {
+      setImmediate(() => window.hide());
+    }
+  });
+  window.on("close", (event) => {
+    if (requirePreferences().get().minimizeToTray && !isQuitting) {
+      event.preventDefault();
+      window.hide();
+    }
+  });
+  window.on("session-end", () => {
+    isQuitting = true;
+  });
   window.on("closed", () => {
     if (mainWindow === window) {
       mainWindow = null;
@@ -135,6 +163,13 @@ function requireMigration(): MigrationController {
   return migrationController;
 }
 
+function requirePreferences(): PreferencesController {
+  if (!preferencesController) {
+    throw new Error("Application preferences are not initialized.");
+  }
+  return preferencesController;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
@@ -172,6 +207,16 @@ function readPort(value: unknown, defaultPort = 22): number {
     throw new Error("Port must be an integer between 1 and 65535.");
   }
   return port;
+}
+
+function readTags(value: unknown, field: string): string[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > 20) {
+    throw new Error(`${field} must contain at most 20 tags.`);
+  }
+  return [...new Set(value.map((tag) =>
+    readString(tag, field, { required: true, maxLength: 32, singleLine: true }) as string,
+  ))];
 }
 
 function normalizeConnectionConfig(value: unknown): SshConnectionConfig {
@@ -266,6 +311,8 @@ function normalizeProfileInput(value: unknown): ServerProfileInput {
     }) ?? "",
     group: readString(value.group, "Folder", { maxLength: 100 }) ?? "Ungrouped",
     authType,
+    tags: readTags(value.tags, "Profile tags"),
+    favorite: value.favorite === true,
   };
   if (authType === "password") {
     profile.password = readString(value.password, "Password", {
@@ -637,6 +684,205 @@ function auditContext(
   return { protocol, displayName, target, username, group };
 }
 
+function readDiagnosticKind(value: unknown): DiagnosticKind {
+  if (value === "ping" || value === "traceroute" || value === "dns" || value === "port") {
+    return value;
+  }
+  throw new Error("Unsupported diagnostic operation.");
+}
+
+function readHexColor(value: unknown, field: string): string {
+  if (typeof value !== "string" || !/^#[0-9a-f]{6}$/i.test(value)) {
+    throw new Error(`${field} must be a six-digit hexadecimal color.`);
+  }
+  return value.toLowerCase();
+}
+
+function normalizePreferences(value: unknown): AppPreferences {
+  if (!isRecord(value)) throw new Error("Invalid application preferences.");
+  const autoLockMinutes = Number(value.autoLockMinutes);
+  const fontSize = Number(value.fontSize);
+  if (!Number.isInteger(autoLockMinutes) || autoLockMinutes < 0 || autoLockMinutes > 480) {
+    throw new Error("Auto-lock must be between 0 and 480 minutes.");
+  }
+  if (!Number.isInteger(fontSize) || fontSize < 10 || fontSize > 28) {
+    throw new Error("Terminal font size must be between 10 and 28 pixels.");
+  }
+  const theme = value.theme;
+  if (theme !== "dark" && theme !== "monochrome" && theme !== "custom") {
+    throw new Error("Invalid terminal theme.");
+  }
+  const proxyMode = value.proxyMode;
+  if (proxyMode !== "system" && proxyMode !== "direct" && proxyMode !== "manual") {
+    throw new Error("Invalid proxy mode.");
+  }
+  const proxyUrl = readString(value.proxyUrl, "Proxy URL", {
+    maxLength: 2_048,
+    singleLine: true,
+  }) ?? "";
+  if (proxyMode === "manual") {
+    let parsed: URL;
+    try {
+      parsed = new URL(proxyUrl);
+    } catch {
+      throw new Error("Manual proxy URL is invalid.");
+    }
+    if (!["http:", "https:", "socks4:", "socks5:"].includes(parsed.protocol)) {
+      throw new Error("Proxy URL must use HTTP, HTTPS, SOCKS4, or SOCKS5.");
+    }
+    if (parsed.username || parsed.password) {
+      throw new Error("Do not store credentials in the proxy URL; use system proxy authentication.");
+    }
+  }
+  return {
+    minimizeToTray: value.minimizeToTray === true,
+    autoLockMinutes,
+    theme,
+    fontFamily: readString(value.fontFamily, "Terminal font family", {
+      required: true,
+      maxLength: 200,
+      singleLine: true,
+    }) as string,
+    fontSize,
+    cursorBlink: value.cursorBlink === true,
+    background: readHexColor(value.background, "Terminal background"),
+    foreground: readHexColor(value.foreground, "Terminal foreground"),
+    cursor: readHexColor(value.cursor, "Terminal cursor"),
+    accent: readHexColor(value.accent, "Interface accent"),
+    proxyMode,
+    proxyUrl,
+    proxyBypassRules: readString(value.proxyBypassRules, "Proxy bypass rules", {
+      maxLength: 2_048,
+      singleLine: true,
+    }) ?? "",
+  };
+}
+
+async function applyProxyPreferences(preferences: AppPreferences): Promise<void> {
+  let config: ProxyConfig;
+  if (preferences.proxyMode === "direct") {
+    config = { mode: "direct" };
+  } else if (preferences.proxyMode === "manual") {
+    config = {
+      mode: "fixed_servers",
+      proxyRules: preferences.proxyUrl,
+      proxyBypassRules: preferences.proxyBypassRules,
+    };
+  } else {
+    config = { mode: "system" };
+  }
+  await session.defaultSession.setProxy(config);
+  await session.defaultSession.closeAllConnections();
+}
+
+function showMainWindow(): void {
+  if (!app.isReady() || !preferencesController || !vaultController) return;
+  if (!mainWindow) mainWindow = createMainWindow();
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+  resetAutoLockTimer();
+}
+
+function createTrayImage(): Electron.NativeImage {
+  const size = 16;
+  const bitmap = Buffer.alloc(size * size * 4);
+  const setPixel = (x: number, y: number, alpha = 255): void => {
+    const offset = (y * size + x) * 4;
+    bitmap[offset] = 171;
+    bitmap[offset + 1] = 213;
+    bitmap[offset + 2] = 35;
+    bitmap[offset + 3] = alpha;
+  };
+  for (let index = 2; index < 14; index += 1) {
+    setPixel(index, 2);
+    setPixel(index, 13);
+    setPixel(2, index);
+    setPixel(13, index);
+  }
+  for (let index = 4; index < 12; index += 1) {
+    setPixel(7, index);
+    setPixel(index, 7);
+  }
+  return nativeImage.createFromBitmap(bitmap, { width: size, height: size, scaleFactor: 1 });
+}
+
+let trayRefreshSequence = 0;
+
+async function refreshTrayMenu(): Promise<void> {
+  const activeSequence = ++trayRefreshSequence;
+  if (!tray || !vaultController) return;
+  const status = await vaultController.status();
+  const favorites = status.unlocked
+    ? vaultController.listProfiles().filter((profile) => profile.favorite).slice(0, 20)
+    : [];
+  if (!tray || activeSequence !== trayRefreshSequence) return;
+  const favoriteItems: MenuItemConstructorOptions[] = favorites.length > 0
+    ? favorites.map((profile) => ({
+        label: `${profile.name} (${profile.protocol.toUpperCase()})`,
+        click: () => {
+          showMainWindow();
+          mainWindow?.webContents.send(IPC_CHANNELS.trayQuickConnect, profile.id);
+        },
+      }))
+    : [{ label: status.unlocked ? "No favorite servers" : "Unlock vault to view favorites", enabled: false }];
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { label: "Show CyberGrid", click: showMainWindow },
+    { label: "Quick Connect Favorites", submenu: favoriteItems },
+    { type: "separator" },
+    {
+      label: "Lock Credential Vault",
+      enabled: status.unlocked,
+      click: () => lockApplication("Credential vault locked from the system tray.", true),
+    },
+    { type: "separator" },
+    {
+      label: "Quit CyberGrid",
+      click: () => {
+        isQuitting = true;
+        app.quit();
+      },
+    },
+  ]));
+}
+
+function createSystemTray(): void {
+  tray = new Tray(createTrayImage());
+  tray.setToolTip("CyberGrid remote connection manager");
+  tray.on("click", showMainWindow);
+  if (!isQuitting) void refreshTrayMenu();
+}
+
+function resetAutoLockTimer(): void {
+  if (autoLockTimer) clearTimeout(autoLockTimer);
+  autoLockTimer = undefined;
+  if (!vaultController?.isVaultUnlocked()) return;
+  const minutes = preferencesController?.get().autoLockMinutes ?? 0;
+  if (minutes === 0) return;
+  autoLockTimer = setTimeout(() => {
+    lockApplication(`Credential vault auto-locked after ${minutes} minutes of inactivity.`, true);
+  }, minutes * 60_000);
+  autoLockTimer.unref();
+}
+
+function lockApplication(reason: string, notifyRenderer: boolean): void {
+  if (autoLockTimer) clearTimeout(autoLockTimer);
+  autoLockTimer = undefined;
+  scannerController.cancelAll();
+  healthController.stop();
+  sshController.disconnectAll(reason);
+  streamController.disconnectAll();
+  serialController.disconnectAll();
+  vncController.disconnectAll();
+  webController?.disconnectAll();
+  rdpController?.disconnectAll();
+  vaultController?.lock();
+  if (notifyRenderer && mainWindow && !mainWindow.webContents.isDestroyed()) {
+    mainWindow.webContents.send(IPC_CHANNELS.vaultLocked, reason);
+  }
+  if (!isQuitting) void refreshTrayMenu();
+}
+
 async function connectionConfigForProfile(profileId: string): Promise<SshConnectionConfig> {
   const profile = requireVault().getConnectionProfile(profileId);
   if (profile.protocol !== "ssh") {
@@ -933,24 +1179,20 @@ function registerIpcHandlers(): void {
   ipcMain.handle(IPC_CHANNELS.vaultCreate, async (event, masterPassword: unknown) => {
     assertTrustedSender(event);
     await requireVault().create(readMasterPassword(masterPassword));
+    resetAutoLockTimer();
+    await refreshTrayMenu();
   });
 
   ipcMain.handle(IPC_CHANNELS.vaultUnlock, async (event, masterPassword: unknown) => {
     assertTrustedSender(event);
     await requireVault().unlock(readMasterPassword(masterPassword));
+    resetAutoLockTimer();
+    await refreshTrayMenu();
   });
 
   ipcMain.handle(IPC_CHANNELS.vaultLock, (event) => {
     assertTrustedSender(event);
-    scannerController.cancelAll();
-    healthController.stop();
-    sshController.disconnectAll("Credential vault locked.");
-    streamController.disconnectAll();
-    serialController.disconnectAll();
-    vncController.disconnectAll();
-    requireWeb().disconnectAll();
-    requireRdp().disconnectAll();
-    requireVault().lock();
+    lockApplication("Credential vault locked.", false);
   });
 
   ipcMain.handle(IPC_CHANNELS.vaultListProfiles, (event) => {
@@ -960,12 +1202,15 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle(IPC_CHANNELS.vaultSaveProfile, async (event, profile: unknown) => {
     assertTrustedSender(event);
-    return requireVault().saveProfile(normalizeProfileInput(profile));
+    const result = await requireVault().saveProfile(normalizeProfileInput(profile));
+    await refreshTrayMenu();
+    return result;
   });
 
   ipcMain.handle(IPC_CHANNELS.vaultDeleteProfile, async (event, profileId: unknown) => {
     assertTrustedSender(event);
     await requireVault().deleteProfile(readUuid(profileId, "server profile ID"));
+    await refreshTrayMenu();
   });
 
   ipcMain.handle(IPC_CHANNELS.vaultListAssets, (event) => {
@@ -996,6 +1241,50 @@ function registerIpcHandlers(): void {
   ipcMain.handle(IPC_CHANNELS.vaultDeleteSnippet, async (event, snippetId: unknown) => {
     assertTrustedSender(event);
     await requireVault().deleteSnippet(readUuid(snippetId, "snippet ID"));
+  });
+
+  ipcMain.handle(IPC_CHANNELS.vaultSetFavorite, async (event, profileId: unknown, favorite: unknown) => {
+    assertTrustedSender(event);
+    if (typeof favorite !== "boolean") throw new Error("Invalid favorite state.");
+    const result = await requireVault().setFavorite(
+      readUuid(profileId, "server profile ID"),
+      favorite,
+    );
+    await refreshTrayMenu();
+    return result;
+  });
+
+  ipcMain.handle(IPC_CHANNELS.preferencesGet, (event) => {
+    assertTrustedSender(event);
+    return requirePreferences().get();
+  });
+
+  ipcMain.handle(IPC_CHANNELS.preferencesUpdate, async (event, preferences: unknown) => {
+    assertTrustedSender(event);
+    const normalized = normalizePreferences(preferences);
+    await applyProxyPreferences(normalized);
+    const saved = await requirePreferences().save(normalized);
+    resetAutoLockTimer();
+    return saved;
+  });
+
+  ipcMain.on(IPC_CHANNELS.preferencesActivity, (event) => {
+    if (isTrustedSender(event)) resetAutoLockTimer();
+  });
+
+  ipcMain.handle(IPC_CHANNELS.diagnosticsRun, async (event, profileId: unknown, kind: unknown) => {
+    assertTrustedSender(event);
+    const id = readUuid(profileId, "server profile ID");
+    const profile = requireVault().getConnectionProfile(id);
+    if (profile.protocol === "serial") {
+      throw new Error("Network diagnostics are unavailable for serial profiles.");
+    }
+    return runDiagnostic(
+      id,
+      readDiagnosticKind(kind),
+      resolveEnvironmentTokens(profile.host, "Diagnostic host") as string,
+      profile.port,
+    );
   });
 
   ipcMain.handle(IPC_CHANNELS.discoveryStart, (event, target: unknown) => {
@@ -1065,6 +1354,7 @@ function registerIpcHandlers(): void {
         warnings.push(`Skipped asset: ${error instanceof Error ? error.message : "invalid data"}`);
       }
     }
+    await refreshTrayMenu();
     return { imported, warnings, path: parsed.path };
   });
 
@@ -1166,17 +1456,21 @@ if (!hasSingleInstanceLock) {
   app.quit();
 } else {
   app.on("second-instance", () => {
-    if (mainWindow) {
-      if (mainWindow.isMinimized()) {
-        mainWindow.restore();
-      }
-      mainWindow.show();
-      mainWindow.focus();
-    }
+    showMainWindow();
   });
 
-  void app.whenReady().then(() => {
+  void app.whenReady().then(async () => {
     auditController.configure(join(app.getPath("userData"), "logs"));
+    preferencesController = new PreferencesController(
+      join(app.getPath("userData"), "cybergrid-preferences.json"),
+    );
+    await preferencesController.load().catch((error: unknown) => {
+      console.warn("CyberGrid preferences could not be loaded; using defaults:", error);
+      return DEFAULT_APP_PREFERENCES;
+    });
+    await applyProxyPreferences(preferencesController.get()).catch((error: unknown) => {
+      console.warn("CyberGrid proxy settings could not be applied:", error);
+    });
     vaultController = new VaultController(
       join(app.getPath("userData"), "cybergrid-vault.json"),
     );
@@ -1185,10 +1479,13 @@ if (!hasSingleInstanceLock) {
     migrationController = new MigrationController(() => mainWindow);
     registerIpcHandlers();
     mainWindow = createMainWindow();
+    createSystemTray();
 
     app.on("activate", () => {
       if (BrowserWindow.getAllWindows().length === 0) {
         mainWindow = createMainWindow();
+      } else {
+        showMainWindow();
       }
     });
   });
@@ -1197,15 +1494,8 @@ if (!hasSingleInstanceLock) {
 let flushingAuditLogs = false;
 
 app.on("before-quit", (event) => {
-  scannerController.cancelAll();
-  healthController.stop();
-  sshController.disconnectAll();
-  streamController.disconnectAll();
-  serialController.disconnectAll();
-  vncController.disconnectAll();
-  webController?.disconnectAll();
-  rdpController?.disconnectAll();
-  vaultController?.lock();
+  isQuitting = true;
+  lockApplication("Application is closing.", false);
   auditController.closeAll();
   if (!flushingAuditLogs) {
     flushingAuditLogs = true;
@@ -1215,16 +1505,12 @@ app.on("before-quit", (event) => {
 });
 
 app.on("window-all-closed", () => {
-  scannerController.cancelAll();
-  healthController.stop();
-  sshController.disconnectAll();
-  streamController.disconnectAll();
-  serialController.disconnectAll();
-  vncController.disconnectAll();
-  webController?.disconnectAll();
-  rdpController?.disconnectAll();
-  vaultController?.lock();
-  if (process.platform !== "darwin") {
+  if (process.platform !== "darwin" && !preferencesController?.get().minimizeToTray) {
     app.quit();
   }
+});
+
+app.on("will-quit", () => {
+  tray?.destroy();
+  tray = null;
 });

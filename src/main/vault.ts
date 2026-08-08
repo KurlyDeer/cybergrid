@@ -192,6 +192,13 @@ function parseProfile(value: unknown): DecryptedServerProfile {
   }
 
   const authType = parseAuthType(value.authType);
+  if (value.tags !== undefined && !Array.isArray(value.tags)) {
+    throw new Error("Vault profile tags are invalid.");
+  }
+  const tags = (value.tags ?? []).map((tag, index) =>
+    requireString(tag, `profile.tags[${index}]`),
+  );
+  if (tags.length > 20) throw new Error("Vault profile contains too many tags.");
   const profile: DecryptedServerProfile = {
     id: requireString(value.id, "profile.id"),
     name: requireString(value.name, "profile.name"),
@@ -201,6 +208,8 @@ function parseProfile(value: unknown): DecryptedServerProfile {
     group: requireString(value.group, "profile.group"),
     authType,
     protocol,
+    tags,
+    favorite: value.favorite === true,
     createdAt: requireString(value.createdAt, "profile.createdAt"),
     updatedAt: requireString(value.updatedAt, "profile.updatedAt"),
   };
@@ -438,6 +447,8 @@ function summarizeProfile(profile: DecryptedServerProfile): ServerProfileSummary
     dataBits: profile.dataBits,
     stopBits: profile.stopBits,
     parity: profile.parity,
+    tags: [...(profile.tags ?? [])],
+    favorite: profile.favorite ?? false,
   };
 }
 
@@ -461,6 +472,10 @@ export class VaultController {
       exists: await this.fileExists(),
       unlocked: this.isUnlocked(),
     };
+  }
+
+  isVaultUnlocked(): boolean {
+    return this.isUnlocked();
   }
 
   async create(masterPassword: string): Promise<void> {
@@ -589,7 +604,27 @@ export class VaultController {
       dataBits: profile.dataBits,
       stopBits: profile.stopBits,
       parity: profile.parity,
+      tags: [...(profile.tags ?? [])],
+      favorite: profile.favorite ?? false,
     }));
+  }
+
+  async setFavorite(profileId: string, favorite: boolean): Promise<ServerProfileSummary> {
+    const payload = this.requirePayload();
+    const profile = payload.profiles.find((candidate) => candidate.id === profileId);
+    if (!profile) throw new Error("Server profile was not found.");
+    const previousFavorite = profile.favorite ?? false;
+    const previousUpdatedAt = profile.updatedAt;
+    profile.favorite = favorite;
+    profile.updatedAt = new Date().toISOString();
+    try {
+      await this.persist();
+    } catch (error) {
+      profile.favorite = previousFavorite;
+      profile.updatedAt = previousUpdatedAt;
+      throw error;
+    }
+    return summarizeProfile(profile);
   }
 
   async deleteProfile(profileId: string): Promise<void> {
@@ -734,7 +769,7 @@ export class VaultController {
     if (!profile) {
       throw new Error("Server profile was not found.");
     }
-    return { ...profile };
+    return { ...profile, tags: [...(profile.tags ?? [])] };
   }
 
   private isUnlocked(): boolean {

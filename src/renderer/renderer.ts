@@ -6,11 +6,14 @@ type CyberGridApi = import("../shared/ipc").CyberGridApi;
 type ConnectionProtocol = import("../shared/ipc").ConnectionProtocol;
 type AssetInput = import("../shared/ipc").AssetInput;
 type AssetRecord = import("../shared/ipc").AssetRecord;
+type AppPreferences = import("../shared/ipc").AppPreferences;
 type DeviceIcon = import("../shared/ipc").DeviceIcon;
 type DiscoveredDevice = import("../shared/ipc").DiscoveredDevice;
 type DiscoveryCompleteEvent = import("../shared/ipc").DiscoveryCompleteEvent;
 type DiscoveryProgressEvent = import("../shared/ipc").DiscoveryProgressEvent;
 type DiscoveryResultEvent = import("../shared/ipc").DiscoveryResultEvent;
+type DiagnosticKind = import("../shared/ipc").DiagnosticKind;
+type DiagnosticResult = import("../shared/ipc").DiagnosticResult;
 type HealthStatusEvent = import("../shared/ipc").HealthStatusEvent;
 type MigrationFormat = import("../shared/ipc").MigrationFormat;
 type ProfileConnectionResult = import("../shared/ipc").ProfileConnectionResult;
@@ -89,18 +92,9 @@ interface WorkspaceTab {
   sftp?: SftpDirectoryListing;
 }
 
-interface UserSettings {
-  theme: "dark" | "monochrome" | "custom";
-  fontFamily: string;
-  fontSize: number;
-  cursorBlink: boolean;
-  background: string;
-  foreground: string;
-  cursor: string;
-  accent: string;
-}
-
-const DEFAULT_SETTINGS: UserSettings = {
+const DEFAULT_SETTINGS: AppPreferences = {
+  minimizeToTray: true,
+  autoLockMinutes: 15,
   theme: "dark",
   fontFamily: "Cascadia Mono, JetBrains Mono, Consolas, monospace",
   fontSize: 14,
@@ -109,6 +103,9 @@ const DEFAULT_SETTINGS: UserSettings = {
   foreground: "#d7e2ef",
   cursor: "#23d5ab",
   accent: "#23d5ab",
+  proxyMode: "system",
+  proxyUrl: "",
+  proxyBypassRules: "<local>",
 };
 const SETTINGS_KEY = "cybergrid:terminal-settings:v1";
 
@@ -129,6 +126,7 @@ const queuedSerialStatus = new Map<string, SerialStatusEvent>();
 const queuedVncStatus = new Map<string, VncStatusEvent>();
 const queuedWebStatus = new Map<string, WebStatusEvent>();
 const healthStatuses = new Map<string, HealthStatusEvent>();
+const diagnosticResults = new Map<string, DiagnosticResult | "running">();
 const collapsedGroups = new Set<string>();
 let savedProfiles: ServerProfileSummary[] = [];
 let savedAssets: AssetRecord[] = [];
@@ -142,8 +140,13 @@ let vaultMode: "create" | "unlock" = "unlock";
 let sftpDrawerOpen = false;
 let snippetsDrawerOpen = false;
 let broadcastMode = false;
+let layoutMode: "single" | "grid" = "single";
+let recentTerminalTabIds: string[] = [];
+let paletteSelectionIndex = 0;
+let paletteMatches: ServerProfileSummary[] = [];
+let vaultUnlocked = false;
 const excludedBroadcastGroups = new Set<string>();
-let currentSettings = loadSettings();
+let currentSettings: AppPreferences = { ...DEFAULT_SETTINGS };
 
 function elementById<T extends HTMLElement>(id: string): T {
   const element = document.getElementById(id);
@@ -173,6 +176,8 @@ const toggleSftpButton = elementById<HTMLButtonElement>("toggle-sftp-button");
 const toggleSnippetsButton = elementById<HTMLButtonElement>("toggle-snippets-button");
 const broadcastToggleButton = elementById<HTMLButtonElement>("broadcast-toggle-button");
 const broadcastTargetsButton = elementById<HTMLButtonElement>("broadcast-targets-button");
+const layoutButton = elementById<HTMLButtonElement>("layout-button");
+const commandPaletteButton = elementById<HTMLButtonElement>("command-palette-button");
 
 const sftpDrawer = elementById<HTMLElement>("sftp-drawer");
 const sftpCloseButton = elementById<HTMLButtonElement>("sftp-close-button");
@@ -228,6 +233,8 @@ const serverHostLabel = elementById<HTMLLabelElement>("server-host-label");
 const serverPortInput = elementById<HTMLInputElement>("server-port");
 const serverUsernameInput = elementById<HTMLInputElement>("server-username");
 const serverGroupInput = elementById<HTMLInputElement>("server-group");
+const serverTagsInput = elementById<HTMLInputElement>("server-tags");
+const serverFavoriteInput = elementById<HTMLInputElement>("server-favorite");
 const groupOptions = elementById<HTMLDataListElement>("group-options");
 const authTypeInput = elementById<HTMLSelectElement>("auth-type");
 const serverUsernameField = elementById<HTMLDivElement>("server-username-field");
@@ -284,6 +291,8 @@ const cancelAssetButton = elementById<HTMLButtonElement>("cancel-asset-button");
 
 const settingsModal = elementById<HTMLDialogElement>("settings-modal");
 const settingsForm = elementById<HTMLFormElement>("settings-form");
+const minimizeToTrayInput = elementById<HTMLInputElement>("minimize-to-tray");
+const autoLockInput = elementById<HTMLSelectElement>("auto-lock-minutes");
 const themeInput = elementById<HTMLSelectElement>("theme-mode");
 const fontFamilyInput = elementById<HTMLInputElement>("terminal-font-family");
 const fontSizeInput = elementById<HTMLInputElement>("terminal-font-size");
@@ -293,8 +302,20 @@ const foregroundInput = elementById<HTMLInputElement>("terminal-foreground");
 const cursorInput = elementById<HTMLInputElement>("terminal-cursor");
 const accentInput = elementById<HTMLInputElement>("ui-accent");
 const customPaletteFields = elementById<HTMLDivElement>("custom-palette-fields");
+const proxyModeInput = elementById<HTMLSelectElement>("proxy-mode");
+const proxyUrlInput = elementById<HTMLInputElement>("proxy-url");
+const proxyBypassInput = elementById<HTMLInputElement>("proxy-bypass-rules");
+const proxyManualFields = elementById<HTMLDivElement>("proxy-manual-fields");
+const settingsError = elementById<HTMLDivElement>("settings-error");
 const resetSettingsButton = elementById<HTMLButtonElement>("reset-settings-button");
 const cancelSettingsButton = elementById<HTMLButtonElement>("cancel-settings-button");
+
+const commandPalette = elementById<HTMLDialogElement>("command-palette");
+const commandPaletteInput = elementById<HTMLInputElement>("command-palette-input");
+const commandPaletteResults = elementById<HTMLDivElement>("command-palette-results");
+const commandPaletteStatus = elementById<HTMLDivElement>("command-palette-status");
+
+const serverContextMenu = elementById<HTMLDivElement>("server-context-menu");
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -304,7 +325,7 @@ function isHexColor(value: unknown): value is string {
   return typeof value === "string" && /^#[0-9a-f]{6}$/i.test(value);
 }
 
-function loadSettings(): UserSettings {
+function loadLegacySettings(): AppPreferences {
   try {
     const parsed = JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? "null") as unknown;
     if (!isRecord(parsed)) {
@@ -315,6 +336,7 @@ function loadSettings(): UserSettings {
       : "dark";
     const fontSize = Number(parsed.fontSize);
     return {
+      ...DEFAULT_SETTINGS,
       theme,
       fontFamily:
         typeof parsed.fontFamily === "string" && parsed.fontFamily.trim().length > 0
@@ -338,7 +360,7 @@ function loadSettings(): UserSettings {
   }
 }
 
-function terminalTheme(settings: UserSettings): ITheme {
+function terminalTheme(settings: AppPreferences): ITheme {
   if (settings.theme === "monochrome") {
     return {
       background: "#000000",
@@ -393,7 +415,7 @@ function terminalTheme(settings: UserSettings): ITheme {
   };
 }
 
-function applySettings(settings: UserSettings, persist: boolean): void {
+function applySettings(settings: AppPreferences): void {
   currentSettings = settings;
   document.documentElement.dataset.theme = settings.theme;
   document.documentElement.style.setProperty(
@@ -409,9 +431,6 @@ function applySettings(settings: UserSettings, persist: boolean): void {
       tab.fitAddon?.fit();
     }
   }
-  if (persist) {
-    localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
-  }
 }
 
 function errorMessage(error: unknown): string {
@@ -419,6 +438,112 @@ function errorMessage(error: unknown): string {
   return raw
     .replace(/^Error invoking remote method '[^']+':\s*/i, "")
     .replace(/^Error:\s*/i, "");
+}
+
+function fuzzyFieldScore(needle: string, value: string): number | null {
+  const haystack = value.toLocaleLowerCase();
+  if (haystack === needle) return 1_000;
+  if (haystack.startsWith(needle)) return 800 - haystack.length;
+  const substring = haystack.indexOf(needle);
+  if (substring >= 0) return 600 - substring - haystack.length * 0.01;
+  let cursor = 0;
+  let gapPenalty = 0;
+  for (const character of needle) {
+    const match = haystack.indexOf(character, cursor);
+    if (match < 0) return null;
+    gapPenalty += match - cursor;
+    cursor = match + 1;
+  }
+  return 300 - gapPenalty - haystack.length * 0.01;
+}
+
+function paletteScore(profile: ServerProfileSummary, query: string): number | null {
+  const tokens = query.toLocaleLowerCase().split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return profile.favorite ? 100 : 0;
+  const fields = [
+    profile.name,
+    profile.host,
+    profile.username,
+    profile.group,
+    profile.protocol,
+    ...profile.tags,
+  ];
+  let total = profile.favorite ? 25 : 0;
+  for (const token of tokens) {
+    const scores = fields.map((field) => fuzzyFieldScore(token, field)).filter(
+      (score): score is number => score !== null,
+    );
+    if (scores.length === 0) return null;
+    total += Math.max(...scores);
+  }
+  return total;
+}
+
+function selectPaletteIndex(index: number): void {
+  if (paletteMatches.length === 0) {
+    paletteSelectionIndex = 0;
+    return;
+  }
+  paletteSelectionIndex = (index + paletteMatches.length) % paletteMatches.length;
+  const options = [...commandPaletteResults.querySelectorAll<HTMLButtonElement>(".palette-result")];
+  options.forEach((option, optionIndex) => {
+    const selected = optionIndex === paletteSelectionIndex;
+    option.classList.toggle("selected", selected);
+    option.setAttribute("aria-selected", String(selected));
+    if (selected) option.scrollIntoView({ block: "nearest" });
+  });
+}
+
+async function runPaletteSelection(): Promise<void> {
+  const profile = paletteMatches[paletteSelectionIndex];
+  if (!profile) return;
+  commandPalette.close();
+  await connectSavedProfile(profile);
+}
+
+function renderCommandPalette(): void {
+  const query = commandPaletteInput.value.trim();
+  paletteMatches = savedProfiles
+    .map((profile) => ({ profile, score: paletteScore(profile, query) }))
+    .filter((candidate): candidate is { profile: ServerProfileSummary; score: number } =>
+      candidate.score !== null,
+    )
+    .sort((left, right) => right.score - left.score || left.profile.name.localeCompare(right.profile.name))
+    .slice(0, 30)
+    .map((candidate) => candidate.profile);
+  paletteSelectionIndex = Math.min(paletteSelectionIndex, Math.max(0, paletteMatches.length - 1));
+  commandPaletteResults.replaceChildren();
+  for (const [index, profile] of paletteMatches.entries()) {
+    const button = document.createElement("button");
+    button.className = "palette-result";
+    button.type = "button";
+    button.role = "option";
+    button.append(
+      createTextElement("span", "palette-protocol", profile.protocol.toUpperCase()),
+      createTextElement("span", "palette-name", `${profile.favorite ? "★ " : ""}${profile.name}`),
+      createTextElement("span", "palette-endpoint", `${profile.host}:${profile.port}`),
+      createTextElement("span", "palette-group", profile.group),
+    );
+    button.addEventListener("pointerenter", () => selectPaletteIndex(index));
+    button.addEventListener("click", () => {
+      paletteSelectionIndex = index;
+      void runPaletteSelection();
+    });
+    commandPaletteResults.append(button);
+  }
+  commandPaletteStatus.textContent = paletteMatches.length === 0
+    ? "No matching saved servers"
+    : `${paletteMatches.length} result${paletteMatches.length === 1 ? "" : "s"} · Enter to connect`;
+  selectPaletteIndex(paletteSelectionIndex);
+}
+
+function openCommandPalette(): void {
+  if (!vaultUnlocked) return;
+  commandPaletteInput.value = "";
+  paletteSelectionIndex = 0;
+  renderCommandPalette();
+  if (!commandPalette.open) commandPalette.showModal();
+  requestAnimationFrame(() => commandPaletteInput.focus());
 }
 
 const PROTOCOL_LABELS: Record<WorkspaceTabKind, string> = {
@@ -473,6 +598,9 @@ function createWorkspaceTab(
     status: "idle",
   };
   tabs.set(id, tab);
+  paneElement.addEventListener("pointerdown", () => {
+    if (layoutMode === "grid" && activeTabId !== id) activateTab(id);
+  });
   tabElement.addEventListener("click", (event) => {
     if ((event.target as HTMLElement).closest(".tab-close")) void closeTab(id);
     else activateTab(id);
@@ -486,6 +614,7 @@ function createTerminalTab(
   kind: "ssh" | "telnet" | "raw" | "serial" | "welcome" = "ssh",
   context?: Partial<SessionVariableContext>,
 ): WorkspaceTab {
+  const requestedLayout = layoutMode;
   const tab = createWorkspaceTab(kind, label, context);
   tab.paneElement.classList.add("terminal-pane");
   const terminal = new Terminal({
@@ -513,6 +642,9 @@ function createTerminalTab(
   terminal.onResize(({ cols, rows }) => {
     if (tab.kind === "ssh" && tab.sessionId) window.cybergrid.ssh.resize(tab.sessionId, cols, rows);
   });
+  layoutMode = requestedLayout;
+  rememberTerminalTab(tab);
+  renderWorkspaceLayout();
   return tab;
 }
 
@@ -607,22 +739,63 @@ function updateWebBounds(tab: WorkspaceTab): void {
   });
 }
 
+function terminalTabsForGrid(): WorkspaceTab[] {
+  const ordered = recentTerminalTabIds
+    .map((id) => tabs.get(id))
+    .filter((tab): tab is WorkspaceTab => Boolean(tab?.terminal && tab.kind !== "welcome"));
+  return ordered.slice(0, 4);
+}
+
+function rememberTerminalTab(tab: WorkspaceTab): void {
+  if (!tab.terminal || tab.kind === "welcome") return;
+  recentTerminalTabIds = [tab.id, ...recentTerminalTabIds.filter((id) => id !== tab.id)];
+}
+
+function updateLayoutControls(): void {
+  const count = terminalTabsForGrid().length;
+  if (count < 2) layoutMode = "single";
+  layoutButton.disabled = count < 2;
+  layoutButton.classList.toggle("active", layoutMode === "grid");
+  layoutButton.setAttribute("aria-pressed", String(layoutMode === "grid"));
+  layoutButton.textContent = layoutMode === "grid" ? `Grid (${Math.min(4, count)})` : "Grid 2x2";
+}
+
+function renderWorkspaceLayout(): void {
+  const active = activeTabId ? tabs.get(activeTabId) : undefined;
+  if (layoutMode === "grid" && !active?.terminal) layoutMode = "single";
+  updateLayoutControls();
+  const gridIds = new Set(layoutMode === "grid" ? terminalTabsForGrid().map((tab) => tab.id) : []);
+  terminalStack.classList.toggle("tiled-layout", layoutMode === "grid");
+  for (const candidate of tabs.values()) {
+    const isActive = candidate.id === activeTabId;
+    const isVisible = layoutMode === "grid" ? gridIds.has(candidate.id) : isActive;
+    candidate.tabElement.classList.toggle("active", isActive);
+    candidate.tabElement.setAttribute("aria-selected", String(isActive));
+    candidate.paneElement.classList.toggle("active", isVisible);
+    candidate.paneElement.classList.toggle("tiled-pane", layoutMode === "grid" && isVisible);
+    candidate.paneElement.classList.toggle("primary-pane", layoutMode === "grid" && isActive);
+    if (candidate.webSessionId) {
+      window.cybergrid.web.setVisible(candidate.webSessionId, layoutMode === "single" && isActive);
+    }
+  }
+  requestAnimationFrame(() => {
+    for (const candidate of tabs.values()) {
+      if (candidate.paneElement.classList.contains("active")) candidate.fitAddon?.fit();
+    }
+    if (active) updateWebBounds(active);
+  });
+}
+
 function activateTab(id: string): void {
   const tab = tabs.get(id);
   if (!tab) return;
   activeTabId = id;
-  for (const candidate of tabs.values()) {
-    const isActive = candidate.id === id;
-    candidate.tabElement.classList.toggle("active", isActive);
-    candidate.tabElement.setAttribute("aria-selected", String(isActive));
-    candidate.paneElement.classList.toggle("active", isActive);
-    if (candidate.webSessionId) window.cybergrid.web.setVisible(candidate.webSessionId, isActive);
-  }
+  rememberTerminalTab(tab);
+  renderWorkspaceLayout();
   updateConnectionState(tab);
   updateSftpAvailability();
   updateBroadcastControls();
   requestAnimationFrame(() => {
-    tab.fitAddon?.fit();
     tab.terminal?.focus();
     tab.vncClient?.focus();
     updateWebBounds(tab);
@@ -639,6 +812,7 @@ async function closeTab(id: string): Promise<void> {
   const tabOrder = [...tabs.keys()];
   const closedIndex = tabOrder.indexOf(id);
   tabs.delete(id);
+  recentTerminalTabIds = recentTerminalTabIds.filter((tabId) => tabId !== id);
   if (tab.sessionId) {
     sshSessions.delete(tab.sessionId);
     await window.cybergrid.ssh.disconnect(tab.sessionId).catch(() => undefined);
@@ -688,6 +862,7 @@ async function closeTab(id: string): Promise<void> {
     }
   }
   updateBroadcastControls();
+  renderWorkspaceLayout();
 }
 
 function updateTabStatus(tab: WorkspaceTab, status: WorkspaceStatus, message?: string): void {
@@ -1267,6 +1442,97 @@ async function configureHealthMonitor(): Promise<void> {
   })));
 }
 
+function closeServerContextMenu(): void {
+  serverContextMenu.hidden = true;
+  serverContextMenu.replaceChildren();
+}
+
+async function executeProfileDiagnostic(profile: ServerProfileSummary, kind: DiagnosticKind): Promise<void> {
+  diagnosticResults.set(profile.id, "running");
+  closeServerContextMenu();
+  renderProfiles();
+  try {
+    diagnosticResults.set(profile.id, await window.cybergrid.diagnostics.run(profile.id, kind));
+  } catch (error) {
+    diagnosticResults.set(profile.id, {
+      profileId: profile.id,
+      kind,
+      success: false,
+      summary: `${kind} failed`,
+      output: errorMessage(error),
+      durationMs: 0,
+      checkedAt: new Date().toISOString(),
+    });
+  }
+  renderProfiles();
+}
+
+function openServerContextMenu(event: MouseEvent, profile: ServerProfileSummary): void {
+  event.preventDefault();
+  event.stopPropagation();
+  serverContextMenu.replaceChildren();
+  const addAction = (label: string, action: () => void, disabled = false): void => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = label;
+    button.disabled = disabled;
+    button.addEventListener("click", action);
+    serverContextMenu.append(button);
+  };
+  addAction("Open connection", () => {
+    closeServerContextMenu();
+    void connectSavedProfile(profile);
+  });
+  addAction(profile.favorite ? "Remove from favorites" : "Add to favorites", () => {
+    closeServerContextMenu();
+    void window.cybergrid.vault.setFavorite(profile.id, !profile.favorite)
+      .then(refreshProfiles)
+      .catch((error: unknown) => window.alert(errorMessage(error)));
+  });
+  const separator = document.createElement("div");
+  separator.className = "context-separator";
+  serverContextMenu.append(separator);
+  const serial = profile.protocol === "serial";
+  addAction("Ping test", () => void executeProfileDiagnostic(profile, "ping"), serial);
+  addAction("Traceroute", () => void executeProfileDiagnostic(profile, "traceroute"), serial);
+  addAction("DNS lookup", () => void executeProfileDiagnostic(profile, "dns"), serial);
+  addAction(`Port check (${profile.port})`, () => void executeProfileDiagnostic(profile, "port"), serial);
+  serverContextMenu.hidden = false;
+  const width = 220;
+  const height = 258;
+  serverContextMenu.style.left = `${Math.max(8, Math.min(event.clientX, window.innerWidth - width - 8))}px`;
+  serverContextMenu.style.top = `${Math.max(8, Math.min(event.clientY, window.innerHeight - height - 8))}px`;
+  serverContextMenu.querySelector<HTMLButtonElement>("button")?.focus();
+}
+
+function diagnosticElement(profileId: string): HTMLElement | undefined {
+  const diagnostic = diagnosticResults.get(profileId);
+  if (!diagnostic) return undefined;
+  const panel = document.createElement("section");
+  panel.className = "diagnostic-inline";
+  if (diagnostic === "running") {
+    panel.append(createTextElement("div", "diagnostic-summary", "Running remote diagnostic..."));
+    return panel;
+  }
+  panel.classList.toggle("success", diagnostic.success);
+  panel.classList.toggle("error", !diagnostic.success);
+  const header = createTextElement("div", "diagnostic-header", "");
+  header.append(createTextElement("span", "diagnostic-summary", diagnostic.summary));
+  const closeButton = document.createElement("button");
+  closeButton.type = "button";
+  closeButton.textContent = "×";
+  closeButton.title = "Dismiss diagnostic result";
+  closeButton.addEventListener("click", () => {
+    diagnosticResults.delete(profileId);
+    renderProfiles();
+  });
+  header.append(closeButton);
+  const output = document.createElement("pre");
+  output.textContent = diagnostic.output;
+  panel.append(header, output);
+  return panel;
+}
+
 function renderProfiles(): void {
   profileTree.replaceChildren();
   groupOptions.replaceChildren();
@@ -1330,8 +1596,12 @@ function renderProfiles(): void {
         ? `${profile.host} / ${profile.baudRate ?? 9_600} baud`
         : `${profile.protocol.toUpperCase()}  ${profile.username ? `${profile.username}@` : ""}${profile.host}:${profile.port}`;
       meta.append(
-        createTextElement("span", "server-name", profile.name),
-        createTextElement("span", "server-host", endpoint),
+        createTextElement("span", "server-name", `${profile.favorite ? "★ " : ""}${profile.name}`),
+        createTextElement(
+          "span",
+          "server-host",
+          `${endpoint}${profile.tags.length > 0 ? `  ·  ${profile.tags.join(", ")}` : ""}`,
+        ),
       );
       const healthDot = createTextElement("span", "server-dot", "");
       healthDot.dataset.healthId = profile.id;
@@ -1339,6 +1609,7 @@ function renderProfiles(): void {
       serverButton.append(healthDot, meta);
       serverButton.addEventListener("click", () => populateQuickConnect(profile));
       serverButton.addEventListener("dblclick", () => void connectSavedProfile(profile));
+      serverButton.addEventListener("contextmenu", (event) => openServerContextMenu(event, profile));
 
       const deleteButton = document.createElement("button");
       deleteButton.className = "server-delete";
@@ -1360,6 +1631,8 @@ function renderProfiles(): void {
 
       row.append(serverButton, deleteButton);
       list.append(row);
+      const diagnostic = diagnosticElement(profile.id);
+      if (diagnostic) list.append(diagnostic);
     }
 
     section.append(folderButton, list);
@@ -1683,6 +1956,7 @@ function handleSftpProgress(event: SftpProgressEvent): void {
 }
 
 function setVaultPrompt(shouldExist: boolean): void {
+  vaultUnlocked = false;
   vaultMode = shouldExist ? "unlock" : "create";
   vaultTitle.textContent = shouldExist ? "Unlock CyberGrid" : "Create your credential vault";
   vaultSubtitle.textContent = shouldExist
@@ -1703,6 +1977,37 @@ function hideVaultPrompt(): void {
   vaultError.textContent = "";
   vaultOverlay.hidden = true;
   appShell.inert = false;
+  vaultUnlocked = true;
+}
+
+function applyLockedRendererState(reason?: string): void {
+  if (serverModal.open) serverModal.close();
+  if (settingsModal.open) settingsModal.close();
+  if (scanModal.open) scanModal.close();
+  if (assetModal.open) assetModal.close();
+  if (migrationModal.open) migrationModal.close();
+  if (broadcastTargetsModal.open) broadcastTargetsModal.close();
+  if (commandPalette.open) commandPalette.close();
+  closeServerContextMenu();
+  setSftpDrawerOpen(false);
+  setSnippetsDrawerOpen(false);
+  broadcastMode = false;
+  layoutMode = "single";
+  activeScanId = null;
+  setScanRunning(false);
+  scanDevices.clear();
+  savedProfiles = [];
+  savedAssets = [];
+  savedSnippets = [];
+  healthStatuses.clear();
+  diagnosticResults.clear();
+  renderProfiles();
+  renderAssets();
+  renderSnippets();
+  renderWorkspaceLayout();
+  updateBroadcastControls();
+  setVaultPrompt(true);
+  if (reason) vaultError.textContent = reason;
 }
 
 async function initializeVault(): Promise<void> {
@@ -1778,7 +2083,23 @@ function openServerModal(): void {
   requestAnimationFrame(() => serverNameInput.focus());
 }
 
-function populateSettingsForm(settings: UserSettings): void {
+function updateProxyFields(): void {
+  proxyManualFields.hidden = proxyModeInput.value !== "manual";
+  proxyUrlInput.required = proxyModeInput.value === "manual";
+}
+
+function selectSettingsPanel(panel: string): void {
+  for (const button of settingsModal.querySelectorAll<HTMLButtonElement>("[data-settings-tab]")) {
+    button.classList.toggle("active", button.dataset.settingsTab === panel);
+  }
+  for (const section of settingsModal.querySelectorAll<HTMLElement>("[data-settings-panel]")) {
+    section.hidden = section.dataset.settingsPanel !== panel;
+  }
+}
+
+function populateSettingsForm(settings: AppPreferences): void {
+  minimizeToTrayInput.checked = settings.minimizeToTray;
+  autoLockInput.value = String(settings.autoLockMinutes);
   themeInput.value = settings.theme;
   fontFamilyInput.value = settings.fontFamily;
   fontSizeInput.value = String(settings.fontSize);
@@ -1787,11 +2108,17 @@ function populateSettingsForm(settings: UserSettings): void {
   foregroundInput.value = settings.foreground;
   cursorInput.value = settings.cursor;
   accentInput.value = settings.accent;
+  proxyModeInput.value = settings.proxyMode;
+  proxyUrlInput.value = settings.proxyUrl;
+  proxyBypassInput.value = settings.proxyBypassRules;
   customPaletteFields.hidden = settings.theme !== "custom";
+  settingsError.textContent = "";
+  updateProxyFields();
 }
 
 function openSettingsModal(): void {
   populateSettingsForm(currentSettings);
+  selectSettingsPanel("general");
   if (!settingsModal.open) {
     settingsModal.showModal();
   }
@@ -2139,40 +2466,8 @@ assetModal.addEventListener("click", (event) => {
 
 lockButton.addEventListener("click", async () => {
   try {
-    if (serverModal.open) {
-      serverModal.close();
-    }
-    if (settingsModal.open) {
-      settingsModal.close();
-    }
-    if (scanModal.open) {
-      scanModal.close();
-    }
-    if (assetModal.open) {
-      assetModal.close();
-    }
-    if (migrationModal.open) {
-      migrationModal.close();
-    }
-    if (broadcastTargetsModal.open) {
-      broadcastTargetsModal.close();
-    }
-    setSftpDrawerOpen(false);
-    setSnippetsDrawerOpen(false);
-    broadcastMode = false;
     await window.cybergrid.vault.lock();
-    activeScanId = null;
-    setScanRunning(false);
-    scanDevices.clear();
-    savedProfiles = [];
-    savedAssets = [];
-    savedSnippets = [];
-    healthStatuses.clear();
-    renderProfiles();
-    renderAssets();
-    renderSnippets();
-    updateBroadcastControls();
-    setVaultPrompt(true);
+    applyLockedRendererState();
   } catch (error) {
     window.alert(errorMessage(error));
   }
@@ -2212,6 +2507,8 @@ serverForm.addEventListener("submit", async (event) => {
     dataBits: protocol === "serial" ? Number(serverDataBitsInput.value) as 5 | 6 | 7 | 8 : undefined,
     stopBits: protocol === "serial" ? Number(serverStopBitsInput.value) as 1 | 2 : undefined,
     parity: protocol === "serial" ? serverParityInput.value as ServerProfileInput["parity"] : undefined,
+    tags: [...new Set(serverTagsInput.value.split(",").map((tag) => tag.trim()).filter(Boolean))],
+    favorite: serverFavoriteInput.checked,
   };
 
   try {
@@ -2226,9 +2523,13 @@ serverForm.addEventListener("submit", async (event) => {
 });
 
 settingsButton.addEventListener("click", openSettingsModal);
+for (const button of settingsModal.querySelectorAll<HTMLButtonElement>("[data-settings-tab]")) {
+  button.addEventListener("click", () => selectSettingsPanel(button.dataset.settingsTab ?? "general"));
+}
 themeInput.addEventListener("change", () => {
   customPaletteFields.hidden = themeInput.value !== "custom";
 });
+proxyModeInput.addEventListener("change", updateProxyFields);
 cancelSettingsButton.addEventListener("click", () => settingsModal.close());
 resetSettingsButton.addEventListener("click", () => populateSettingsForm(DEFAULT_SETTINGS));
 settingsModal.addEventListener("click", (event) => {
@@ -2236,10 +2537,13 @@ settingsModal.addEventListener("click", (event) => {
     settingsModal.close();
   }
 });
-settingsForm.addEventListener("submit", (event) => {
+settingsForm.addEventListener("submit", async (event) => {
   event.preventDefault();
-  const settings: UserSettings = {
-    theme: themeInput.value as UserSettings["theme"],
+  settingsError.textContent = "";
+  const settings: AppPreferences = {
+    minimizeToTray: minimizeToTrayInput.checked,
+    autoLockMinutes: Number(autoLockInput.value),
+    theme: themeInput.value as AppPreferences["theme"],
     fontFamily: fontFamilyInput.value.trim() || DEFAULT_SETTINGS.fontFamily,
     fontSize: Math.min(28, Math.max(10, Math.round(Number(fontSizeInput.value)))),
     cursorBlink: cursorBlinkInput.checked,
@@ -2247,10 +2551,61 @@ settingsForm.addEventListener("submit", (event) => {
     foreground: foregroundInput.value,
     cursor: cursorInput.value,
     accent: accentInput.value,
+    proxyMode: proxyModeInput.value as AppPreferences["proxyMode"],
+    proxyUrl: proxyUrlInput.value.trim(),
+    proxyBypassRules: proxyBypassInput.value.trim(),
   };
-  applySettings(settings, true);
-  settingsModal.close();
+  try {
+    currentSettings = await window.cybergrid.preferences.update(settings);
+    applySettings(currentSettings);
+    settingsModal.close();
+  } catch (error) {
+    settingsError.textContent = errorMessage(error);
+  }
 });
+
+layoutButton.addEventListener("click", () => {
+  layoutMode = layoutMode === "grid" ? "single" : "grid";
+  renderWorkspaceLayout();
+  tabs.get(activeTabId ?? "")?.terminal?.focus();
+});
+
+commandPaletteButton.addEventListener("click", openCommandPalette);
+commandPaletteInput.addEventListener("input", () => {
+  paletteSelectionIndex = 0;
+  renderCommandPalette();
+});
+commandPaletteInput.addEventListener("keydown", (event) => {
+  if (event.key === "ArrowDown") {
+    event.preventDefault();
+    selectPaletteIndex(paletteSelectionIndex + 1);
+  } else if (event.key === "ArrowUp") {
+    event.preventDefault();
+    selectPaletteIndex(paletteSelectionIndex - 1);
+  } else if (event.key === "Enter") {
+    event.preventDefault();
+    void runPaletteSelection();
+  }
+});
+commandPalette.addEventListener("click", (event) => {
+  if (event.target === commandPalette) commandPalette.close();
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.ctrlKey && !event.altKey && !event.shiftKey && event.key.toLocaleLowerCase() === "k") {
+    event.preventDefault();
+    if (commandPalette.open) commandPalette.close();
+    else openCommandPalette();
+  } else if (event.key === "Escape") {
+    closeServerContextMenu();
+  }
+});
+document.addEventListener("pointerdown", (event) => {
+  if (!serverContextMenu.hidden && !serverContextMenu.contains(event.target as Node)) {
+    closeServerContextMenu();
+  }
+});
+window.addEventListener("blur", closeServerContextMenu);
 
 window.cybergrid.ssh.onData(handleSshData);
 window.cybergrid.ssh.onStatus(handleSshStatus);
@@ -2266,21 +2621,75 @@ window.cybergrid.health.onStatus(handleHealthStatus);
 window.cybergrid.discovery.onProgress(handleDiscoveryProgress);
 window.cybergrid.discovery.onResult(handleDiscoveryResult);
 window.cybergrid.discovery.onComplete(handleDiscoveryComplete);
+window.cybergrid.system.onVaultLocked((reason) => applyLockedRendererState(reason));
+window.cybergrid.system.onTrayQuickConnect((profileId) => {
+  if (!vaultUnlocked) return;
+  const connect = async (): Promise<void> => {
+    let profile = savedProfiles.find((candidate) => candidate.id === profileId);
+    if (!profile) {
+      await refreshVaultContent();
+      profile = savedProfiles.find((candidate) => candidate.id === profileId);
+    }
+    if (profile) await connectSavedProfile(profile);
+  };
+  void connect().catch((error: unknown) => {
+    connectionState.textContent = errorMessage(error);
+  });
+});
+
+let lastActivityNotification = 0;
+const notifyActivity = (): void => {
+  if (!vaultUnlocked) return;
+  const now = Date.now();
+  if (now - lastActivityNotification < 15_000) return;
+  lastActivityNotification = now;
+  window.cybergrid.preferences.activity();
+};
+document.addEventListener("keydown", notifyActivity, { capture: true });
+document.addEventListener("pointerdown", notifyActivity, { capture: true });
+document.addEventListener("wheel", notifyActivity, { capture: true, passive: true });
 
 const resizeObserver = new ResizeObserver(() => {
-  if (activeTabId) {
-    const tab = tabs.get(activeTabId);
-    tab?.fitAddon?.fit();
-    if (tab) updateWebBounds(tab);
+  for (const tab of tabs.values()) {
+    if (tab.paneElement.classList.contains("active")) tab.fitAddon?.fit();
   }
+  const tab = activeTabId ? tabs.get(activeTabId) : undefined;
+  if (tab) updateWebBounds(tab);
 });
 resizeObserver.observe(terminalStack);
 
-applySettings(currentSettings, false);
-const welcomeTab = createTerminalTab("Welcome", "welcome");
-welcomeTab.terminal?.writeln("\x1b[36mCyberGrid\x1b[0m");
-welcomeTab.terminal?.writeln("SSH, SFTP, RDP, VNC, Telnet, RAW TCP, serial, and web management in one workspace.\r\n");
-welcomeTab.terminal?.writeln("Quick Connect examples: ssh://user@host:22, vnc://host:5900, serial://COM3?baud=9600");
-welcomeTab.terminal?.writeln("Import team vaults and legacy connection trees, or scan a private IPv4 subnet from the sidebar.");
-updateSftpAvailability();
-void initializeVault();
+async function initializeApplication(): Promise<void> {
+  try {
+    let preferences = await window.cybergrid.preferences.get();
+    if (localStorage.getItem(SETTINGS_KEY)) {
+      const legacy = loadLegacySettings();
+      preferences = await window.cybergrid.preferences.update({
+        ...preferences,
+        theme: legacy.theme,
+        fontFamily: legacy.fontFamily,
+        fontSize: legacy.fontSize,
+        cursorBlink: legacy.cursorBlink,
+        background: legacy.background,
+        foreground: legacy.foreground,
+        cursor: legacy.cursor,
+        accent: legacy.accent,
+      });
+      localStorage.removeItem(SETTINGS_KEY);
+    }
+    currentSettings = preferences;
+  } catch (error) {
+    console.warn("CyberGrid preferences could not be loaded:", error);
+    currentSettings = { ...DEFAULT_SETTINGS };
+  }
+  applySettings(currentSettings);
+  const welcomeTab = createTerminalTab("Welcome", "welcome");
+  welcomeTab.terminal?.writeln("\x1b[36mCyberGrid\x1b[0m");
+  welcomeTab.terminal?.writeln("SSH, SFTP, RDP, VNC, Telnet, RAW TCP, serial, and web management in one workspace.\r\n");
+  welcomeTab.terminal?.writeln("Press Ctrl+K to search saved servers. Use Grid 2x2 to tile up to four terminal sessions.");
+  welcomeTab.terminal?.writeln("Right-click a saved server for ping, traceroute, DNS, port checks, and tray favorites.");
+  updateSftpAvailability();
+  updateLayoutControls();
+  await initializeVault();
+}
+
+void initializeApplication();
