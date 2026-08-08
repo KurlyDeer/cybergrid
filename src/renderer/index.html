@@ -120,6 +120,11 @@
         padding: 14px 14px 8px 18px;
       }
 
+      .sidebar-toolbar-actions {
+        display: flex;
+        gap: 7px;
+      }
+
       .sidebar-toolbar h1 {
         margin: 0;
         color: var(--muted);
@@ -156,9 +161,13 @@
       }
 
       .server-tree {
+        padding: 8px 10px 18px;
+      }
+
+      .sidebar-scroll {
+        min-height: 0;
         flex: 1;
         overflow: auto;
-        padding: 8px 10px 18px;
       }
 
       .sidebar-empty,
@@ -291,6 +300,73 @@
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
+      }
+
+      .asset-inventory {
+        border-top: 1px solid var(--border);
+        padding-bottom: 14px;
+      }
+
+      .asset-heading {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 15px 18px 7px;
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 800;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+
+      .asset-count {
+        min-width: 22px;
+        padding: 2px 6px;
+        border-radius: 999px;
+        background: var(--panel-raised);
+        text-align: center;
+      }
+
+      .asset-list {
+        display: grid;
+        gap: 3px;
+        padding: 3px 10px;
+      }
+
+      .asset-item {
+        display: grid;
+        width: 100%;
+        grid-template-columns: 35px minmax(0, 1fr);
+        gap: 9px;
+        align-items: center;
+        padding: 8px;
+        border: 1px solid transparent;
+        border-radius: 8px;
+        background: transparent;
+        cursor: pointer;
+        text-align: left;
+      }
+
+      .asset-item:hover,
+      .asset-item:focus-visible {
+        border-color: var(--border);
+        background: var(--panel-raised);
+        outline: none;
+      }
+
+      .device-icon {
+        display: grid;
+        width: 35px;
+        height: 30px;
+        place-items: center;
+        border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--border));
+        border-radius: 7px;
+        background: var(--accent-soft);
+        color: var(--accent);
+        font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+        font-size: 9px;
+        font-weight: 900;
+        letter-spacing: 0.04em;
       }
 
       .server-name {
@@ -790,6 +866,10 @@
         box-shadow: 0 24px 80px rgba(0, 0, 0, 0.6);
       }
 
+      dialog.wide-dialog {
+        width: min(1000px, calc(100vw - 48px));
+      }
+
       dialog::backdrop {
         background: rgba(3, 7, 12, 0.76);
         backdrop-filter: blur(3px);
@@ -816,6 +896,149 @@
         grid-template-columns: 1fr 1fr;
         gap: 14px;
         padding: 20px 22px;
+      }
+
+      .scan-body {
+        display: grid;
+        gap: 14px;
+        padding: 18px 22px;
+      }
+
+      .scan-controls {
+        display: grid;
+        grid-template-columns: minmax(260px, 1fr) auto auto;
+        gap: 9px;
+        align-items: end;
+      }
+
+      .scan-progress-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 12px;
+        align-items: center;
+        color: var(--muted);
+        font-size: 11px;
+      }
+
+      .scan-progress-row progress {
+        width: 100%;
+        height: 7px;
+        accent-color: var(--accent);
+      }
+
+      .scan-results-panel {
+        min-height: 260px;
+        max-height: min(430px, 48vh);
+        overflow: auto;
+        border: 1px solid var(--border);
+        border-radius: 9px;
+        background: color-mix(in srgb, var(--background) 65%, transparent);
+      }
+
+      .scan-columns,
+      .scan-result-row {
+        display: grid;
+        grid-template-columns: 44px minmax(150px, 1.1fr) minmax(125px, 0.8fr) minmax(175px, 1.2fr) 88px;
+        gap: 10px;
+        align-items: center;
+      }
+
+      .scan-columns {
+        position: sticky;
+        z-index: 1;
+        top: 0;
+        padding: 8px 11px;
+        border-bottom: 1px solid var(--border);
+        background: var(--panel-raised);
+        color: var(--muted);
+        font-size: 9px;
+        font-weight: 800;
+        letter-spacing: 0.07em;
+        text-transform: uppercase;
+      }
+
+      .scan-result-row {
+        padding: 9px 11px;
+        border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+        font-size: 11px;
+      }
+
+      .scan-result-row:last-child {
+        border-bottom: 0;
+      }
+
+      .scan-primary,
+      .scan-secondary {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .scan-primary {
+        font-weight: 750;
+      }
+
+      .scan-secondary {
+        margin-top: 3px;
+        color: var(--muted);
+        font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+        font-size: 10px;
+      }
+
+      .compact-button {
+        min-height: 28px;
+        padding: 0 8px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        background: var(--panel-raised);
+        cursor: pointer;
+        font-size: 10px;
+        font-weight: 750;
+      }
+
+      .compact-button:hover:not(:disabled) {
+        border-color: var(--accent);
+      }
+
+      .compact-button:disabled {
+        cursor: default;
+        opacity: 0.55;
+      }
+
+      .fingerprint-summary {
+        grid-column: 1 / -1;
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 1px;
+        overflow: hidden;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: var(--border);
+      }
+
+      .fingerprint-cell {
+        min-width: 0;
+        padding: 9px 10px;
+        background: var(--panel-raised);
+      }
+
+      .fingerprint-label {
+        display: block;
+        margin-bottom: 4px;
+        color: var(--muted);
+        font-size: 9px;
+        font-weight: 800;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+
+      .fingerprint-value {
+        display: block;
+        overflow: hidden;
+        font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+        font-size: 11px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
       }
 
       .field {
@@ -965,6 +1188,15 @@
         .connection-state {
           display: none;
         }
+
+        .scan-columns,
+        .scan-result-row {
+          grid-template-columns: 40px minmax(140px, 1fr) minmax(150px, 1fr) 80px;
+        }
+
+        .scan-vendor-column {
+          display: none;
+        }
       }
     </style>
   </head>
@@ -976,12 +1208,22 @@
           <span>CYBERGRID</span>
         </div>
 
-        <div class="sidebar-toolbar">
-          <h1>SSH Servers</h1>
-          <button class="icon-button" id="add-server-button" type="button" title="Add server" aria-label="Add server">+</button>
-        </div>
+        <div class="sidebar-scroll">
+          <div class="sidebar-toolbar">
+            <h1>SSH Servers</h1>
+            <div class="sidebar-toolbar-actions">
+              <button class="icon-button" id="scan-button" type="button" title="Discover network assets" aria-label="Discover network assets">&#9678;</button>
+              <button class="icon-button" id="add-server-button" type="button" title="Add server" aria-label="Add server">+</button>
+            </div>
+          </div>
 
-        <nav class="server-tree" id="profile-tree" aria-label="Server folders"></nav>
+          <nav class="server-tree" id="profile-tree" aria-label="Server folders"></nav>
+
+          <section class="asset-inventory" aria-labelledby="asset-heading">
+            <div class="asset-heading" id="asset-heading"><span>Asset Inventory</span><span class="asset-count" id="asset-count">0</span></div>
+            <div class="asset-list" id="asset-list"></div>
+          </section>
+        </div>
 
         <div class="sidebar-footer">
           <button class="lock-button" id="lock-button" type="button">Lock credential vault</button>
@@ -1099,6 +1341,60 @@
         <footer class="modal-actions">
           <button class="secondary-button" id="cancel-server-button" type="button">Cancel</button>
           <button class="primary-button" type="submit">Save server</button>
+        </footer>
+      </form>
+    </dialog>
+
+    <dialog class="wide-dialog" id="scan-modal" aria-labelledby="scan-modal-title">
+      <form id="scan-form">
+        <header class="modal-header">
+          <h2 id="scan-modal-title">Subnet Auto-Discovery</h2>
+          <p>Scans private IPv4 space for SSH, Telnet, Web, RDP, and VNC administration services. Maximum 1,024 addresses.</p>
+        </header>
+        <div class="scan-body">
+          <div class="scan-controls">
+            <div class="field"><label for="scan-target">IP, CIDR, or range</label><input id="scan-target" required maxlength="64" value="192.168.1.0/24" spellcheck="false" autocomplete="off" /></div>
+            <button class="primary-button" id="scan-start-button" type="submit">Start scan</button>
+            <button class="secondary-button" id="scan-cancel-button" type="button" disabled>Cancel</button>
+          </div>
+          <div class="scan-progress-row">
+            <progress id="scan-progress" max="1" value="0"></progress>
+            <span id="scan-status">Ready to scan</span>
+          </div>
+          <div class="scan-results-panel">
+            <div class="scan-columns" aria-hidden="true"><span>Type</span><span>Device</span><span class="scan-vendor-column">Vendor / OS</span><span>Open services</span><span>Inventory</span></div>
+            <div id="scan-results"><div class="sidebar-empty">No discovery results yet.</div></div>
+          </div>
+          <div class="form-error" id="scan-error" role="alert"></div>
+        </div>
+        <footer class="modal-actions">
+          <button class="secondary-button" id="scan-close-button" type="button">Close</button>
+        </footer>
+      </form>
+    </dialog>
+
+    <dialog id="asset-modal" aria-labelledby="asset-modal-title">
+      <form id="asset-form">
+        <header class="modal-header">
+          <h2 id="asset-modal-title">Asset Details</h2>
+          <p>Fingerprint data and CMDB metadata are encrypted inside the CyberGrid vault.</p>
+        </header>
+        <div class="modal-body">
+          <div class="fingerprint-summary" id="asset-fingerprint"></div>
+          <div class="field"><label for="asset-name">Display name</label><input id="asset-name" required maxlength="100" autocomplete="off" /></div>
+          <div class="field"><label for="asset-icon">Icon override</label><select id="asset-icon"><option value="">Automatic</option><option value="windows">Windows Server</option><option value="linux">Linux</option><option value="cisco">Cisco</option><option value="fortinet">Fortinet</option><option value="vmware">VMware</option><option value="printer">Printer</option><option value="network">Network appliance</option><option value="server">Generic server</option><option value="unknown">Unknown device</option></select></div>
+          <div class="field"><label for="asset-serial">Serial number</label><input id="asset-serial" maxlength="128" autocomplete="off" /></div>
+          <div class="field"><label for="asset-tag">Asset tag</label><input id="asset-tag" maxlength="128" autocomplete="off" /></div>
+          <div class="field"><label for="asset-rack">Rack position</label><input id="asset-rack" maxlength="128" placeholder="Rack 04 / U18" autocomplete="off" /></div>
+          <div class="field"><label for="asset-site">Data center / site</label><input id="asset-site" maxlength="160" autocomplete="off" /></div>
+          <div class="field"><label for="asset-os-version">OS version</label><input id="asset-os-version" maxlength="240" autocomplete="off" /></div>
+          <div class="field"><label for="asset-sla">Maintenance SLA</label><input id="asset-sla" maxlength="240" placeholder="24x7 / 4-hour response" autocomplete="off" /></div>
+          <div class="form-error" id="asset-form-error" role="alert"></div>
+        </div>
+        <footer class="modal-actions">
+          <button class="secondary-button" id="delete-asset-button" type="button">Delete asset</button>
+          <button class="secondary-button" id="cancel-asset-button" type="button">Cancel</button>
+          <button class="primary-button" type="submit">Save asset</button>
         </footer>
       </form>
     </dialog>

@@ -21,6 +21,14 @@ export const IPC_CHANNELS = {
   vaultListProfiles: "cybergrid:vault:list-profiles",
   vaultSaveProfile: "cybergrid:vault:save-profile",
   vaultDeleteProfile: "cybergrid:vault:delete-profile",
+  vaultListAssets: "cybergrid:vault:list-assets",
+  vaultSaveAsset: "cybergrid:vault:save-asset",
+  vaultDeleteAsset: "cybergrid:vault:delete-asset",
+  discoveryStart: "cybergrid:discovery:start",
+  discoveryCancel: "cybergrid:discovery:cancel",
+  discoveryProgress: "cybergrid:discovery:progress",
+  discoveryResult: "cybergrid:discovery:result",
+  discoveryComplete: "cybergrid:discovery:complete",
   selectPrivateKey: "cybergrid:dialog:select-private-key",
 } as const;
 
@@ -129,6 +137,91 @@ export interface VaultStatus {
   unlocked: boolean;
 }
 
+export type AdministrationProtocol = "ssh" | "rdp" | "http" | "https" | "telnet" | "vnc";
+
+export interface OpenPortInfo {
+  port: number;
+  protocol: AdministrationProtocol;
+  banner?: string;
+}
+
+export type DeviceOsFamily = "Windows" | "Linux" | "Network appliance" | "Printer" | "Unknown";
+
+export type DeviceIcon =
+  | "windows"
+  | "linux"
+  | "cisco"
+  | "fortinet"
+  | "vmware"
+  | "printer"
+  | "network"
+  | "server"
+  | "unknown";
+
+export interface DiscoveredDevice {
+  ipAddress: string;
+  hostname?: string;
+  macAddress?: string;
+  vendor?: string;
+  osFamily: DeviceOsFamily;
+  osVersion?: string;
+  openPorts: OpenPortInfo[];
+  suggestedIcon: DeviceIcon;
+  confidence: number;
+  lastSeenAt: string;
+}
+
+export interface DiscoveryProgressEvent {
+  scanId: string;
+  scanned: number;
+  total: number;
+  currentIp: string;
+}
+
+export interface DiscoveryResultEvent {
+  scanId: string;
+  device: DiscoveredDevice;
+}
+
+export interface DiscoveryCompleteEvent {
+  scanId: string;
+  scanned: number;
+  total: number;
+  discovered: number;
+  canceled: boolean;
+  error?: string;
+}
+
+export interface AssetMetadata {
+  serialNumber: string;
+  assetTag: string;
+  rackPosition: string;
+  site: string;
+  osVersion: string;
+  maintenanceSla: string;
+}
+
+export interface AssetInput {
+  id?: string;
+  name: string;
+  ipAddress: string;
+  hostname?: string;
+  macAddress?: string;
+  vendor?: string;
+  osFamily: DeviceOsFamily;
+  openPorts: OpenPortInfo[];
+  suggestedIcon: DeviceIcon;
+  iconOverride?: DeviceIcon;
+  metadata: AssetMetadata;
+  lastSeenAt: string;
+}
+
+export interface AssetRecord extends Omit<AssetInput, "id"> {
+  id: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export type Unsubscribe = () => void;
 
 export interface CyberGridApi {
@@ -161,6 +254,16 @@ export interface CyberGridApi {
     listProfiles(): Promise<ServerProfileSummary[]>;
     saveProfile(profile: ServerProfileInput): Promise<ServerProfileSummary>;
     deleteProfile(profileId: string): Promise<void>;
+    listAssets(): Promise<AssetRecord[]>;
+    saveAsset(asset: AssetInput): Promise<AssetRecord>;
+    deleteAsset(assetId: string): Promise<void>;
+  };
+  discovery: {
+    start(target: string): Promise<string>;
+    cancel(scanId: string): Promise<void>;
+    onProgress(listener: (event: DiscoveryProgressEvent) => void): Unsubscribe;
+    onResult(listener: (event: DiscoveryResultEvent) => void): Unsubscribe;
+    onComplete(listener: (event: DiscoveryCompleteEvent) => void): Unsubscribe;
   };
   system: {
     selectPrivateKey(): Promise<string | null>;

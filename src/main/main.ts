@@ -10,6 +10,12 @@ import { readFile, stat } from "node:fs/promises";
 import { basename, join, posix } from "node:path";
 import {
   IPC_CHANNELS,
+  type AdministrationProtocol,
+  type AssetInput,
+  type AssetMetadata,
+  type DeviceIcon,
+  type DeviceOsFamily,
+  type OpenPortInfo,
   type RdpConnectionConfig,
   type ServerProfileInput,
   type SshConnectionConfig,
@@ -17,10 +23,12 @@ import {
   type SshWriteRequest,
 } from "../shared/ipc";
 import { RdpController } from "./rdp";
+import { ScannerController } from "./scanner";
 import { SshController } from "./ssh";
 import { VaultController } from "./vault";
 
 const sshController = new SshController();
+const scannerController = new ScannerController();
 let rdpController: RdpController | null = null;
 let vaultController: VaultController | null = null;
 let mainWindow: BrowserWindow | null = null;
@@ -243,6 +251,143 @@ function normalizeProfileInput(value: unknown): ServerProfileInput {
   throw new Error("Authentication method must be password or private key.");
 }
 
+function readOsFamily(value: unknown): DeviceOsFamily {
+  if (
+    value === "Windows" ||
+    value === "Linux" ||
+    value === "Network appliance" ||
+    value === "Printer" ||
+    value === "Unknown"
+  ) {
+    return value;
+  }
+  throw new Error("Invalid asset OS family.");
+}
+
+function readDeviceIcon(value: unknown, required: boolean): DeviceIcon | undefined {
+  if (value === undefined || value === "") {
+    if (required) {
+      throw new Error("Asset icon is required.");
+    }
+    return undefined;
+  }
+  if (
+    value === "windows" ||
+    value === "linux" ||
+    value === "cisco" ||
+    value === "fortinet" ||
+    value === "vmware" ||
+    value === "printer" ||
+    value === "network" ||
+    value === "server" ||
+    value === "unknown"
+  ) {
+    return value;
+  }
+  throw new Error("Invalid asset icon.");
+}
+
+function readProtocol(value: unknown): AdministrationProtocol {
+  if (
+    value === "ssh" ||
+    value === "rdp" ||
+    value === "http" ||
+    value === "https" ||
+    value === "telnet" ||
+    value === "vnc"
+  ) {
+    return value;
+  }
+  throw new Error("Invalid administration protocol.");
+}
+
+function normalizeOpenPorts(value: unknown): OpenPortInfo[] {
+  if (!Array.isArray(value) || value.length > 64) {
+    throw new Error("Invalid asset port inventory.");
+  }
+  return value.map((candidate) => {
+    if (!isRecord(candidate)) {
+      throw new Error("Invalid asset port entry.");
+    }
+    return {
+      port: readPort(candidate.port),
+      protocol: readProtocol(candidate.protocol),
+      banner: readString(candidate.banner, "Service banner", {
+        maxLength: 240,
+        singleLine: true,
+      }),
+    };
+  });
+}
+
+function normalizeMetadata(value: unknown): AssetMetadata {
+  if (!isRecord(value)) {
+    throw new Error("Invalid asset metadata.");
+  }
+  return {
+    serialNumber: readString(value.serialNumber, "Serial number", { maxLength: 128 }) ?? "",
+    assetTag: readString(value.assetTag, "Asset tag", { maxLength: 128 }) ?? "",
+    rackPosition: readString(value.rackPosition, "Rack position", { maxLength: 128 }) ?? "",
+    site: readString(value.site, "Data center / site", { maxLength: 160 }) ?? "",
+    osVersion: readString(value.osVersion, "OS version", { maxLength: 240 }) ?? "",
+    maintenanceSla: readString(value.maintenanceSla, "Maintenance SLA", { maxLength: 240 }) ?? "",
+  };
+}
+
+function normalizeAssetInput(value: unknown): AssetInput {
+  if (!isRecord(value)) {
+    throw new Error("Invalid asset record.");
+  }
+  const ipAddress = readString(value.ipAddress, "IP address", {
+    required: true,
+    maxLength: 15,
+    singleLine: true,
+  }) as string;
+  const octets = ipAddress.split(".");
+  if (
+    octets.length !== 4 ||
+    octets.some((octet) => !/^\d{1,3}$/.test(octet) || Number(octet) > 255)
+  ) {
+    throw new Error("Asset IP address must be a valid IPv4 address.");
+  }
+
+  const macAddress = readString(value.macAddress, "MAC address", {
+    maxLength: 17,
+    singleLine: true,
+  });
+  if (macAddress && !/^[0-9a-f]{2}(?::[0-9a-f]{2}){5}$/i.test(macAddress)) {
+    throw new Error("Asset MAC address is invalid.");
+  }
+
+  const id = value.id === undefined ? undefined : readUuid(value.id, "asset ID");
+  const lastSeenAt = readString(value.lastSeenAt, "Last seen timestamp", {
+    required: true,
+    maxLength: 64,
+    singleLine: true,
+  }) as string;
+  if (!Number.isFinite(Date.parse(lastSeenAt))) {
+    throw new Error("Asset last-seen timestamp is invalid.");
+  }
+
+  return {
+    id,
+    name: readString(value.name, "Asset name", { required: true, maxLength: 100 }) as string,
+    ipAddress,
+    hostname: readString(value.hostname, "Hostname", {
+      maxLength: 253,
+      singleLine: true,
+    }),
+    macAddress,
+    vendor: readString(value.vendor, "Vendor", { maxLength: 200, singleLine: true }),
+    osFamily: readOsFamily(value.osFamily),
+    openPorts: normalizeOpenPorts(value.openPorts),
+    suggestedIcon: readDeviceIcon(value.suggestedIcon, true) as DeviceIcon,
+    iconOverride: readDeviceIcon(value.iconOverride, false),
+    metadata: normalizeMetadata(value.metadata),
+    lastSeenAt,
+  };
+}
+
 function readMasterPassword(value: unknown): string {
   if (typeof value !== "string" || value.length > 1_024) {
     throw new Error("Invalid master password.");
@@ -408,6 +553,7 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle(IPC_CHANNELS.vaultLock, (event) => {
     assertTrustedSender(event);
+    scannerController.cancelAll();
     sshController.disconnectAll("Credential vault locked.");
     requireRdp().disconnectAll();
     requireVault().lock();
@@ -426,6 +572,36 @@ function registerIpcHandlers(): void {
   ipcMain.handle(IPC_CHANNELS.vaultDeleteProfile, async (event, profileId: unknown) => {
     assertTrustedSender(event);
     await requireVault().deleteProfile(readUuid(profileId, "server profile ID"));
+  });
+
+  ipcMain.handle(IPC_CHANNELS.vaultListAssets, (event) => {
+    assertTrustedSender(event);
+    return requireVault().listAssets();
+  });
+
+  ipcMain.handle(IPC_CHANNELS.vaultSaveAsset, async (event, asset: unknown) => {
+    assertTrustedSender(event);
+    return requireVault().saveAsset(normalizeAssetInput(asset));
+  });
+
+  ipcMain.handle(IPC_CHANNELS.vaultDeleteAsset, async (event, assetId: unknown) => {
+    assertTrustedSender(event);
+    await requireVault().deleteAsset(readUuid(assetId, "asset ID"));
+  });
+
+  ipcMain.handle(IPC_CHANNELS.discoveryStart, (event, target: unknown) => {
+    assertTrustedSender(event);
+    const normalizedTarget = readString(target, "Scan target", {
+      required: true,
+      maxLength: 64,
+      singleLine: true,
+    });
+    return scannerController.start(normalizedTarget as string, event.sender);
+  });
+
+  ipcMain.handle(IPC_CHANNELS.discoveryCancel, (event, scanId: unknown) => {
+    assertTrustedSender(event);
+    scannerController.cancel(readUuid(scanId, "scan ID"));
   });
 
   ipcMain.handle(IPC_CHANNELS.selectPrivateKey, async (event) => {
@@ -523,12 +699,14 @@ if (!hasSingleInstanceLock) {
 }
 
 app.on("before-quit", () => {
+  scannerController.cancelAll();
   sshController.disconnectAll();
   rdpController?.disconnectAll();
   vaultController?.lock();
 });
 
 app.on("window-all-closed", () => {
+  scannerController.cancelAll();
   sshController.disconnectAll();
   rdpController?.disconnectAll();
   vaultController?.lock();

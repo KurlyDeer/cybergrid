@@ -8,6 +8,13 @@ import {
 import { access, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import type {
+  AdministrationProtocol,
+  AssetInput,
+  AssetMetadata,
+  AssetRecord,
+  DeviceIcon,
+  DeviceOsFamily,
+  OpenPortInfo,
   ServerAuthType,
   ServerProfileInput,
   ServerProfileSummary,
@@ -55,6 +62,7 @@ export interface DecryptedServerProfile extends ServerProfileInput {
 interface VaultPayload {
   version: typeof PAYLOAD_VERSION;
   profiles: DecryptedServerProfile[];
+  assets: AssetRecord[];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -177,13 +185,118 @@ function parseProfile(value: unknown): DecryptedServerProfile {
   return profile;
 }
 
+function optionalString(value: unknown, field: string): string | undefined {
+  return value === undefined ? undefined : requireString(value, field);
+}
+
+function parseDeviceIcon(value: unknown, field: string): DeviceIcon {
+  if (
+    value === "windows" ||
+    value === "linux" ||
+    value === "cisco" ||
+    value === "fortinet" ||
+    value === "vmware" ||
+    value === "printer" ||
+    value === "network" ||
+    value === "server" ||
+    value === "unknown"
+  ) {
+    return value;
+  }
+  throw new Error(`Vault field ${field} is invalid.`);
+}
+
+function parseOsFamily(value: unknown): DeviceOsFamily {
+  if (
+    value === "Windows" ||
+    value === "Linux" ||
+    value === "Network appliance" ||
+    value === "Printer" ||
+    value === "Unknown"
+  ) {
+    return value;
+  }
+  throw new Error("Vault asset OS family is invalid.");
+}
+
+function parseProtocol(value: unknown): AdministrationProtocol {
+  if (
+    value === "ssh" ||
+    value === "rdp" ||
+    value === "http" ||
+    value === "https" ||
+    value === "telnet" ||
+    value === "vnc"
+  ) {
+    return value;
+  }
+  throw new Error("Vault asset protocol is invalid.");
+}
+
+function parseOpenPort(value: unknown): OpenPortInfo {
+  if (!isRecord(value)) {
+    throw new Error("Vault asset port is invalid.");
+  }
+  const port = Number(value.port);
+  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+    throw new Error("Vault asset port number is invalid.");
+  }
+  return {
+    port,
+    protocol: parseProtocol(value.protocol),
+    banner: optionalString(value.banner, "asset.port.banner"),
+  };
+}
+
+function parseMetadata(value: unknown): AssetMetadata {
+  if (!isRecord(value)) {
+    throw new Error("Vault asset metadata is invalid.");
+  }
+  return {
+    serialNumber: requireString(value.serialNumber, "asset.metadata.serialNumber"),
+    assetTag: requireString(value.assetTag, "asset.metadata.assetTag"),
+    rackPosition: requireString(value.rackPosition, "asset.metadata.rackPosition"),
+    site: requireString(value.site, "asset.metadata.site"),
+    osVersion: requireString(value.osVersion, "asset.metadata.osVersion"),
+    maintenanceSla: requireString(value.maintenanceSla, "asset.metadata.maintenanceSla"),
+  };
+}
+
+function parseAsset(value: unknown): AssetRecord {
+  if (!isRecord(value) || !Array.isArray(value.openPorts)) {
+    throw new Error("Vault asset is invalid.");
+  }
+  return {
+    id: requireString(value.id, "asset.id"),
+    name: requireString(value.name, "asset.name"),
+    ipAddress: requireString(value.ipAddress, "asset.ipAddress"),
+    hostname: optionalString(value.hostname, "asset.hostname"),
+    macAddress: optionalString(value.macAddress, "asset.macAddress"),
+    vendor: optionalString(value.vendor, "asset.vendor"),
+    osFamily: parseOsFamily(value.osFamily),
+    openPorts: value.openPorts.map(parseOpenPort),
+    suggestedIcon: parseDeviceIcon(value.suggestedIcon, "asset.suggestedIcon"),
+    iconOverride: value.iconOverride === undefined
+      ? undefined
+      : parseDeviceIcon(value.iconOverride, "asset.iconOverride"),
+    metadata: parseMetadata(value.metadata),
+    lastSeenAt: requireString(value.lastSeenAt, "asset.lastSeenAt"),
+    createdAt: requireString(value.createdAt, "asset.createdAt"),
+    updatedAt: requireString(value.updatedAt, "asset.updatedAt"),
+  };
+}
+
 function parsePayload(value: unknown): VaultPayload {
   if (!isRecord(value) || value.version !== PAYLOAD_VERSION || !Array.isArray(value.profiles)) {
     throw new Error("Vault payload is invalid.");
   }
+  if (value.assets !== undefined && !Array.isArray(value.assets)) {
+    throw new Error("Vault asset inventory is invalid.");
+  }
   return {
     version: PAYLOAD_VERSION,
     profiles: value.profiles.map(parseProfile),
+    assets: (value.assets ?? []).map(parseAsset),
   };
 }
 
@@ -249,6 +362,14 @@ function summarizeProfile(profile: DecryptedServerProfile): ServerProfileSummary
   };
 }
 
+function cloneAsset(asset: AssetRecord): AssetRecord {
+  return {
+    ...asset,
+    openPorts: asset.openPorts.map((port) => ({ ...port })),
+    metadata: { ...asset.metadata },
+  };
+}
+
 export class VaultController {
   private masterKey?: Buffer;
   private payload?: VaultPayload;
@@ -276,7 +397,7 @@ export class VaultController {
     this.lock();
     this.masterKey = key;
     this.kdf = kdf;
-    this.payload = { version: PAYLOAD_VERSION, profiles: [] };
+    this.payload = { version: PAYLOAD_VERSION, profiles: [], assets: [] };
 
     try {
       await this.persist();
@@ -367,6 +488,75 @@ export class VaultController {
     } catch (error) {
       if (removedProfile) {
         payload.profiles.splice(profileIndex, 0, removedProfile);
+      }
+      throw error;
+    }
+  }
+
+  listAssets(): AssetRecord[] {
+    return this.requirePayload()
+      .assets.map(cloneAsset)
+      .sort((left, right) => left.name.localeCompare(right.name));
+  }
+
+  async saveAsset(input: AssetInput): Promise<AssetRecord> {
+    const payload = this.requirePayload();
+    const timestamp = new Date().toISOString();
+    const existingIndex = input.id
+      ? payload.assets.findIndex((asset) => asset.id === input.id)
+      : -1;
+    if (input.id && existingIndex < 0) {
+      throw new Error("Asset record was not found.");
+    }
+
+    const existing = existingIndex >= 0 ? payload.assets[existingIndex] : undefined;
+    const asset: AssetRecord = {
+      name: input.name,
+      ipAddress: input.ipAddress,
+      hostname: input.hostname,
+      macAddress: input.macAddress,
+      vendor: input.vendor,
+      osFamily: input.osFamily,
+      openPorts: input.openPorts.map((port) => ({ ...port })),
+      suggestedIcon: input.suggestedIcon,
+      iconOverride: input.iconOverride,
+      metadata: { ...input.metadata },
+      lastSeenAt: input.lastSeenAt,
+      id: existing?.id ?? randomUUID(),
+      createdAt: existing?.createdAt ?? timestamp,
+      updatedAt: timestamp,
+    };
+
+    if (existingIndex >= 0) {
+      payload.assets.splice(existingIndex, 1, asset);
+    } else {
+      payload.assets.push(asset);
+    }
+    try {
+      await this.persist();
+    } catch (error) {
+      if (existingIndex >= 0 && existing) {
+        payload.assets.splice(existingIndex, 1, existing);
+      } else {
+        payload.assets.pop();
+      }
+      throw error;
+    }
+    return cloneAsset(asset);
+  }
+
+  async deleteAsset(assetId: string): Promise<void> {
+    const payload = this.requirePayload();
+    const assetIndex = payload.assets.findIndex((asset) => asset.id === assetId);
+    if (assetIndex < 0) {
+      throw new Error("Asset record was not found.");
+    }
+    const [removedAsset] = payload.assets.splice(assetIndex, 1);
+    try {
+      await this.persist();
+    } catch (error) {
+      if (removedAsset) {
+        payload.assets.splice(assetIndex, 0, removedAsset);
       }
       throw error;
     }

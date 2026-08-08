@@ -1,6 +1,10 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
 import type {
+  AssetInput,
   CyberGridApi,
+  DiscoveryCompleteEvent,
+  DiscoveryProgressEvent,
+  DiscoveryResultEvent,
   RdpStatusEvent,
   ServerProfileInput,
   SftpProgressEvent,
@@ -35,6 +39,14 @@ const IPC_CHANNELS: typeof import("../shared/ipc").IPC_CHANNELS = {
   vaultListProfiles: "cybergrid:vault:list-profiles",
   vaultSaveProfile: "cybergrid:vault:save-profile",
   vaultDeleteProfile: "cybergrid:vault:delete-profile",
+  vaultListAssets: "cybergrid:vault:list-assets",
+  vaultSaveAsset: "cybergrid:vault:save-asset",
+  vaultDeleteAsset: "cybergrid:vault:delete-asset",
+  discoveryStart: "cybergrid:discovery:start",
+  discoveryCancel: "cybergrid:discovery:cancel",
+  discoveryProgress: "cybergrid:discovery:progress",
+  discoveryResult: "cybergrid:discovery:result",
+  discoveryComplete: "cybergrid:discovery:complete",
   selectPrivateKey: "cybergrid:dialog:select-private-key",
 };
 
@@ -97,6 +109,33 @@ const api: CyberGridApi = {
       ipcRenderer.invoke(IPC_CHANNELS.vaultSaveProfile, profile),
     deleteProfile: (profileId) =>
       ipcRenderer.invoke(IPC_CHANNELS.vaultDeleteProfile, profileId),
+    listAssets: () => ipcRenderer.invoke(IPC_CHANNELS.vaultListAssets),
+    saveAsset: (asset: AssetInput) =>
+      ipcRenderer.invoke(IPC_CHANNELS.vaultSaveAsset, asset),
+    deleteAsset: (assetId) =>
+      ipcRenderer.invoke(IPC_CHANNELS.vaultDeleteAsset, assetId),
+  },
+  discovery: {
+    start: (target) => ipcRenderer.invoke(IPC_CHANNELS.discoveryStart, target),
+    cancel: (scanId) => ipcRenderer.invoke(IPC_CHANNELS.discoveryCancel, scanId),
+    onProgress: (listener) => {
+      const handler = (_event: IpcRendererEvent, payload: DiscoveryProgressEvent) =>
+        listener(payload);
+      ipcRenderer.on(IPC_CHANNELS.discoveryProgress, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.discoveryProgress, handler);
+    },
+    onResult: (listener) => {
+      const handler = (_event: IpcRendererEvent, payload: DiscoveryResultEvent) =>
+        listener(payload);
+      ipcRenderer.on(IPC_CHANNELS.discoveryResult, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.discoveryResult, handler);
+    },
+    onComplete: (listener) => {
+      const handler = (_event: IpcRendererEvent, payload: DiscoveryCompleteEvent) =>
+        listener(payload);
+      ipcRenderer.on(IPC_CHANNELS.discoveryComplete, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.discoveryComplete, handler);
+    },
   },
   system: {
     selectPrivateKey: () => ipcRenderer.invoke(IPC_CHANNELS.selectPrivateKey),

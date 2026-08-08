@@ -3,6 +3,13 @@ type ITheme = import("xterm").ITheme;
 type XtermTerminal = import("xterm").Terminal;
 type XtermFitAddon = import("xterm-addon-fit").FitAddon;
 type CyberGridApi = import("../shared/ipc").CyberGridApi;
+type AssetInput = import("../shared/ipc").AssetInput;
+type AssetRecord = import("../shared/ipc").AssetRecord;
+type DeviceIcon = import("../shared/ipc").DeviceIcon;
+type DiscoveredDevice = import("../shared/ipc").DiscoveredDevice;
+type DiscoveryCompleteEvent = import("../shared/ipc").DiscoveryCompleteEvent;
+type DiscoveryProgressEvent = import("../shared/ipc").DiscoveryProgressEvent;
+type DiscoveryResultEvent = import("../shared/ipc").DiscoveryResultEvent;
 type RdpConnectionConfig = import("../shared/ipc").RdpConnectionConfig;
 type RdpConnectionStatus = import("../shared/ipc").RdpConnectionStatus;
 type RdpStatusEvent = import("../shared/ipc").RdpStatusEvent;
@@ -76,6 +83,10 @@ const queuedSshStatus = new Map<string, SshStatusEvent>();
 const queuedRdpStatus = new Map<string, RdpStatusEvent>();
 const collapsedGroups = new Set<string>();
 let savedProfiles: ServerProfileSummary[] = [];
+let savedAssets: AssetRecord[] = [];
+let activeScanId: string | null = null;
+let editingAssetId: string | null = null;
+const scanDevices = new Map<string, DiscoveredDevice>();
 let activeTabId: string | null = null;
 let tabSequence = 0;
 let vaultMode: "create" | "unlock" = "unlock";
@@ -99,6 +110,9 @@ const contentArea = elementById<HTMLDivElement>("content-area");
 const terminalStack = elementById<HTMLDivElement>("terminal-stack");
 const connectionState = elementById<HTMLDivElement>("connection-state");
 const profileTree = elementById<HTMLDivElement>("profile-tree");
+const assetList = elementById<HTMLDivElement>("asset-list");
+const assetCount = elementById<HTMLSpanElement>("asset-count");
+const scanButton = elementById<HTMLButtonElement>("scan-button");
 const addServerButton = elementById<HTMLButtonElement>("add-server-button");
 const lockButton = elementById<HTMLButtonElement>("lock-button");
 const settingsButton = elementById<HTMLButtonElement>("settings-button");
@@ -142,6 +156,32 @@ const serverPassphraseInput = elementById<HTMLInputElement>("server-passphrase")
 const browseKeyButton = elementById<HTMLButtonElement>("browse-key-button");
 const cancelServerButton = elementById<HTMLButtonElement>("cancel-server-button");
 const serverFormError = elementById<HTMLDivElement>("server-form-error");
+
+const scanModal = elementById<HTMLDialogElement>("scan-modal");
+const scanForm = elementById<HTMLFormElement>("scan-form");
+const scanTargetInput = elementById<HTMLInputElement>("scan-target");
+const scanStartButton = elementById<HTMLButtonElement>("scan-start-button");
+const scanCancelButton = elementById<HTMLButtonElement>("scan-cancel-button");
+const scanCloseButton = elementById<HTMLButtonElement>("scan-close-button");
+const scanProgress = elementById<HTMLProgressElement>("scan-progress");
+const scanStatus = elementById<HTMLSpanElement>("scan-status");
+const scanResults = elementById<HTMLDivElement>("scan-results");
+const scanError = elementById<HTMLDivElement>("scan-error");
+
+const assetModal = elementById<HTMLDialogElement>("asset-modal");
+const assetForm = elementById<HTMLFormElement>("asset-form");
+const assetFingerprint = elementById<HTMLDivElement>("asset-fingerprint");
+const assetNameInput = elementById<HTMLInputElement>("asset-name");
+const assetIconInput = elementById<HTMLSelectElement>("asset-icon");
+const assetSerialInput = elementById<HTMLInputElement>("asset-serial");
+const assetTagInput = elementById<HTMLInputElement>("asset-tag");
+const assetRackInput = elementById<HTMLInputElement>("asset-rack");
+const assetSiteInput = elementById<HTMLInputElement>("asset-site");
+const assetOsVersionInput = elementById<HTMLInputElement>("asset-os-version");
+const assetSlaInput = elementById<HTMLInputElement>("asset-sla");
+const assetFormError = elementById<HTMLDivElement>("asset-form-error");
+const deleteAssetButton = elementById<HTMLButtonElement>("delete-asset-button");
+const cancelAssetButton = elementById<HTMLButtonElement>("cancel-asset-button");
 
 const settingsModal = elementById<HTMLDialogElement>("settings-modal");
 const settingsForm = elementById<HTMLFormElement>("settings-form");
@@ -688,6 +728,235 @@ function createTextElement(tag: "span" | "div", className: string, text: string)
   return element;
 }
 
+const DEVICE_ICON_LABELS: Record<DeviceIcon, string> = {
+  windows: "WIN",
+  linux: "LNX",
+  cisco: "CIS",
+  fortinet: "FNT",
+  vmware: "VMW",
+  printer: "PRN",
+  network: "NET",
+  server: "SRV",
+  unknown: "DEV",
+};
+
+function displayedIcon(asset: Pick<AssetRecord, "iconOverride" | "suggestedIcon">): DeviceIcon {
+  return asset.iconOverride ?? asset.suggestedIcon;
+}
+
+function portSummary(device: Pick<DiscoveredDevice, "openPorts">): string {
+  return device.openPorts.map((port) => `${port.protocol.toUpperCase()} ${port.port}`).join("  ");
+}
+
+function fingerprintCell(label: string, value: string): HTMLDivElement {
+  const cell = document.createElement("div");
+  cell.className = "fingerprint-cell";
+  cell.append(
+    createTextElement("span", "fingerprint-label", label),
+    createTextElement("span", "fingerprint-value", value || "Not detected"),
+  );
+  return cell;
+}
+
+function openAssetModal(asset: AssetRecord): void {
+  editingAssetId = asset.id;
+  assetFormError.textContent = "";
+  assetFingerprint.replaceChildren(
+    fingerprintCell("IP address", asset.ipAddress),
+    fingerprintCell("Hostname", asset.hostname ?? ""),
+    fingerprintCell("MAC address", asset.macAddress ?? ""),
+    fingerprintCell("Vendor", asset.vendor ?? ""),
+    fingerprintCell("OS family", asset.osFamily),
+    fingerprintCell("Open services", portSummary(asset)),
+  );
+  assetNameInput.value = asset.name;
+  assetIconInput.value = asset.iconOverride ?? "";
+  assetSerialInput.value = asset.metadata.serialNumber;
+  assetTagInput.value = asset.metadata.assetTag;
+  assetRackInput.value = asset.metadata.rackPosition;
+  assetSiteInput.value = asset.metadata.site;
+  assetOsVersionInput.value = asset.metadata.osVersion;
+  assetSlaInput.value = asset.metadata.maintenanceSla;
+  if (!assetModal.open) {
+    assetModal.showModal();
+  }
+  requestAnimationFrame(() => assetNameInput.focus());
+}
+
+function renderAssets(): void {
+  assetList.replaceChildren();
+  assetCount.textContent = String(savedAssets.length);
+  if (savedAssets.length === 0) {
+    assetList.append(
+      createTextElement("div", "sidebar-empty", "No CMDB assets yet. Use network discovery to fingerprint and import devices."),
+    );
+    return;
+  }
+
+  for (const asset of savedAssets) {
+    const button = document.createElement("button");
+    button.className = "asset-item";
+    button.type = "button";
+    button.title = "Open asset metadata";
+    const details = createTextElement("span", "server-meta", "");
+    details.append(
+      createTextElement("span", "server-name", asset.name),
+      createTextElement(
+        "span",
+        "server-host",
+        `${asset.ipAddress}${asset.metadata.site ? `  /  ${asset.metadata.site}` : ""}`,
+      ),
+    );
+    button.append(
+      createTextElement("span", "device-icon", DEVICE_ICON_LABELS[displayedIcon(asset)]),
+      details,
+    );
+    button.addEventListener("click", () => openAssetModal(asset));
+    assetList.append(button);
+  }
+}
+
+async function refreshAssets(): Promise<void> {
+  savedAssets = await window.cybergrid.vault.listAssets();
+  renderAssets();
+}
+
+async function refreshVaultContent(): Promise<void> {
+  const [profiles, assets] = await Promise.all([
+    window.cybergrid.vault.listProfiles(),
+    window.cybergrid.vault.listAssets(),
+  ]);
+  savedProfiles = profiles;
+  savedAssets = assets;
+  renderProfiles();
+  renderAssets();
+}
+
+function assetInputForDevice(device: DiscoveredDevice): AssetInput {
+  const existing = savedAssets.find((asset) => asset.ipAddress === device.ipAddress);
+  return {
+    id: existing?.id,
+    name: existing?.name ?? device.hostname ?? device.ipAddress,
+    ipAddress: device.ipAddress,
+    hostname: device.hostname ?? existing?.hostname,
+    macAddress: device.macAddress ?? existing?.macAddress,
+    vendor: device.vendor ?? existing?.vendor,
+    osFamily: device.osFamily,
+    openPorts: device.openPorts.map((port) => ({ ...port })),
+    suggestedIcon: device.suggestedIcon,
+    iconOverride: existing?.iconOverride,
+    metadata: {
+      serialNumber: existing?.metadata.serialNumber ?? "",
+      assetTag: existing?.metadata.assetTag ?? "",
+      rackPosition: existing?.metadata.rackPosition ?? "",
+      site: existing?.metadata.site ?? "",
+      osVersion: existing?.metadata.osVersion || device.osVersion || "",
+      maintenanceSla: existing?.metadata.maintenanceSla ?? "",
+    },
+    lastSeenAt: device.lastSeenAt,
+  };
+}
+
+async function importDiscoveredDevice(device: DiscoveredDevice, button: HTMLButtonElement): Promise<void> {
+  button.disabled = true;
+  button.textContent = "Saving...";
+  try {
+    await window.cybergrid.vault.saveAsset(assetInputForDevice(device));
+    await refreshAssets();
+    renderScanResults();
+  } catch (error) {
+    scanError.textContent = errorMessage(error);
+    button.disabled = false;
+    button.textContent = "Retry";
+  }
+}
+
+function renderScanResults(): void {
+  scanResults.replaceChildren();
+  const devices = [...scanDevices.values()].sort((left, right) =>
+    left.ipAddress.localeCompare(right.ipAddress, undefined, { numeric: true }),
+  );
+  if (devices.length === 0) {
+    scanResults.append(createTextElement("div", "sidebar-empty", "No devices with supported administration ports found yet."));
+    return;
+  }
+
+  for (const device of devices) {
+    const existing = savedAssets.find((asset) => asset.ipAddress === device.ipAddress);
+    const row = document.createElement("div");
+    row.className = "scan-result-row";
+    const deviceDetails = createTextElement("div", "", "");
+    deviceDetails.append(
+      createTextElement("div", "scan-primary", device.hostname ?? device.ipAddress),
+      createTextElement("div", "scan-secondary", device.hostname ? device.ipAddress : (device.macAddress ?? "No MAC in neighbor table")),
+    );
+    const vendorDetails = createTextElement("div", "scan-vendor-column", "");
+    vendorDetails.append(
+      createTextElement("div", "scan-primary", device.vendor ?? "Vendor unknown"),
+      createTextElement("div", "scan-secondary", `${device.osFamily} / ${device.confidence}% confidence`),
+    );
+    const serviceDetails = createTextElement("div", "", "");
+    serviceDetails.append(
+      createTextElement("div", "scan-primary", portSummary(device)),
+      createTextElement("div", "scan-secondary", device.osVersion ?? "No version banner"),
+    );
+    const importButton = document.createElement("button");
+    importButton.className = "compact-button";
+    importButton.type = "button";
+    importButton.textContent = existing ? "Update" : "Import";
+    importButton.addEventListener("click", () => void importDiscoveredDevice(device, importButton));
+    row.append(
+      createTextElement("span", "device-icon", DEVICE_ICON_LABELS[device.suggestedIcon]),
+      deviceDetails,
+      vendorDetails,
+      serviceDetails,
+      importButton,
+    );
+    scanResults.append(row);
+  }
+}
+
+function setScanRunning(running: boolean): void {
+  scanStartButton.disabled = running;
+  scanTargetInput.disabled = running;
+  scanCancelButton.disabled = !running;
+}
+
+function handleDiscoveryProgress(event: DiscoveryProgressEvent): void {
+  if (event.scanId !== activeScanId) {
+    return;
+  }
+  scanProgress.max = Math.max(1, event.total);
+  scanProgress.value = event.scanned;
+  scanStatus.textContent = `${event.scanned} / ${event.total} scanned  -  ${event.currentIp}`;
+}
+
+function handleDiscoveryResult(event: DiscoveryResultEvent): void {
+  if (event.scanId !== activeScanId) {
+    return;
+  }
+  scanDevices.set(event.device.ipAddress, event.device);
+  renderScanResults();
+}
+
+function handleDiscoveryComplete(event: DiscoveryCompleteEvent): void {
+  if (event.scanId !== activeScanId) {
+    return;
+  }
+  activeScanId = null;
+  setScanRunning(false);
+  scanProgress.max = Math.max(1, event.total);
+  scanProgress.value = event.scanned;
+  if (event.error) {
+    scanStatus.textContent = "Discovery failed";
+    scanError.textContent = event.error;
+  } else if (event.canceled) {
+    scanStatus.textContent = `Canceled after ${event.scanned} of ${event.total} addresses`;
+  } else {
+    scanStatus.textContent = `Complete: ${event.discovered} device${event.discovered === 1 ? "" : "s"} found`;
+  }
+}
+
 function populateQuickConnect(profile: ServerProfileSummary): void {
   quickConnectInput.value = `ssh://${encodeURIComponent(profile.username)}@${profile.host}:${profile.port}`;
   quickPasswordInput.value = "";
@@ -956,7 +1225,7 @@ async function initializeVault(): Promise<void> {
   try {
     const status = await window.cybergrid.vault.status();
     if (status.unlocked) {
-      await refreshProfiles();
+      await refreshVaultContent();
       hideVaultPrompt();
     } else {
       setVaultPrompt(status.exists);
@@ -1090,7 +1359,7 @@ vaultForm.addEventListener("submit", async (event) => {
     } else {
       await window.cybergrid.vault.unlock(password);
     }
-    await refreshProfiles();
+    await refreshVaultContent();
     hideVaultPrompt();
   } catch (error) {
     vaultError.textContent = errorMessage(error);
@@ -1102,6 +1371,118 @@ vaultForm.addEventListener("submit", async (event) => {
 });
 
 addServerButton.addEventListener("click", openServerModal);
+scanButton.addEventListener("click", () => {
+  scanError.textContent = "";
+  if (!scanModal.open) {
+    scanModal.showModal();
+  }
+  requestAnimationFrame(() => scanTargetInput.focus());
+});
+
+scanForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  scanError.textContent = "";
+  scanDevices.clear();
+  renderScanResults();
+  scanProgress.max = 1;
+  scanProgress.value = 0;
+  scanStatus.textContent = "Starting discovery...";
+  setScanRunning(true);
+  try {
+    activeScanId = await window.cybergrid.discovery.start(scanTargetInput.value.trim());
+  } catch (error) {
+    activeScanId = null;
+    setScanRunning(false);
+    scanStatus.textContent = "Scan did not start";
+    scanError.textContent = errorMessage(error);
+  }
+});
+
+scanCancelButton.addEventListener("click", async () => {
+  if (!activeScanId) {
+    return;
+  }
+  scanCancelButton.disabled = true;
+  scanStatus.textContent = "Canceling discovery...";
+  try {
+    await window.cybergrid.discovery.cancel(activeScanId);
+  } catch (error) {
+    scanError.textContent = errorMessage(error);
+  }
+});
+
+scanCloseButton.addEventListener("click", () => scanModal.close());
+scanModal.addEventListener("click", (event) => {
+  if (event.target === scanModal) {
+    scanModal.close();
+  }
+});
+
+assetForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  assetFormError.textContent = "";
+  const asset = savedAssets.find((candidate) => candidate.id === editingAssetId);
+  if (!asset) {
+    assetFormError.textContent = "Asset record is no longer available.";
+    return;
+  }
+  const input: AssetInput = {
+    id: asset.id,
+    name: assetNameInput.value.trim(),
+    ipAddress: asset.ipAddress,
+    hostname: asset.hostname,
+    macAddress: asset.macAddress,
+    vendor: asset.vendor,
+    osFamily: asset.osFamily,
+    openPorts: asset.openPorts.map((port) => ({ ...port })),
+    suggestedIcon: asset.suggestedIcon,
+    iconOverride: (assetIconInput.value || undefined) as DeviceIcon | undefined,
+    metadata: {
+      serialNumber: assetSerialInput.value.trim(),
+      assetTag: assetTagInput.value.trim(),
+      rackPosition: assetRackInput.value.trim(),
+      site: assetSiteInput.value.trim(),
+      osVersion: assetOsVersionInput.value.trim(),
+      maintenanceSla: assetSlaInput.value.trim(),
+    },
+    lastSeenAt: asset.lastSeenAt,
+  };
+  try {
+    await window.cybergrid.vault.saveAsset(input);
+    await refreshAssets();
+    assetModal.close();
+    editingAssetId = null;
+  } catch (error) {
+    assetFormError.textContent = errorMessage(error);
+  }
+});
+
+deleteAssetButton.addEventListener("click", async () => {
+  const asset = savedAssets.find((candidate) => candidate.id === editingAssetId);
+  if (!asset || !window.confirm(`Delete the asset "${asset.name}" from inventory?`)) {
+    return;
+  }
+  try {
+    await window.cybergrid.vault.deleteAsset(asset.id);
+    await refreshAssets();
+    assetModal.close();
+    editingAssetId = null;
+    renderScanResults();
+  } catch (error) {
+    assetFormError.textContent = errorMessage(error);
+  }
+});
+
+cancelAssetButton.addEventListener("click", () => assetModal.close());
+assetModal.addEventListener("close", () => {
+  editingAssetId = null;
+});
+assetModal.addEventListener("click", (event) => {
+  if (event.target === assetModal) {
+    assetModal.close();
+  }
+});
+
 lockButton.addEventListener("click", async () => {
   try {
     if (serverModal.open) {
@@ -1110,10 +1491,21 @@ lockButton.addEventListener("click", async () => {
     if (settingsModal.open) {
       settingsModal.close();
     }
+    if (scanModal.open) {
+      scanModal.close();
+    }
+    if (assetModal.open) {
+      assetModal.close();
+    }
     setSftpDrawerOpen(false);
     await window.cybergrid.vault.lock();
+    activeScanId = null;
+    setScanRunning(false);
+    scanDevices.clear();
     savedProfiles = [];
+    savedAssets = [];
     renderProfiles();
+    renderAssets();
     setVaultPrompt(true);
   } catch (error) {
     window.alert(errorMessage(error));
@@ -1191,6 +1583,9 @@ window.cybergrid.ssh.onData(handleSshData);
 window.cybergrid.ssh.onStatus(handleSshStatus);
 window.cybergrid.sftp.onProgress(handleSftpProgress);
 window.cybergrid.rdp.onStatus(handleRdpStatus);
+window.cybergrid.discovery.onProgress(handleDiscoveryProgress);
+window.cybergrid.discovery.onResult(handleDiscoveryResult);
+window.cybergrid.discovery.onComplete(handleDiscoveryComplete);
 
 const resizeObserver = new ResizeObserver(() => {
   if (activeTabId) {
@@ -1202,7 +1597,8 @@ resizeObserver.observe(terminalStack);
 applySettings(currentSettings, false);
 const welcomeTab = createTerminalTab("Welcome", "welcome");
 welcomeTab.terminal?.writeln("\x1b[36mCyberGrid\x1b[0m");
-welcomeTab.terminal?.writeln("SSH, SFTP, and native Windows RDP in one tabbed workspace.\r\n");
+welcomeTab.terminal?.writeln("SSH, SFTP, RDP, subnet discovery, and encrypted asset inventory in one workspace.\r\n");
 welcomeTab.terminal?.writeln("Use Quick Connect: ssh://user@host:22 or rdp://user@host:3389");
+welcomeTab.terminal?.writeln("Use the discovery button in the sidebar to scan a private IPv4 subnet.");
 updateSftpAvailability();
 void initializeVault();
