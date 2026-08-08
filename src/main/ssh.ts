@@ -76,7 +76,11 @@ export class SshController {
     });
 
     client.on("keyboard-interactive", (_name, _instructions, _language, prompts, finish) => {
-      finish(prompts.map(() => config.password ?? ""));
+      finish(prompts.map((prompt, index) => {
+        const requestsTotp = /(?:otp|totp|verification|authenticator|token|passcode|one[- ]time)/i.test(prompt.prompt);
+        if (config.totpCode && (requestsTotp || (index > 0 && Boolean(config.password)))) return config.totpCode;
+        return config.password ?? config.totpCode ?? "";
+      }));
     });
 
     client.on("error", (error) => {
@@ -100,9 +104,9 @@ export class SshController {
       privateKey: config.privateKey,
       passphrase: config.passphrase,
       readyTimeout: config.readyTimeout ?? 15_000,
-      keepaliveInterval: 10_000,
+      keepaliveInterval: config.keepaliveInterval ?? 10_000,
       keepaliveCountMax: 3,
-      tryKeyboard: Boolean(config.password),
+      tryKeyboard: Boolean(config.password || config.totpCode),
     };
 
     setImmediate(() => {

@@ -28,6 +28,22 @@ export const IPC_CHANNELS = {
   vaultSaveSnippet: "cybergrid:vault:save-snippet",
   vaultDeleteSnippet: "cybergrid:vault:delete-snippet",
   vaultSetFavorite: "cybergrid:vault:set-favorite",
+  vaultListFolderDefaults: "cybergrid:vault:list-folder-defaults",
+  vaultSaveFolderDefaults: "cybergrid:vault:save-folder-defaults",
+  vaultDeleteFolderDefaults: "cybergrid:vault:delete-folder-defaults",
+  vaultListExternalTools: "cybergrid:vault:list-external-tools",
+  vaultSaveExternalTool: "cybergrid:vault:save-external-tool",
+  vaultDeleteExternalTool: "cybergrid:vault:delete-external-tool",
+  vaultListConnectionTasks: "cybergrid:vault:list-connection-tasks",
+  vaultSaveConnectionTask: "cybergrid:vault:save-connection-task",
+  vaultDeleteConnectionTask: "cybergrid:vault:delete-connection-task",
+  vaultListSyncSources: "cybergrid:vault:list-sync-sources",
+  vaultSaveSyncSource: "cybergrid:vault:save-sync-source",
+  vaultDeleteSyncSource: "cybergrid:vault:delete-sync-source",
+  vaultGenerateTotp: "cybergrid:vault:generate-totp",
+  externalToolRun: "cybergrid:external-tool:run",
+  inventorySyncRun: "cybergrid:inventory-sync:run",
+  sessionCaptureScreenshot: "cybergrid:session:capture-screenshot",
   preferencesGet: "cybergrid:preferences:get",
   preferencesUpdate: "cybergrid:preferences:update",
   preferencesActivity: "cybergrid:preferences:activity",
@@ -40,6 +56,7 @@ export const IPC_CHANNELS = {
   discoveryResult: "cybergrid:discovery:result",
   discoveryComplete: "cybergrid:discovery:complete",
   profileConnect: "cybergrid:profile:connect",
+  profileRunPostConnect: "cybergrid:profile:run-post-connect",
   streamConnect: "cybergrid:stream:connect",
   streamDisconnect: "cybergrid:stream:disconnect",
   streamWrite: "cybergrid:stream:write",
@@ -75,6 +92,8 @@ export interface SshConnectionConfig {
   privateKey?: string;
   passphrase?: string;
   readyTimeout?: number;
+  keepaliveInterval?: number;
+  totpCode?: string;
 }
 
 export interface SshDataEvent {
@@ -173,6 +192,18 @@ export interface ServerProfileInput {
   parity?: SerialParity;
   tags?: string[];
   favorite?: boolean;
+  inheritFolderDefaults?: boolean;
+  domain?: string;
+  readyTimeoutSeconds?: number;
+  keepaliveSeconds?: number;
+  preConnectTaskIds?: string[];
+  postConnectTaskIds?: string[];
+  totpSecret?: string;
+  totpDigits?: 6 | 8;
+  totpPeriod?: 30 | 60;
+  totpAlgorithm?: "sha1" | "sha256" | "sha512";
+  managedBySyncId?: string;
+  managedObjectId?: string;
 }
 
 export interface ServerProfileSummary {
@@ -190,6 +221,14 @@ export interface ServerProfileSummary {
   parity?: SerialParity;
   tags: string[];
   favorite: boolean;
+  inheritFolderDefaults: boolean;
+  domain?: string;
+  readyTimeoutSeconds?: number;
+  keepaliveSeconds?: number;
+  preConnectTaskIds: string[];
+  postConnectTaskIds: string[];
+  hasTotp: boolean;
+  managedBySyncId?: string;
 }
 
 export interface StreamConnectionConfig {
@@ -308,6 +347,120 @@ export interface SessionVariableContext {
   ip: string;
   username: string;
   group: string;
+  port: number;
+  profileId?: string;
+}
+
+export interface FolderDefaultsInput {
+  path: string;
+  username?: string;
+  domain?: string;
+  authType: ServerAuthType;
+  password?: string;
+  privateKeyPath?: string;
+  passphrase?: string;
+  port?: number;
+  readyTimeoutSeconds?: number;
+  keepaliveSeconds?: number;
+}
+
+export interface FolderDefaultsSummary {
+  path: string;
+  username?: string;
+  domain?: string;
+  authType: ServerAuthType;
+  hasPassword: boolean;
+  privateKeyPath?: string;
+  hasPassphrase: boolean;
+  port?: number;
+  readyTimeoutSeconds?: number;
+  keepaliveSeconds?: number;
+  updatedAt: string;
+}
+
+export interface ExternalToolInput {
+  id?: string;
+  name: string;
+  executablePath: string;
+  arguments: string[];
+}
+
+export interface ExternalToolRecord extends Omit<ExternalToolInput, "id"> {
+  id: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ConnectionTaskInput {
+  id?: string;
+  name: string;
+  kind: "script" | "vpn";
+  executablePath: string;
+  arguments: string[];
+  waitForExit: boolean;
+  timeoutSeconds: number;
+}
+
+export interface ConnectionTaskRecord extends Omit<ConnectionTaskInput, "id"> {
+  id: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type InventorySyncProvider = "ldap" | "vmware" | "hyperv";
+
+export interface InventorySyncSourceInput {
+  id?: string;
+  name: string;
+  provider: InventorySyncProvider;
+  endpoint: string;
+  baseDn?: string;
+  username?: string;
+  password?: string;
+  filter?: string;
+  group: string;
+  defaultProtocol: "ssh" | "rdp" | "https";
+}
+
+export interface InventorySyncSourceSummary extends Omit<InventorySyncSourceInput, "password"> {
+  id: string;
+  hasPassword: boolean;
+  createdAt: string;
+  updatedAt: string;
+  lastSyncedAt?: string;
+}
+
+export interface InventorySyncResult {
+  sourceId: string;
+  imported: number;
+  updated: number;
+  removed: number;
+  warnings: string[];
+  completedAt: string;
+}
+
+export interface ExternalToolRunResult {
+  launched: boolean;
+  toolName: string;
+  commandPreview: string;
+}
+
+export interface TotpCodeResult {
+  code: string;
+  expiresAt: string;
+  remainingSeconds: number;
+}
+
+export interface ScreenshotRequest {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  label: string;
+}
+
+export interface ScreenshotResult {
+  path: string | null;
 }
 
 export type ProfileConnectionResult = { context: SessionVariableContext } & (
@@ -461,6 +614,7 @@ export type Unsubscribe = () => void;
 export interface CyberGridApi {
   profiles: {
     connect(profileId: string): Promise<ProfileConnectionResult>;
+    runPostConnect(profileId: string): Promise<void>;
   };
   ssh: {
     connect(config: SshConnectionConfig): Promise<string>;
@@ -525,6 +679,25 @@ export interface CyberGridApi {
     saveSnippet(snippet: SnippetInput): Promise<SnippetRecord>;
     deleteSnippet(snippetId: string): Promise<void>;
     setFavorite(profileId: string, favorite: boolean): Promise<ServerProfileSummary>;
+    listFolderDefaults(): Promise<FolderDefaultsSummary[]>;
+    saveFolderDefaults(input: FolderDefaultsInput): Promise<FolderDefaultsSummary>;
+    deleteFolderDefaults(path: string): Promise<void>;
+    listExternalTools(): Promise<ExternalToolRecord[]>;
+    saveExternalTool(input: ExternalToolInput): Promise<ExternalToolRecord>;
+    deleteExternalTool(toolId: string): Promise<void>;
+    listConnectionTasks(): Promise<ConnectionTaskRecord[]>;
+    saveConnectionTask(input: ConnectionTaskInput): Promise<ConnectionTaskRecord>;
+    deleteConnectionTask(taskId: string): Promise<void>;
+    listSyncSources(): Promise<InventorySyncSourceSummary[]>;
+    saveSyncSource(input: InventorySyncSourceInput): Promise<InventorySyncSourceSummary>;
+    deleteSyncSource(sourceId: string): Promise<void>;
+    generateTotp(profileId: string): Promise<TotpCodeResult>;
+  };
+  externalTools: {
+    run(toolId: string, profileId: string): Promise<ExternalToolRunResult>;
+  };
+  inventorySync: {
+    run(sourceId: string): Promise<InventorySyncResult>;
   };
   preferences: {
     get(): Promise<AppPreferences>;
@@ -554,5 +727,6 @@ export interface CyberGridApi {
     selectPrivateKey(): Promise<string | null>;
     onVaultLocked(listener: (reason: string) => void): Unsubscribe;
     onTrayQuickConnect(listener: (profileId: string) => void): Unsubscribe;
+    captureScreenshot(request: ScreenshotRequest): Promise<ScreenshotResult>;
   };
 }

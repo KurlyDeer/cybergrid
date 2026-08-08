@@ -15,6 +15,15 @@ import type {
   ConnectionProtocol,
   DeviceIcon,
   DeviceOsFamily,
+  ConnectionTaskInput,
+  ConnectionTaskRecord,
+  ExternalToolInput,
+  ExternalToolRecord,
+  FolderDefaultsInput,
+  FolderDefaultsSummary,
+  InventorySyncResult,
+  InventorySyncSourceInput,
+  InventorySyncSourceSummary,
   OpenPortInfo,
   ServerAuthType,
   ServerProfileInput,
@@ -69,6 +78,21 @@ interface VaultPayload {
   profiles: DecryptedServerProfile[];
   assets: AssetRecord[];
   snippets: SnippetRecord[];
+  folderDefaults: StoredFolderDefaults[];
+  externalTools: ExternalToolRecord[];
+  connectionTasks: ConnectionTaskRecord[];
+  syncSources: StoredSyncSource[];
+}
+
+interface StoredFolderDefaults extends FolderDefaultsInput {
+  updatedAt: string;
+}
+
+export interface StoredSyncSource extends InventorySyncSourceInput {
+  id: string;
+  createdAt: string;
+  updatedAt: string;
+  lastSyncedAt?: string;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -210,6 +234,18 @@ function parseProfile(value: unknown): DecryptedServerProfile {
     protocol,
     tags,
     favorite: value.favorite === true,
+    inheritFolderDefaults: value.inheritFolderDefaults !== false,
+    domain: optionalString(value.domain, "profile.domain"),
+    readyTimeoutSeconds: optionalPositiveInteger(value.readyTimeoutSeconds, "profile.readyTimeoutSeconds"),
+    keepaliveSeconds: optionalPositiveInteger(value.keepaliveSeconds, "profile.keepaliveSeconds"),
+    preConnectTaskIds: parseStringArray(value.preConnectTaskIds, "profile.preConnectTaskIds", 50),
+    postConnectTaskIds: parseStringArray(value.postConnectTaskIds, "profile.postConnectTaskIds", 50),
+    totpSecret: optionalString(value.totpSecret, "profile.totpSecret"),
+    totpDigits: value.totpDigits === 8 ? 8 : 6,
+    totpPeriod: value.totpPeriod === 60 ? 60 : 30,
+    totpAlgorithm: value.totpAlgorithm === "sha256" || value.totpAlgorithm === "sha512" ? value.totpAlgorithm : "sha1",
+    managedBySyncId: optionalString(value.managedBySyncId, "profile.managedBySyncId"),
+    managedObjectId: optionalString(value.managedObjectId, "profile.managedObjectId"),
     createdAt: requireString(value.createdAt, "profile.createdAt"),
     updatedAt: requireString(value.updatedAt, "profile.updatedAt"),
   };
@@ -246,6 +282,19 @@ function parseProfile(value: unknown): DecryptedServerProfile {
 
 function optionalString(value: unknown, field: string): string | undefined {
   return value === undefined ? undefined : requireString(value, field);
+}
+
+function optionalPositiveInteger(value: unknown, field: string): number | undefined {
+  if (value === undefined) return undefined;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 86_400) throw new Error(`Vault field ${field} is invalid.`);
+  return parsed;
+}
+
+function parseStringArray(value: unknown, field: string, maximum: number): string[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > maximum) throw new Error(`Vault field ${field} is invalid.`);
+  return value.map((item, index) => requireString(item, `${field}[${index}]`));
 }
 
 function parseDeviceIcon(value: unknown, field: string): DeviceIcon {
@@ -365,6 +414,80 @@ function parseSnippet(value: unknown): SnippetRecord {
   };
 }
 
+function parseArguments(value: unknown, field: string): string[] {
+  return parseStringArray(value, field, 64);
+}
+
+function parseFolderDefaults(value: unknown): StoredFolderDefaults {
+  if (!isRecord(value)) throw new Error("Vault folder defaults are invalid.");
+  const authType = parseAuthType(value.authType ?? "none");
+  return {
+    path: requireString(value.path, "folderDefaults.path"),
+    username: optionalString(value.username, "folderDefaults.username"),
+    domain: optionalString(value.domain, "folderDefaults.domain"),
+    authType,
+    password: authType === "password" ? requireString(value.password, "folderDefaults.password") : undefined,
+    privateKeyPath: authType === "privateKey" ? requireString(value.privateKeyPath, "folderDefaults.privateKeyPath") : undefined,
+    passphrase: authType === "privateKey" ? optionalString(value.passphrase, "folderDefaults.passphrase") : undefined,
+    port: optionalPositiveInteger(value.port, "folderDefaults.port"),
+    readyTimeoutSeconds: optionalPositiveInteger(value.readyTimeoutSeconds, "folderDefaults.readyTimeoutSeconds"),
+    keepaliveSeconds: optionalPositiveInteger(value.keepaliveSeconds, "folderDefaults.keepaliveSeconds"),
+    updatedAt: requireString(value.updatedAt, "folderDefaults.updatedAt"),
+  };
+}
+
+function parseExternalTool(value: unknown): ExternalToolRecord {
+  if (!isRecord(value)) throw new Error("Vault external tool is invalid.");
+  return {
+    id: requireString(value.id, "externalTool.id"),
+    name: requireString(value.name, "externalTool.name"),
+    executablePath: requireString(value.executablePath, "externalTool.executablePath"),
+    arguments: parseArguments(value.arguments, "externalTool.arguments"),
+    createdAt: requireString(value.createdAt, "externalTool.createdAt"),
+    updatedAt: requireString(value.updatedAt, "externalTool.updatedAt"),
+  };
+}
+
+function parseConnectionTask(value: unknown): ConnectionTaskRecord {
+  if (!isRecord(value)) throw new Error("Vault connection task is invalid.");
+  if (value.kind !== "script" && value.kind !== "vpn") throw new Error("Vault connection task kind is invalid.");
+  return {
+    id: requireString(value.id, "connectionTask.id"),
+    name: requireString(value.name, "connectionTask.name"),
+    kind: value.kind,
+    executablePath: requireString(value.executablePath, "connectionTask.executablePath"),
+    arguments: parseArguments(value.arguments, "connectionTask.arguments"),
+    waitForExit: value.waitForExit !== false,
+    timeoutSeconds: optionalPositiveInteger(value.timeoutSeconds, "connectionTask.timeoutSeconds") ?? 60,
+    createdAt: requireString(value.createdAt, "connectionTask.createdAt"),
+    updatedAt: requireString(value.updatedAt, "connectionTask.updatedAt"),
+  };
+}
+
+function parseSyncSource(value: unknown): StoredSyncSource {
+  if (!isRecord(value) || (value.provider !== "ldap" && value.provider !== "vmware" && value.provider !== "hyperv")) {
+    throw new Error("Vault inventory sync source is invalid.");
+  }
+  if (value.defaultProtocol !== "ssh" && value.defaultProtocol !== "rdp" && value.defaultProtocol !== "https") {
+    throw new Error("Vault inventory sync protocol is invalid.");
+  }
+  return {
+    id: requireString(value.id, "syncSource.id"),
+    name: requireString(value.name, "syncSource.name"),
+    provider: value.provider,
+    endpoint: requireString(value.endpoint, "syncSource.endpoint"),
+    baseDn: optionalString(value.baseDn, "syncSource.baseDn"),
+    username: optionalString(value.username, "syncSource.username"),
+    password: optionalString(value.password, "syncSource.password"),
+    filter: optionalString(value.filter, "syncSource.filter"),
+    group: requireString(value.group, "syncSource.group"),
+    defaultProtocol: value.defaultProtocol,
+    createdAt: requireString(value.createdAt, "syncSource.createdAt"),
+    updatedAt: requireString(value.updatedAt, "syncSource.updatedAt"),
+    lastSyncedAt: optionalString(value.lastSyncedAt, "syncSource.lastSyncedAt"),
+  };
+}
+
 function parsePayload(value: unknown): VaultPayload {
   if (!isRecord(value) || value.version !== PAYLOAD_VERSION || !Array.isArray(value.profiles)) {
     throw new Error("Vault payload is invalid.");
@@ -375,11 +498,19 @@ function parsePayload(value: unknown): VaultPayload {
   if (value.snippets !== undefined && !Array.isArray(value.snippets)) {
     throw new Error("Vault snippet library is invalid.");
   }
+  if (value.folderDefaults !== undefined && !Array.isArray(value.folderDefaults)) throw new Error("Vault folder defaults are invalid.");
+  if (value.externalTools !== undefined && !Array.isArray(value.externalTools)) throw new Error("Vault external tools are invalid.");
+  if (value.connectionTasks !== undefined && !Array.isArray(value.connectionTasks)) throw new Error("Vault connection tasks are invalid.");
+  if (value.syncSources !== undefined && !Array.isArray(value.syncSources)) throw new Error("Vault sync sources are invalid.");
   return {
     version: PAYLOAD_VERSION,
     profiles: value.profiles.map(parseProfile),
     assets: (value.assets ?? []).map(parseAsset),
     snippets: (value.snippets ?? []).map(parseSnippet),
+    folderDefaults: (value.folderDefaults ?? []).map(parseFolderDefaults),
+    externalTools: (value.externalTools ?? []).map(parseExternalTool),
+    connectionTasks: (value.connectionTasks ?? []).map(parseConnectionTask),
+    syncSources: (value.syncSources ?? []).map(parseSyncSource),
   };
 }
 
@@ -449,7 +580,36 @@ function summarizeProfile(profile: DecryptedServerProfile): ServerProfileSummary
     parity: profile.parity,
     tags: [...(profile.tags ?? [])],
     favorite: profile.favorite ?? false,
+    inheritFolderDefaults: profile.inheritFolderDefaults !== false,
+    domain: profile.domain,
+    readyTimeoutSeconds: profile.readyTimeoutSeconds,
+    keepaliveSeconds: profile.keepaliveSeconds,
+    preConnectTaskIds: [...(profile.preConnectTaskIds ?? [])],
+    postConnectTaskIds: [...(profile.postConnectTaskIds ?? [])],
+    hasTotp: Boolean(profile.totpSecret),
+    managedBySyncId: profile.managedBySyncId,
   };
+}
+
+function summarizeFolderDefaults(value: StoredFolderDefaults): FolderDefaultsSummary {
+  return {
+    path: value.path,
+    username: value.username,
+    domain: value.domain,
+    authType: value.authType,
+    hasPassword: value.authType === "password" && Boolean(value.password),
+    privateKeyPath: value.privateKeyPath,
+    hasPassphrase: Boolean(value.passphrase),
+    port: value.port,
+    readyTimeoutSeconds: value.readyTimeoutSeconds,
+    keepaliveSeconds: value.keepaliveSeconds,
+    updatedAt: value.updatedAt,
+  };
+}
+
+function summarizeSyncSource(value: StoredSyncSource): InventorySyncSourceSummary {
+  const { password: _password, ...safe } = value;
+  return { ...safe, hasPassword: Boolean(value.password) };
 }
 
 function cloneAsset(asset: AssetRecord): AssetRecord {
@@ -491,7 +651,16 @@ export class VaultController {
     this.lock();
     this.masterKey = key;
     this.kdf = kdf;
-    this.payload = { version: PAYLOAD_VERSION, profiles: [], assets: [], snippets: [] };
+    this.payload = {
+      version: PAYLOAD_VERSION,
+      profiles: [],
+      assets: [],
+      snippets: [],
+      folderDefaults: [],
+      externalTools: [],
+      connectionTasks: [],
+      syncSources: [],
+    };
 
     try {
       await this.persist();
@@ -606,6 +775,18 @@ export class VaultController {
       parity: profile.parity,
       tags: [...(profile.tags ?? [])],
       favorite: profile.favorite ?? false,
+      inheritFolderDefaults: profile.inheritFolderDefaults !== false,
+      domain: profile.domain,
+      readyTimeoutSeconds: profile.readyTimeoutSeconds,
+      keepaliveSeconds: profile.keepaliveSeconds,
+      preConnectTaskIds: [...(profile.preConnectTaskIds ?? [])],
+      postConnectTaskIds: [...(profile.postConnectTaskIds ?? [])],
+      totpSecret: profile.totpSecret,
+      totpDigits: profile.totpDigits,
+      totpPeriod: profile.totpPeriod,
+      totpAlgorithm: profile.totpAlgorithm,
+      managedBySyncId: profile.managedBySyncId,
+      managedObjectId: profile.managedObjectId,
     }));
   }
 
@@ -764,12 +945,259 @@ export class VaultController {
     }
   }
 
+  listFolderDefaults(): FolderDefaultsSummary[] {
+    return this.requirePayload().folderDefaults.map(summarizeFolderDefaults)
+      .sort((left, right) => left.path.localeCompare(right.path));
+  }
+
+  async saveFolderDefaults(input: FolderDefaultsInput): Promise<FolderDefaultsSummary> {
+    const payload = this.requirePayload();
+    const existingIndex = payload.folderDefaults.findIndex((item) => item.path === input.path);
+    const previous = existingIndex >= 0 ? payload.folderDefaults[existingIndex] : undefined;
+    const value: StoredFolderDefaults = {
+      ...input,
+      password: input.authType === "password" ? (input.password || previous?.password) : undefined,
+      privateKeyPath: input.authType === "privateKey" ? (input.privateKeyPath || previous?.privateKeyPath) : undefined,
+      passphrase: input.authType === "privateKey" ? (input.passphrase || previous?.passphrase) : undefined,
+      updatedAt: new Date().toISOString(),
+    };
+    if (value.authType === "password" && !value.password) throw new Error("A default password is required.");
+    if (value.authType === "privateKey" && !value.privateKeyPath) throw new Error("A default private key path is required.");
+    if (existingIndex >= 0) payload.folderDefaults.splice(existingIndex, 1, value);
+    else payload.folderDefaults.push(value);
+    try {
+      await this.persist();
+    } catch (error) {
+      if (existingIndex >= 0 && previous) payload.folderDefaults.splice(existingIndex, 1, previous);
+      else payload.folderDefaults.pop();
+      throw error;
+    }
+    return summarizeFolderDefaults(value);
+  }
+
+  async deleteFolderDefaults(path: string): Promise<void> {
+    const payload = this.requirePayload();
+    const index = payload.folderDefaults.findIndex((item) => item.path === path);
+    if (index < 0) throw new Error("Folder defaults were not found.");
+    const [removed] = payload.folderDefaults.splice(index, 1);
+    try { await this.persist(); }
+    catch (error) { if (removed) payload.folderDefaults.splice(index, 0, removed); throw error; }
+  }
+
+  listExternalTools(): ExternalToolRecord[] {
+    return this.requirePayload().externalTools.map((tool) => ({ ...tool, arguments: [...tool.arguments] }))
+      .sort((left, right) => left.name.localeCompare(right.name));
+  }
+
+  getExternalTool(toolId: string): ExternalToolRecord {
+    const tool = this.requirePayload().externalTools.find((candidate) => candidate.id === toolId);
+    if (!tool) throw new Error("External tool was not found.");
+    return { ...tool, arguments: [...tool.arguments] };
+  }
+
+  async saveExternalTool(input: ExternalToolInput): Promise<ExternalToolRecord> {
+    const payload = this.requirePayload();
+    const index = input.id ? payload.externalTools.findIndex((tool) => tool.id === input.id) : -1;
+    if (input.id && index < 0) throw new Error("External tool was not found.");
+    const previous = index >= 0 ? payload.externalTools[index] : undefined;
+    const timestamp = new Date().toISOString();
+    const value: ExternalToolRecord = {
+      name: input.name, executablePath: input.executablePath, arguments: [...input.arguments],
+      id: previous?.id ?? randomUUID(), createdAt: previous?.createdAt ?? timestamp, updatedAt: timestamp,
+    };
+    if (index >= 0) payload.externalTools.splice(index, 1, value); else payload.externalTools.push(value);
+    try { await this.persist(); }
+    catch (error) {
+      if (index >= 0 && previous) payload.externalTools.splice(index, 1, previous); else payload.externalTools.pop();
+      throw error;
+    }
+    return { ...value, arguments: [...value.arguments] };
+  }
+
+  async deleteExternalTool(toolId: string): Promise<void> {
+    const payload = this.requirePayload();
+    const index = payload.externalTools.findIndex((tool) => tool.id === toolId);
+    if (index < 0) throw new Error("External tool was not found.");
+    const [removed] = payload.externalTools.splice(index, 1);
+    try { await this.persist(); }
+    catch (error) { if (removed) payload.externalTools.splice(index, 0, removed); throw error; }
+  }
+
+  listConnectionTasks(): ConnectionTaskRecord[] {
+    return this.requirePayload().connectionTasks.map((task) => ({ ...task, arguments: [...task.arguments] }))
+      .sort((left, right) => left.name.localeCompare(right.name));
+  }
+
+  getConnectionTasks(taskIds: string[]): ConnectionTaskRecord[] {
+    const tasks = this.requirePayload().connectionTasks;
+    return taskIds.map((id) => {
+      const task = tasks.find((candidate) => candidate.id === id);
+      if (!task) throw new Error(`Connection task ${id} was not found.`);
+      return { ...task, arguments: [...task.arguments] };
+    });
+  }
+
+  async saveConnectionTask(input: ConnectionTaskInput): Promise<ConnectionTaskRecord> {
+    const payload = this.requirePayload();
+    const index = input.id ? payload.connectionTasks.findIndex((task) => task.id === input.id) : -1;
+    if (input.id && index < 0) throw new Error("Connection task was not found.");
+    const previous = index >= 0 ? payload.connectionTasks[index] : undefined;
+    const timestamp = new Date().toISOString();
+    const value: ConnectionTaskRecord = {
+      ...input, arguments: [...input.arguments], id: previous?.id ?? randomUUID(),
+      createdAt: previous?.createdAt ?? timestamp, updatedAt: timestamp,
+    };
+    if (index >= 0) payload.connectionTasks.splice(index, 1, value); else payload.connectionTasks.push(value);
+    try { await this.persist(); }
+    catch (error) {
+      if (index >= 0 && previous) payload.connectionTasks.splice(index, 1, previous); else payload.connectionTasks.pop();
+      throw error;
+    }
+    return { ...value, arguments: [...value.arguments] };
+  }
+
+  async deleteConnectionTask(taskId: string): Promise<void> {
+    const payload = this.requirePayload();
+    const index = payload.connectionTasks.findIndex((task) => task.id === taskId);
+    if (index < 0) throw new Error("Connection task was not found.");
+    const [removed] = payload.connectionTasks.splice(index, 1);
+    const affected = payload.profiles.map((profile) => ({
+      profile,
+      pre: [...(profile.preConnectTaskIds ?? [])],
+      post: [...(profile.postConnectTaskIds ?? [])],
+    }));
+    for (const item of affected) {
+      item.profile.preConnectTaskIds = item.pre.filter((id) => id !== taskId);
+      item.profile.postConnectTaskIds = item.post.filter((id) => id !== taskId);
+    }
+    try { await this.persist(); }
+    catch (error) {
+      if (removed) payload.connectionTasks.splice(index, 0, removed);
+      for (const item of affected) { item.profile.preConnectTaskIds = item.pre; item.profile.postConnectTaskIds = item.post; }
+      throw error;
+    }
+  }
+
+  listSyncSources(): InventorySyncSourceSummary[] {
+    return this.requirePayload().syncSources.map(summarizeSyncSource)
+      .sort((left, right) => left.name.localeCompare(right.name));
+  }
+
+  getSyncSource(sourceId: string): StoredSyncSource {
+    const source = this.requirePayload().syncSources.find((candidate) => candidate.id === sourceId);
+    if (!source) throw new Error("Inventory sync source was not found.");
+    return { ...source };
+  }
+
+  async saveSyncSource(input: InventorySyncSourceInput): Promise<InventorySyncSourceSummary> {
+    const payload = this.requirePayload();
+    const index = input.id ? payload.syncSources.findIndex((source) => source.id === input.id) : -1;
+    if (input.id && index < 0) throw new Error("Inventory sync source was not found.");
+    const previous = index >= 0 ? payload.syncSources[index] : undefined;
+    const timestamp = new Date().toISOString();
+    const value: StoredSyncSource = {
+      ...input,
+      password: input.password || previous?.password,
+      id: previous?.id ?? randomUUID(),
+      createdAt: previous?.createdAt ?? timestamp,
+      updatedAt: timestamp,
+      lastSyncedAt: previous?.lastSyncedAt,
+    };
+    if (index >= 0) payload.syncSources.splice(index, 1, value); else payload.syncSources.push(value);
+    try { await this.persist(); }
+    catch (error) {
+      if (index >= 0 && previous) payload.syncSources.splice(index, 1, previous); else payload.syncSources.pop();
+      throw error;
+    }
+    return summarizeSyncSource(value);
+  }
+
+  async deleteSyncSource(sourceId: string): Promise<void> {
+    const payload = this.requirePayload();
+    const sourceIndex = payload.syncSources.findIndex((source) => source.id === sourceId);
+    if (sourceIndex < 0) throw new Error("Inventory sync source was not found.");
+    const [removedSource] = payload.syncSources.splice(sourceIndex, 1);
+    const removedProfiles = payload.profiles.filter((profile) => profile.managedBySyncId === sourceId);
+    payload.profiles = payload.profiles.filter((profile) => profile.managedBySyncId !== sourceId);
+    try { await this.persist(); }
+    catch (error) {
+      if (removedSource) payload.syncSources.splice(sourceIndex, 0, removedSource);
+      payload.profiles.push(...removedProfiles);
+      throw error;
+    }
+  }
+
+  async replaceSyncedProfiles(sourceId: string, inputs: ServerProfileInput[]): Promise<InventorySyncResult> {
+    const payload = this.requirePayload();
+    const source = payload.syncSources.find((candidate) => candidate.id === sourceId);
+    if (!source) throw new Error("Inventory sync source was not found.");
+    const previousProfiles = payload.profiles;
+    const existing = new Map(previousProfiles.filter((profile) => profile.managedBySyncId === sourceId)
+      .map((profile) => [profile.managedObjectId, profile]));
+    const timestamp = new Date().toISOString();
+    let imported = 0;
+    let updated = 0;
+    const replacements = inputs.map((input): DecryptedServerProfile => {
+      const current = existing.get(input.managedObjectId);
+      if (current) updated += 1; else imported += 1;
+      return {
+        ...input,
+        id: current?.id ?? randomUUID(),
+        favorite: current?.favorite ?? input.favorite,
+        createdAt: current?.createdAt ?? timestamp,
+        updatedAt: timestamp,
+      };
+    });
+    const removed = Math.max(0, existing.size - updated);
+    payload.profiles = [...previousProfiles.filter((profile) => profile.managedBySyncId !== sourceId), ...replacements];
+    const previousLastSyncedAt = source.lastSyncedAt;
+    source.lastSyncedAt = timestamp;
+    try { await this.persist(); }
+    catch (error) { payload.profiles = previousProfiles; source.lastSyncedAt = previousLastSyncedAt; throw error; }
+    return { sourceId, imported, updated, removed, warnings: [], completedAt: timestamp };
+  }
+
   getConnectionProfile(profileId: string): DecryptedServerProfile {
     const profile = this.requirePayload().profiles.find((candidate) => candidate.id === profileId);
     if (!profile) {
       throw new Error("Server profile was not found.");
     }
-    return { ...profile, tags: [...(profile.tags ?? [])] };
+    const resolved: DecryptedServerProfile = {
+      ...profile,
+      tags: [...(profile.tags ?? [])],
+      preConnectTaskIds: [...(profile.preConnectTaskIds ?? [])],
+      postConnectTaskIds: [...(profile.postConnectTaskIds ?? [])],
+    };
+    if (profile.inheritFolderDefaults !== false) {
+      const parts = profile.group.split("/").map((part) => part.trim()).filter(Boolean);
+      const inherited = this.requirePayload().folderDefaults
+        .filter((candidate) => parts.some((_part, index) => candidate.path === parts.slice(0, index + 1).join("/")))
+        .sort((left, right) => left.path.split("/").length - right.path.split("/").length)
+        .reduce<Partial<StoredFolderDefaults>>((merged, item) => {
+          for (const [key, value] of Object.entries(item)) {
+            if (value !== undefined && key !== "path" && key !== "updatedAt") {
+              if (key === "authType" && value === "none" && merged.authType && merged.authType !== "none") continue;
+              (merged as Record<string, unknown>)[key] = value;
+            }
+          }
+          return merged;
+        }, {});
+      if (!resolved.username) resolved.username = inherited.username ?? "";
+      if (!resolved.domain) resolved.domain = inherited.domain;
+      if (resolved.authType === "none" && inherited.authType && inherited.authType !== "none") {
+        resolved.authType = inherited.authType;
+        resolved.password = inherited.password;
+        resolved.privateKeyPath = inherited.privateKeyPath;
+        resolved.passphrase = inherited.passphrase;
+      }
+      if (inherited.port && resolved.protocol !== "serial") resolved.port = inherited.port;
+      resolved.readyTimeoutSeconds ??= inherited.readyTimeoutSeconds;
+      resolved.keepaliveSeconds ??= inherited.keepaliveSeconds;
+    }
+    if (resolved.domain && resolved.username && !/[\\@]/.test(resolved.username)) {
+      resolved.username = `${resolved.domain}\\${resolved.username}`;
+    }
+    return resolved;
   }
 
   private isUnlocked(): boolean {

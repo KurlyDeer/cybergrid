@@ -14,8 +14,16 @@ type DiscoveryProgressEvent = import("../shared/ipc").DiscoveryProgressEvent;
 type DiscoveryResultEvent = import("../shared/ipc").DiscoveryResultEvent;
 type DiagnosticKind = import("../shared/ipc").DiagnosticKind;
 type DiagnosticResult = import("../shared/ipc").DiagnosticResult;
+type ConnectionTaskInput = import("../shared/ipc").ConnectionTaskInput;
+type ConnectionTaskRecord = import("../shared/ipc").ConnectionTaskRecord;
+type ExternalToolInput = import("../shared/ipc").ExternalToolInput;
+type ExternalToolRecord = import("../shared/ipc").ExternalToolRecord;
+type FolderDefaultsInput = import("../shared/ipc").FolderDefaultsInput;
+type FolderDefaultsSummary = import("../shared/ipc").FolderDefaultsSummary;
 type HealthStatusEvent = import("../shared/ipc").HealthStatusEvent;
 type MigrationFormat = import("../shared/ipc").MigrationFormat;
+type InventorySyncSourceInput = import("../shared/ipc").InventorySyncSourceInput;
+type InventorySyncSourceSummary = import("../shared/ipc").InventorySyncSourceSummary;
 type ProfileConnectionResult = import("../shared/ipc").ProfileConnectionResult;
 type RdpConnectionConfig = import("../shared/ipc").RdpConnectionConfig;
 type RdpConnectionStatus = import("../shared/ipc").RdpConnectionStatus;
@@ -90,6 +98,8 @@ interface WorkspaceTab {
   rdpMessageElement?: HTMLParagraphElement;
   status: WorkspaceStatus;
   sftp?: SftpDirectoryListing;
+  duplicate?: () => Promise<void>;
+  postConnectStarted?: boolean;
 }
 
 const DEFAULT_SETTINGS: AppPreferences = {
@@ -131,6 +141,10 @@ const collapsedGroups = new Set<string>();
 let savedProfiles: ServerProfileSummary[] = [];
 let savedAssets: AssetRecord[] = [];
 let savedSnippets: SnippetRecord[] = [];
+let folderDefaults: FolderDefaultsSummary[] = [];
+let externalTools: ExternalToolRecord[] = [];
+let connectionTasks: ConnectionTaskRecord[] = [];
+let syncSources: InventorySyncSourceSummary[] = [];
 let activeScanId: string | null = null;
 let editingAssetId: string | null = null;
 const scanDevices = new Map<string, DiscoveredDevice>();
@@ -178,6 +192,8 @@ const broadcastToggleButton = elementById<HTMLButtonElement>("broadcast-toggle-b
 const broadcastTargetsButton = elementById<HTMLButtonElement>("broadcast-targets-button");
 const layoutButton = elementById<HTMLButtonElement>("layout-button");
 const commandPaletteButton = elementById<HTMLButtonElement>("command-palette-button");
+const externalToolsButton = elementById<HTMLButtonElement>("external-tools-button");
+const enterpriseButton = elementById<HTMLButtonElement>("enterprise-button");
 
 const sftpDrawer = elementById<HTMLElement>("sftp-drawer");
 const sftpCloseButton = elementById<HTMLButtonElement>("sftp-close-button");
@@ -235,6 +251,15 @@ const serverUsernameInput = elementById<HTMLInputElement>("server-username");
 const serverGroupInput = elementById<HTMLInputElement>("server-group");
 const serverTagsInput = elementById<HTMLInputElement>("server-tags");
 const serverFavoriteInput = elementById<HTMLInputElement>("server-favorite");
+const serverInheritFolderInput = elementById<HTMLInputElement>("server-inherit-folder");
+const serverDomainInput = elementById<HTMLInputElement>("server-domain");
+const serverTimeoutInput = elementById<HTMLInputElement>("server-timeout");
+const serverKeepaliveInput = elementById<HTMLInputElement>("server-keepalive");
+const serverPreTasksInput = elementById<HTMLSelectElement>("server-pre-tasks");
+const serverPostTasksInput = elementById<HTMLSelectElement>("server-post-tasks");
+const serverTotpSecretInput = elementById<HTMLInputElement>("server-totp-secret");
+const serverTotpDigitsInput = elementById<HTMLSelectElement>("server-totp-digits");
+const serverTotpAlgorithmInput = elementById<HTMLSelectElement>("server-totp-algorithm");
 const groupOptions = elementById<HTMLDataListElement>("group-options");
 const authTypeInput = elementById<HTMLSelectElement>("auth-type");
 const serverUsernameField = elementById<HTMLDivElement>("server-username-field");
@@ -252,6 +277,59 @@ const serverPassphraseInput = elementById<HTMLInputElement>("server-passphrase")
 const browseKeyButton = elementById<HTMLButtonElement>("browse-key-button");
 const cancelServerButton = elementById<HTMLButtonElement>("cancel-server-button");
 const serverFormError = elementById<HTMLDivElement>("server-form-error");
+
+const folderDefaultsModal = elementById<HTMLDialogElement>("folder-defaults-modal");
+const folderDefaultsForm = elementById<HTMLFormElement>("folder-defaults-form");
+const folderDefaultsPathInput = elementById<HTMLInputElement>("folder-defaults-path");
+const folderDefaultsUsernameInput = elementById<HTMLInputElement>("folder-defaults-username");
+const folderDefaultsDomainInput = elementById<HTMLInputElement>("folder-defaults-domain");
+const folderDefaultsAuthInput = elementById<HTMLSelectElement>("folder-defaults-auth");
+const folderDefaultsPortInput = elementById<HTMLInputElement>("folder-defaults-port");
+const folderDefaultsPasswordField = elementById<HTMLDivElement>("folder-defaults-password-field");
+const folderDefaultsPasswordInput = elementById<HTMLInputElement>("folder-defaults-password");
+const folderDefaultsKeyField = elementById<HTMLDivElement>("folder-defaults-key-field");
+const folderDefaultsKeyInput = elementById<HTMLInputElement>("folder-defaults-key");
+const folderDefaultsPassphraseField = elementById<HTMLDivElement>("folder-defaults-passphrase-field");
+const folderDefaultsPassphraseInput = elementById<HTMLInputElement>("folder-defaults-passphrase");
+const folderDefaultsTimeoutInput = elementById<HTMLInputElement>("folder-defaults-timeout");
+const folderDefaultsKeepaliveInput = elementById<HTMLInputElement>("folder-defaults-keepalive");
+const folderDefaultsError = elementById<HTMLDivElement>("folder-defaults-error");
+const folderDefaultsDeleteButton = elementById<HTMLButtonElement>("folder-defaults-delete");
+const folderDefaultsCancelButton = elementById<HTMLButtonElement>("folder-defaults-cancel");
+
+const enterpriseModal = elementById<HTMLDialogElement>("enterprise-modal");
+const enterpriseCloseButton = elementById<HTMLButtonElement>("enterprise-close");
+const enterpriseError = elementById<HTMLDivElement>("enterprise-error");
+const externalToolForm = elementById<HTMLFormElement>("external-tool-form");
+const externalToolIdInput = elementById<HTMLInputElement>("external-tool-id");
+const externalToolNameInput = elementById<HTMLInputElement>("external-tool-name");
+const externalToolExecutableInput = elementById<HTMLInputElement>("external-tool-executable");
+const externalToolArgumentsInput = elementById<HTMLTextAreaElement>("external-tool-arguments");
+const externalToolResetButton = elementById<HTMLButtonElement>("external-tool-reset");
+const externalToolList = elementById<HTMLDivElement>("external-tool-list");
+const connectionTaskForm = elementById<HTMLFormElement>("connection-task-form");
+const connectionTaskIdInput = elementById<HTMLInputElement>("connection-task-id");
+const connectionTaskNameInput = elementById<HTMLInputElement>("connection-task-name");
+const connectionTaskKindInput = elementById<HTMLSelectElement>("connection-task-kind");
+const connectionTaskExecutableInput = elementById<HTMLInputElement>("connection-task-executable");
+const connectionTaskArgumentsInput = elementById<HTMLTextAreaElement>("connection-task-arguments");
+const connectionTaskWaitInput = elementById<HTMLInputElement>("connection-task-wait");
+const connectionTaskTimeoutInput = elementById<HTMLInputElement>("connection-task-timeout");
+const connectionTaskResetButton = elementById<HTMLButtonElement>("connection-task-reset");
+const connectionTaskList = elementById<HTMLDivElement>("connection-task-list");
+const syncSourceForm = elementById<HTMLFormElement>("sync-source-form");
+const syncSourceIdInput = elementById<HTMLInputElement>("sync-source-id");
+const syncSourceNameInput = elementById<HTMLInputElement>("sync-source-name");
+const syncSourceProviderInput = elementById<HTMLSelectElement>("sync-source-provider");
+const syncSourceEndpointInput = elementById<HTMLInputElement>("sync-source-endpoint");
+const syncSourceBaseDnInput = elementById<HTMLInputElement>("sync-source-base-dn");
+const syncSourceFilterInput = elementById<HTMLInputElement>("sync-source-filter");
+const syncSourceUsernameInput = elementById<HTMLInputElement>("sync-source-username");
+const syncSourcePasswordInput = elementById<HTMLInputElement>("sync-source-password");
+const syncSourceGroupInput = elementById<HTMLInputElement>("sync-source-group");
+const syncSourceProtocolInput = elementById<HTMLSelectElement>("sync-source-protocol");
+const syncSourceResetButton = elementById<HTMLButtonElement>("sync-source-reset");
+const syncSourceList = elementById<HTMLDivElement>("sync-source-list");
 
 const migrationModal = elementById<HTMLDialogElement>("migration-modal");
 const migrationImportFormat = elementById<HTMLSelectElement>("migration-import-format");
@@ -558,6 +636,8 @@ function tabContext(label: string, context?: Partial<SessionVariableContext>): S
     ip: context?.ip ?? context?.host ?? "",
     username: context?.username ?? "",
     group: context?.group ?? (label === "Welcome" ? "Local" : "Quick Connect"),
+    port: context?.port ?? 0,
+    profileId: context?.profileId,
   };
 }
 
@@ -605,6 +685,7 @@ function createWorkspaceTab(
     if ((event.target as HTMLElement).closest(".tab-close")) void closeTab(id);
     else activateTab(id);
   });
+  tabElement.addEventListener("contextmenu", (event) => openTabContextMenu(event, tab));
   activateTab(id);
   return tab;
 }
@@ -876,6 +957,12 @@ function updateTabStatus(tab: WorkspaceTab, status: WorkspaceStatus, message?: s
     updateSftpAvailability();
   }
   updateBroadcastControls();
+  if (!tab.postConnectStarted && tab.context.profileId && (status === "connected" || status === "running" || status === "ready")) {
+    tab.postConnectStarted = true;
+    void window.cybergrid.profiles.runPostConnect(tab.context.profileId).catch((error: unknown) => {
+      connectionState.textContent = `Post-connect task failed: ${errorMessage(error)}`;
+    });
+  }
 }
 
 function updateSshTabStatus(tab: WorkspaceTab, event: SshStatusEvent): void {
@@ -1031,16 +1118,20 @@ function handleWebStatus(event: WebStatusEvent): void {
 }
 
 function createTabForProfile(profile: ServerProfileSummary): WorkspaceTab {
-  if (profile.protocol === "rdp") return createRdpTab(profile.name, { host: profile.host, port: profile.port, username: profile.username });
-  if (profile.protocol === "vnc") return createVncTab(profile.name);
-  if (profile.protocol === "http" || profile.protocol === "https") return createWebTab(profile.name, profile.protocol);
-  return createTerminalTab(profile.name, profile.protocol, {
-    displayName: profile.name,
-    host: profile.host,
-    ip: profile.host,
-    username: profile.username,
-    group: profile.group,
+  let tab: WorkspaceTab;
+  if (profile.protocol === "rdp") tab = createRdpTab(profile.name, { host: profile.host, port: profile.port, username: profile.username });
+  else if (profile.protocol === "vnc") tab = createVncTab(profile.name);
+  else if (profile.protocol === "http" || profile.protocol === "https") tab = createWebTab(profile.name, profile.protocol);
+  else tab = createTerminalTab(profile.name, profile.protocol, {
+    displayName: profile.name, host: profile.host, ip: profile.host, username: profile.username,
+    group: profile.group, port: profile.port, profileId: profile.id,
   });
+  tab.context = tabContext(profile.name, {
+    displayName: profile.name, host: profile.host, ip: profile.host, username: profile.username,
+    group: profile.group, port: profile.port, profileId: profile.id,
+  });
+  tab.duplicate = () => connectSavedProfile(profile);
+  return tab;
 }
 
 async function attachProfileResult(tab: WorkspaceTab, result: ProfileConnectionResult): Promise<void> {
@@ -1070,8 +1161,9 @@ async function connectSavedProfile(profile: ServerProfileSummary): Promise<void>
 
 async function connectQuickSsh(config: SshConnectionConfig): Promise<void> {
   const tab = createTerminalTab(config.host, "ssh", {
-    host: config.host, ip: config.host, username: config.username, group: "Quick Connect",
+    host: config.host, ip: config.host, username: config.username, group: "Quick Connect", port: config.port,
   });
+  tab.duplicate = () => connectQuickSsh({ ...config });
   setTabConnecting(tab, `connecting to ${config.username}@${config.host}:${config.port}...`);
   try { attachSshSession(tab, await window.cybergrid.ssh.connect(config)); }
   catch (error) { handleConnectionFailure(tab, error); }
@@ -1079,6 +1171,8 @@ async function connectQuickSsh(config: SshConnectionConfig): Promise<void> {
 
 async function connectQuickRdp(config: RdpConnectionConfig): Promise<void> {
   const tab = createRdpTab(config.host, config);
+  tab.context = tabContext(config.host, { host: config.host, ip: config.host, username: config.username, port: config.port });
+  tab.duplicate = () => connectQuickRdp({ ...config });
   tab.status = "launching";
   updateConnectionState(tab);
   try { attachRdpSession(tab, await window.cybergrid.rdp.connect(config)); }
@@ -1087,8 +1181,9 @@ async function connectQuickRdp(config: RdpConnectionConfig): Promise<void> {
 
 async function connectQuickStream(config: StreamConnectionConfig): Promise<void> {
   const tab = createTerminalTab(config.host, config.protocol, {
-    host: config.host, ip: config.host, group: "Quick Connect",
+    host: config.host, ip: config.host, group: "Quick Connect", port: config.port,
   });
+  tab.duplicate = () => connectQuickStream({ ...config });
   setTabConnecting(tab, `connecting to ${config.host}:${config.port}...`);
   try { attachStreamSession(tab, await window.cybergrid.stream.connect(config)); }
   catch (error) { handleConnectionFailure(tab, error); }
@@ -1098,6 +1193,7 @@ async function connectQuickSerial(config: SerialConnectionConfig): Promise<void>
   const tab = createTerminalTab(config.path, "serial", {
     host: config.path, ip: config.path, group: "Quick Connect",
   });
+  tab.duplicate = () => connectQuickSerial({ ...config });
   setTabConnecting(tab, `opening ${config.path} at ${config.baudRate} baud...`);
   try { attachSerialSession(tab, await window.cybergrid.serial.connect(config)); }
   catch (error) { handleConnectionFailure(tab, error); }
@@ -1105,6 +1201,8 @@ async function connectQuickSerial(config: SerialConnectionConfig): Promise<void>
 
 async function connectQuickVnc(config: VncConnectionConfig): Promise<void> {
   const tab = createVncTab(config.host);
+  tab.context = tabContext(config.host, { host: config.host, ip: config.host, port: config.port });
+  tab.duplicate = () => connectQuickVnc({ ...config });
   setTabConnecting(tab, `connecting to VNC ${config.host}:${config.port}...`);
   try { await attachVncSession(tab, await window.cybergrid.vnc.connect(config)); }
   catch (error) { handleConnectionFailure(tab, error); }
@@ -1114,6 +1212,8 @@ async function connectQuickWeb(url: string): Promise<void> {
   const parsed = new URL(url);
   const protocol = parsed.protocol === "https:" ? "https" : "http";
   const tab = createWebTab(parsed.hostname, protocol);
+  tab.context = tabContext(parsed.hostname, { host: parsed.hostname, ip: parsed.hostname, port: Number(parsed.port || (protocol === "https" ? 443 : 80)) });
+  tab.duplicate = () => connectQuickWeb(url);
   updateTabStatus(tab, "loading");
   try { attachWebSession(tab, await window.cybergrid.web.connect({ url: parsed.toString() })); }
   catch (error) { handleConnectionFailure(tab, error); }
@@ -1264,18 +1364,213 @@ async function refreshAssets(): Promise<void> {
   renderAssets();
 }
 
+function argumentsFromTextarea(input: HTMLTextAreaElement): string[] {
+  return input.value.split(/\r?\n/).map((value) => value.trim()).filter(Boolean);
+}
+
+function recordButton(label: string, action: () => void): HTMLButtonElement {
+  const button = document.createElement("button");
+  button.className = "secondary-button compact-button";
+  button.type = "button";
+  button.textContent = label;
+  button.addEventListener("click", action);
+  return button;
+}
+
+function resetExternalToolForm(): void {
+  externalToolForm.reset();
+  externalToolIdInput.value = "";
+}
+
+function resetConnectionTaskForm(): void {
+  connectionTaskForm.reset();
+  connectionTaskIdInput.value = "";
+  connectionTaskWaitInput.checked = true;
+  connectionTaskTimeoutInput.value = "60";
+}
+
+function resetSyncSourceForm(): void {
+  syncSourceForm.reset();
+  syncSourceIdInput.value = "";
+  syncSourceGroupInput.value = "Synchronized";
+  updateSyncSourceFields();
+}
+
+function renderTaskOptions(): void {
+  for (const select of [serverPreTasksInput, serverPostTasksInput]) {
+    const selected = new Set([...select.selectedOptions].map((option) => option.value));
+    select.replaceChildren();
+    for (const task of connectionTasks) {
+      const option = document.createElement("option");
+      option.value = task.id;
+      option.textContent = `${task.kind === "vpn" ? "VPN" : "Script"} · ${task.name}`;
+      option.selected = selected.has(task.id);
+      select.append(option);
+    }
+  }
+}
+
+function renderEnterpriseData(): void {
+  externalToolList.replaceChildren();
+  for (const tool of externalTools) {
+    const row = createTextElement("div", "enterprise-record", "");
+    row.append(createTextElement("span", "", `${tool.name} · ${tool.executablePath}`));
+    row.append(
+      recordButton("Edit", () => {
+        externalToolIdInput.value = tool.id;
+        externalToolNameInput.value = tool.name;
+        externalToolExecutableInput.value = tool.executablePath;
+        externalToolArgumentsInput.value = tool.arguments.join("\n");
+      }),
+      recordButton("Delete", () => {
+        if (!window.confirm(`Delete external tool "${tool.name}"?`)) return;
+        void window.cybergrid.vault.deleteExternalTool(tool.id).then(refreshEnterpriseData)
+          .catch((error: unknown) => { enterpriseError.textContent = errorMessage(error); });
+      }),
+    );
+    externalToolList.append(row);
+  }
+
+  connectionTaskList.replaceChildren();
+  for (const task of connectionTasks) {
+    const row = createTextElement("div", "enterprise-record", "");
+    row.append(createTextElement("span", "", `${task.kind.toUpperCase()} · ${task.name} · ${task.waitForExit ? "wait" : "detached"}`));
+    row.append(
+      recordButton("Edit", () => {
+        connectionTaskIdInput.value = task.id;
+        connectionTaskNameInput.value = task.name;
+        connectionTaskKindInput.value = task.kind;
+        connectionTaskExecutableInput.value = task.executablePath;
+        connectionTaskArgumentsInput.value = task.arguments.join("\n");
+        connectionTaskWaitInput.checked = task.waitForExit;
+        connectionTaskTimeoutInput.value = String(task.timeoutSeconds);
+      }),
+      recordButton("Delete", () => {
+        if (!window.confirm(`Delete connection task "${task.name}" and remove it from profiles?`)) return;
+        void window.cybergrid.vault.deleteConnectionTask(task.id).then(refreshEnterpriseData)
+          .catch((error: unknown) => { enterpriseError.textContent = errorMessage(error); });
+      }),
+    );
+    connectionTaskList.append(row);
+  }
+
+  syncSourceList.replaceChildren();
+  for (const source of syncSources) {
+    const row = createTextElement("div", "enterprise-record", "");
+    row.append(createTextElement("span", "", `${source.provider.toUpperCase()} · ${source.name}${source.lastSyncedAt ? ` · ${new Date(source.lastSyncedAt).toLocaleString()}` : ""}`));
+    row.append(
+      recordButton("Sync now", () => {
+        enterpriseError.textContent = `Synchronizing ${source.name}...`;
+        void window.cybergrid.inventorySync.run(source.id).then(async (result) => {
+          await refreshVaultContent();
+          enterpriseError.textContent = `Sync complete: ${result.imported} added, ${result.updated} updated, ${result.removed} removed.`;
+        }).catch((error: unknown) => { enterpriseError.textContent = errorMessage(error); });
+      }),
+      recordButton("Edit", () => {
+        syncSourceIdInput.value = source.id;
+        syncSourceNameInput.value = source.name;
+        syncSourceProviderInput.value = source.provider;
+        syncSourceEndpointInput.value = source.endpoint;
+        syncSourceBaseDnInput.value = source.baseDn ?? "";
+        syncSourceFilterInput.value = source.filter ?? "";
+        syncSourceUsernameInput.value = source.username ?? "";
+        syncSourcePasswordInput.value = "";
+        syncSourcePasswordInput.placeholder = source.hasPassword ? "Stored password (leave blank to keep)" : "Password";
+        syncSourceGroupInput.value = source.group;
+        syncSourceProtocolInput.value = source.defaultProtocol;
+        updateSyncSourceFields();
+      }),
+      recordButton("Delete", () => {
+        if (!window.confirm(`Delete sync source "${source.name}" and its managed server nodes?`)) return;
+        void window.cybergrid.vault.deleteSyncSource(source.id).then(refreshVaultContent)
+          .catch((error: unknown) => { enterpriseError.textContent = errorMessage(error); });
+      }),
+    );
+    syncSourceList.append(row);
+  }
+  renderTaskOptions();
+}
+
+async function refreshEnterpriseData(): Promise<void> {
+  [folderDefaults, externalTools, connectionTasks, syncSources] = await Promise.all([
+    window.cybergrid.vault.listFolderDefaults(),
+    window.cybergrid.vault.listExternalTools(),
+    window.cybergrid.vault.listConnectionTasks(),
+    window.cybergrid.vault.listSyncSources(),
+  ]);
+  renderEnterpriseData();
+  renderProfiles();
+}
+
+function openEnterpriseModal(): void {
+  enterpriseError.textContent = "";
+  renderEnterpriseData();
+  if (!enterpriseModal.open) enterpriseModal.showModal();
+}
+
+function updateFolderDefaultsFields(): void {
+  const password = folderDefaultsAuthInput.value === "password";
+  const key = folderDefaultsAuthInput.value === "privateKey";
+  folderDefaultsPasswordField.hidden = !password;
+  folderDefaultsKeyField.hidden = !key;
+  folderDefaultsPassphraseField.hidden = !key;
+  folderDefaultsPasswordInput.required = password && !folderDefaultsPasswordInput.placeholder.startsWith("Stored");
+  folderDefaultsKeyInput.required = key;
+}
+
+function openFolderDefaultsModal(path: string): void {
+  folderDefaultsForm.reset();
+  folderDefaultsError.textContent = "";
+  const existing = folderDefaults.find((item) => item.path === path);
+  folderDefaultsPathInput.value = path;
+  folderDefaultsUsernameInput.value = existing?.username ?? "";
+  folderDefaultsDomainInput.value = existing?.domain ?? "";
+  folderDefaultsAuthInput.value = existing?.authType ?? "none";
+  folderDefaultsPortInput.value = existing?.port ? String(existing.port) : "";
+  folderDefaultsPasswordInput.value = "";
+  folderDefaultsPasswordInput.placeholder = existing?.hasPassword ? "Stored password (leave blank to keep)" : "";
+  folderDefaultsKeyInput.value = existing?.privateKeyPath ?? "";
+  folderDefaultsPassphraseInput.value = "";
+  folderDefaultsPassphraseInput.placeholder = existing?.hasPassphrase ? "Stored passphrase (leave blank to keep)" : "";
+  folderDefaultsTimeoutInput.value = existing?.readyTimeoutSeconds ? String(existing.readyTimeoutSeconds) : "";
+  folderDefaultsKeepaliveInput.value = existing?.keepaliveSeconds ? String(existing.keepaliveSeconds) : "";
+  folderDefaultsDeleteButton.disabled = !existing;
+  updateFolderDefaultsFields();
+  if (!folderDefaultsModal.open) folderDefaultsModal.showModal();
+}
+
+function updateSyncSourceFields(): void {
+  const provider = syncSourceProviderInput.value;
+  const ldap = provider === "ldap";
+  const hyperv = provider === "hyperv";
+  syncSourceEndpointInput.placeholder = ldap ? "ldaps://dc.example.com:636" : hyperv ? "hyperv-host.example.com" : "https://vcenter.example.com";
+  syncSourceBaseDnInput.disabled = !ldap;
+  syncSourceFilterInput.disabled = !ldap;
+  syncSourceUsernameInput.disabled = hyperv;
+  syncSourcePasswordInput.disabled = hyperv;
+}
+
 async function refreshVaultContent(): Promise<void> {
-  const [profiles, assets, snippets] = await Promise.all([
+  const [profiles, assets, snippets, defaults, tools, tasks, sources] = await Promise.all([
     window.cybergrid.vault.listProfiles(),
     window.cybergrid.vault.listAssets(),
     window.cybergrid.vault.listSnippets(),
+    window.cybergrid.vault.listFolderDefaults(),
+    window.cybergrid.vault.listExternalTools(),
+    window.cybergrid.vault.listConnectionTasks(),
+    window.cybergrid.vault.listSyncSources(),
   ]);
   savedProfiles = profiles;
   savedAssets = assets;
   savedSnippets = snippets;
+  folderDefaults = defaults;
+  externalTools = tools;
+  connectionTasks = tasks;
+  syncSources = sources;
   renderProfiles();
   renderAssets();
   renderSnippets();
+  renderEnterpriseData();
   await configureHealthMonitor();
 }
 
@@ -1447,6 +1742,125 @@ function closeServerContextMenu(): void {
   serverContextMenu.replaceChildren();
 }
 
+function positionContextMenu(x: number, y: number, estimatedHeight: number): void {
+  serverContextMenu.hidden = false;
+  const width = 250;
+  serverContextMenu.style.left = `${Math.max(8, Math.min(x, window.innerWidth - width - 8))}px`;
+  serverContextMenu.style.top = `${Math.max(8, Math.min(y, window.innerHeight - estimatedHeight - 8))}px`;
+  serverContextMenu.querySelector<HTMLButtonElement>("button")?.focus();
+}
+
+function appendContextAction(label: string, action: () => void, disabled = false): void {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.textContent = label;
+  button.disabled = disabled;
+  button.addEventListener("click", action);
+  serverContextMenu.append(button);
+}
+
+function appendContextSeparator(): void {
+  const separator = document.createElement("div");
+  separator.className = "context-separator";
+  serverContextMenu.append(separator);
+}
+
+async function runExternalToolForProfile(tool: ExternalToolRecord, profileId: string): Promise<void> {
+  if (!window.confirm(`Launch the local tool "${tool.name}" for this server?`)) return;
+  closeServerContextMenu();
+  try {
+    const result = await window.cybergrid.externalTools.run(tool.id, profileId);
+    connectionState.textContent = `${result.toolName} launched`;
+  } catch (error) {
+    window.alert(errorMessage(error));
+  }
+}
+
+async function copyProfileTotp(profileId: string): Promise<void> {
+  try {
+    const result = await window.cybergrid.vault.generateTotp(profileId);
+    await navigator.clipboard.writeText(result.code);
+    connectionState.textContent = `TOTP copied (${result.remainingSeconds}s remaining)`;
+  } catch (error) {
+    window.alert(errorMessage(error));
+  }
+  closeServerContextMenu();
+}
+
+function openExternalToolsMenu(event: MouseEvent): void {
+  event.preventDefault();
+  serverContextMenu.replaceChildren();
+  const active = activeTabId ? tabs.get(activeTabId) : undefined;
+  const profileId = active?.context.profileId;
+  if (externalTools.length === 0) {
+    appendContextAction("No tools configured", () => undefined, true);
+  } else {
+    for (const tool of externalTools) {
+      appendContextAction(tool.name, () => {
+        if (profileId) void runExternalToolForProfile(tool, profileId);
+      }, !profileId);
+    }
+  }
+  appendContextSeparator();
+  appendContextAction("Manage External Tools...", () => {
+    closeServerContextMenu();
+    openEnterpriseModal();
+  });
+  const rect = externalToolsButton.getBoundingClientRect();
+  positionContextMenu(rect.left, rect.bottom + 4, Math.min(420, 48 + externalTools.length * 34));
+}
+
+async function duplicateWorkspaceTab(tab: WorkspaceTab, split = false): Promise<void> {
+  if (!tab.duplicate) {
+    window.alert("This local tab cannot be duplicated because its original connection parameters are unavailable.");
+    return;
+  }
+  if (split) layoutMode = "grid";
+  await tab.duplicate();
+  renderWorkspaceLayout();
+}
+
+async function captureWorkspaceTab(tab: WorkspaceTab): Promise<void> {
+  const rect = tab.paneElement.getBoundingClientRect();
+  try {
+    const result = await window.cybergrid.system.captureScreenshot({
+      x: rect.left, y: rect.top, width: rect.width, height: rect.height, label: tab.label,
+    });
+    if (result.path) connectionState.textContent = `Screenshot saved: ${result.path}`;
+  } catch (error) {
+    window.alert(errorMessage(error));
+  }
+}
+
+function openTabContextMenu(event: MouseEvent, tab: WorkspaceTab): void {
+  event.preventDefault();
+  event.stopPropagation();
+  serverContextMenu.replaceChildren();
+  appendContextAction("Duplicate tab", () => {
+    closeServerContextMenu();
+    void duplicateWorkspaceTab(tab);
+  }, !tab.duplicate);
+  appendContextAction("Split session", () => {
+    closeServerContextMenu();
+    void duplicateWorkspaceTab(tab, true);
+  }, !tab.duplicate || !tab.terminal || tab.kind === "welcome");
+  appendContextAction("Capture screenshot...", () => {
+    closeServerContextMenu();
+    void captureWorkspaceTab(tab);
+  });
+  if (tab.context.profileId) {
+    const profile = savedProfiles.find((candidate) => candidate.id === tab.context.profileId);
+    if (profile?.hasTotp) appendContextAction("Copy current TOTP", () => void copyProfileTotp(profile.id));
+    if (externalTools.length > 0) {
+      appendContextSeparator();
+      for (const tool of externalTools) {
+        appendContextAction(`Tool: ${tool.name}`, () => void runExternalToolForProfile(tool, tab.context.profileId as string));
+      }
+    }
+  }
+  positionContextMenu(event.clientX, event.clientY, Math.min(500, 130 + externalTools.length * 34));
+}
+
 async function executeProfileDiagnostic(profile: ServerProfileSummary, kind: DiagnosticKind): Promise<void> {
   diagnosticResults.set(profile.id, "running");
   closeServerContextMenu();
@@ -1489,6 +1903,10 @@ function openServerContextMenu(event: MouseEvent, profile: ServerProfileSummary)
       .then(refreshProfiles)
       .catch((error: unknown) => window.alert(errorMessage(error)));
   });
+  if (profile.hasTotp) addAction("Copy current TOTP", () => void copyProfileTotp(profile.id));
+  for (const tool of externalTools) {
+    addAction(`Tool: ${tool.name}`, () => void runExternalToolForProfile(tool, profile.id));
+  }
   const separator = document.createElement("div");
   separator.className = "context-separator";
   serverContextMenu.append(separator);
@@ -1497,12 +1915,7 @@ function openServerContextMenu(event: MouseEvent, profile: ServerProfileSummary)
   addAction("Traceroute", () => void executeProfileDiagnostic(profile, "traceroute"), serial);
   addAction("DNS lookup", () => void executeProfileDiagnostic(profile, "dns"), serial);
   addAction(`Port check (${profile.port})`, () => void executeProfileDiagnostic(profile, "port"), serial);
-  serverContextMenu.hidden = false;
-  const width = 220;
-  const height = 258;
-  serverContextMenu.style.left = `${Math.max(8, Math.min(event.clientX, window.innerWidth - width - 8))}px`;
-  serverContextMenu.style.top = `${Math.max(8, Math.min(event.clientY, window.innerHeight - height - 8))}px`;
-  serverContextMenu.querySelector<HTMLButtonElement>("button")?.focus();
+  positionContextMenu(event.clientX, event.clientY, Math.min(520, 258 + externalTools.length * 34));
 }
 
 function diagnosticElement(profileId: string): HTMLElement | undefined {
@@ -1580,6 +1993,22 @@ function renderProfiles(): void {
       }
       renderProfiles();
     });
+    folderButton.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      serverContextMenu.replaceChildren();
+      appendContextAction("Edit inherited properties...", () => {
+        closeServerContextMenu();
+        openFolderDefaultsModal(group);
+      });
+      appendContextAction("Clear inherited properties", () => {
+        closeServerContextMenu();
+        void window.cybergrid.vault.deleteFolderDefaults(group)
+          .then(refreshEnterpriseData)
+          .catch((error: unknown) => window.alert(errorMessage(error)));
+      }, !folderDefaults.some((item) => item.path === group));
+      positionContextMenu(event.clientX, event.clientY, 90);
+    });
 
     const list = document.createElement("div");
     list.className = "server-list";
@@ -1590,13 +2019,13 @@ function renderProfiles(): void {
       const serverButton = document.createElement("button");
       serverButton.className = "server-item";
       serverButton.type = "button";
-      serverButton.title = "Double-click to connect";
+      serverButton.title = `Double-click to connect${profile.inheritFolderDefaults ? " · folder defaults enabled" : ""}`;
       const meta = createTextElement("span", "server-meta", "");
       const endpoint = profile.protocol === "serial"
         ? `${profile.host} / ${profile.baudRate ?? 9_600} baud`
         : `${profile.protocol.toUpperCase()}  ${profile.username ? `${profile.username}@` : ""}${profile.host}:${profile.port}`;
       meta.append(
-        createTextElement("span", "server-name", `${profile.favorite ? "★ " : ""}${profile.name}`),
+        createTextElement("span", "server-name", `${profile.favorite ? "★ " : ""}${profile.name}${profile.managedBySyncId ? " ↻" : ""}`),
         createTextElement(
           "span",
           "server-host",
@@ -1988,6 +2417,8 @@ function applyLockedRendererState(reason?: string): void {
   if (migrationModal.open) migrationModal.close();
   if (broadcastTargetsModal.open) broadcastTargetsModal.close();
   if (commandPalette.open) commandPalette.close();
+  if (enterpriseModal.open) enterpriseModal.close();
+  if (folderDefaultsModal.open) folderDefaultsModal.close();
   closeServerContextMenu();
   setSftpDrawerOpen(false);
   setSnippetsDrawerOpen(false);
@@ -1999,6 +2430,10 @@ function applyLockedRendererState(reason?: string): void {
   savedProfiles = [];
   savedAssets = [];
   savedSnippets = [];
+  folderDefaults = [];
+  externalTools = [];
+  connectionTasks = [];
+  syncSources = [];
   healthStatuses.clear();
   diagnosticResults.clear();
   renderProfiles();
@@ -2050,13 +2485,13 @@ function updateProfileFields(resetDefaults = false): void {
   serverSerialSection.hidden = !serial;
   serverBaudRateInput.required = serial;
   serverUsernameField.hidden = !usesUsername;
-  serverUsernameInput.required = usesUsername;
+  serverUsernameInput.required = usesUsername && !serverInheritFolderInput.checked;
   serverAuthField.hidden = !usesAuthentication;
   privateKeyOption?.toggleAttribute("disabled", protocol !== "ssh");
 
   if (resetDefaults) {
     if (!serial) serverPortInput.value = String(DEFAULT_PROTOCOL_PORTS[protocol]);
-    authTypeInput.value = usesAuthentication ? "password" : "none";
+    authTypeInput.value = usesAuthentication && !serverInheritFolderInput.checked ? "password" : "none";
   } else if (protocol !== "ssh" && authTypeInput.value === "privateKey") {
     authTypeInput.value = usesAuthentication ? "password" : "none";
   } else if (!usesAuthentication) {
@@ -2075,6 +2510,8 @@ function openServerModal(): void {
   serverForm.reset();
   serverProtocolInput.value = "ssh";
   serverBaudRateInput.value = "9600";
+  serverInheritFolderInput.checked = true;
+  renderTaskOptions();
   serverFormError.textContent = "";
   updateProfileFields(true);
   if (!serverModal.open) {
@@ -2289,6 +2726,111 @@ vaultForm.addEventListener("submit", async (event) => {
 });
 
 addServerButton.addEventListener("click", openServerModal);
+externalToolsButton.addEventListener("click", openExternalToolsMenu);
+enterpriseButton.addEventListener("click", openEnterpriseModal);
+enterpriseCloseButton.addEventListener("click", () => enterpriseModal.close());
+enterpriseModal.addEventListener("click", (event) => {
+  if (event.target === enterpriseModal) enterpriseModal.close();
+});
+
+externalToolResetButton.addEventListener("click", resetExternalToolForm);
+externalToolForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  enterpriseError.textContent = "";
+  const input: ExternalToolInput = {
+    id: externalToolIdInput.value || undefined,
+    name: externalToolNameInput.value.trim(),
+    executablePath: externalToolExecutableInput.value.trim(),
+    arguments: argumentsFromTextarea(externalToolArgumentsInput),
+  };
+  try {
+    await window.cybergrid.vault.saveExternalTool(input);
+    resetExternalToolForm();
+    await refreshEnterpriseData();
+  } catch (error) { enterpriseError.textContent = errorMessage(error); }
+});
+
+connectionTaskResetButton.addEventListener("click", resetConnectionTaskForm);
+connectionTaskForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  enterpriseError.textContent = "";
+  const input: ConnectionTaskInput = {
+    id: connectionTaskIdInput.value || undefined,
+    name: connectionTaskNameInput.value.trim(),
+    kind: connectionTaskKindInput.value as ConnectionTaskInput["kind"],
+    executablePath: connectionTaskExecutableInput.value.trim(),
+    arguments: argumentsFromTextarea(connectionTaskArgumentsInput),
+    waitForExit: connectionTaskWaitInput.checked,
+    timeoutSeconds: Number(connectionTaskTimeoutInput.value),
+  };
+  try {
+    await window.cybergrid.vault.saveConnectionTask(input);
+    resetConnectionTaskForm();
+    await refreshEnterpriseData();
+  } catch (error) { enterpriseError.textContent = errorMessage(error); }
+});
+
+syncSourceProviderInput.addEventListener("change", updateSyncSourceFields);
+syncSourceResetButton.addEventListener("click", resetSyncSourceForm);
+syncSourceForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  enterpriseError.textContent = "";
+  const input: InventorySyncSourceInput = {
+    id: syncSourceIdInput.value || undefined,
+    name: syncSourceNameInput.value.trim(),
+    provider: syncSourceProviderInput.value as InventorySyncSourceInput["provider"],
+    endpoint: syncSourceEndpointInput.value.trim(),
+    baseDn: syncSourceBaseDnInput.value.trim() || undefined,
+    username: syncSourceUsernameInput.value.trim() || undefined,
+    password: syncSourcePasswordInput.value || undefined,
+    filter: syncSourceFilterInput.value.trim() || undefined,
+    group: syncSourceGroupInput.value.trim(),
+    defaultProtocol: syncSourceProtocolInput.value as InventorySyncSourceInput["defaultProtocol"],
+  };
+  try {
+    await window.cybergrid.vault.saveSyncSource(input);
+    syncSourcePasswordInput.value = "";
+    resetSyncSourceForm();
+    await refreshEnterpriseData();
+  } catch (error) { enterpriseError.textContent = errorMessage(error); }
+});
+
+folderDefaultsAuthInput.addEventListener("change", updateFolderDefaultsFields);
+folderDefaultsCancelButton.addEventListener("click", () => folderDefaultsModal.close());
+folderDefaultsDeleteButton.addEventListener("click", async () => {
+  if (!window.confirm(`Clear inherited properties for "${folderDefaultsPathInput.value}"?`)) return;
+  try {
+    await window.cybergrid.vault.deleteFolderDefaults(folderDefaultsPathInput.value);
+    folderDefaultsModal.close();
+    await refreshEnterpriseData();
+  } catch (error) { folderDefaultsError.textContent = errorMessage(error); }
+});
+folderDefaultsForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  folderDefaultsError.textContent = "";
+  const input: FolderDefaultsInput = {
+    path: folderDefaultsPathInput.value,
+    username: folderDefaultsUsernameInput.value.trim() || undefined,
+    domain: folderDefaultsDomainInput.value.trim() || undefined,
+    authType: folderDefaultsAuthInput.value as FolderDefaultsInput["authType"],
+    password: folderDefaultsPasswordInput.value || undefined,
+    privateKeyPath: folderDefaultsKeyInput.value.trim() || undefined,
+    passphrase: folderDefaultsPassphraseInput.value || undefined,
+    port: folderDefaultsPortInput.value ? Number(folderDefaultsPortInput.value) : undefined,
+    readyTimeoutSeconds: folderDefaultsTimeoutInput.value ? Number(folderDefaultsTimeoutInput.value) : undefined,
+    keepaliveSeconds: folderDefaultsKeepaliveInput.value ? Number(folderDefaultsKeepaliveInput.value) : undefined,
+  };
+  try {
+    await window.cybergrid.vault.saveFolderDefaults(input);
+    folderDefaultsPasswordInput.value = "";
+    folderDefaultsPassphraseInput.value = "";
+    folderDefaultsModal.close();
+    await refreshEnterpriseData();
+  } catch (error) { folderDefaultsError.textContent = errorMessage(error); }
+});
+folderDefaultsModal.addEventListener("click", (event) => {
+  if (event.target === folderDefaultsModal) folderDefaultsModal.close();
+});
 migrationButton.addEventListener("click", () => {
   migrationStatus.textContent = "";
   migrationError.textContent = "";
@@ -2474,6 +3016,7 @@ lockButton.addEventListener("click", async () => {
 });
 
 serverProtocolInput.addEventListener("change", () => updateProfileFields(true));
+serverInheritFolderInput.addEventListener("change", () => updateProfileFields(false));
 authTypeInput.addEventListener("change", () => updateProfileFields(false));
 cancelServerButton.addEventListener("click", () => serverModal.close());
 browseKeyButton.addEventListener("click", async () => {
@@ -2509,12 +3052,23 @@ serverForm.addEventListener("submit", async (event) => {
     parity: protocol === "serial" ? serverParityInput.value as ServerProfileInput["parity"] : undefined,
     tags: [...new Set(serverTagsInput.value.split(",").map((tag) => tag.trim()).filter(Boolean))],
     favorite: serverFavoriteInput.checked,
+    inheritFolderDefaults: serverInheritFolderInput.checked,
+    domain: serverDomainInput.value.trim() || undefined,
+    readyTimeoutSeconds: serverTimeoutInput.value ? Number(serverTimeoutInput.value) : undefined,
+    keepaliveSeconds: serverKeepaliveInput.value ? Number(serverKeepaliveInput.value) : undefined,
+    preConnectTaskIds: [...serverPreTasksInput.selectedOptions].map((option) => option.value),
+    postConnectTaskIds: [...serverPostTasksInput.selectedOptions].map((option) => option.value),
+    totpSecret: serverTotpSecretInput.value || undefined,
+    totpDigits: serverTotpDigitsInput.value === "8" ? 8 : 6,
+    totpPeriod: 30,
+    totpAlgorithm: serverTotpAlgorithmInput.value as ServerProfileInput["totpAlgorithm"],
   };
 
   try {
     await window.cybergrid.vault.saveProfile(profile);
     serverPasswordInput.value = "";
     serverPassphraseInput.value = "";
+    serverTotpSecretInput.value = "";
     serverModal.close();
     await refreshProfiles();
   } catch (error) {

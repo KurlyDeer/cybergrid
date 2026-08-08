@@ -1797,6 +1797,37 @@
           display: none;
         }
       }
+
+      dialog.enterprise-dialog {
+        width: min(1120px, calc(100vw - 36px));
+        max-height: calc(100vh - 36px);
+      }
+
+      .enterprise-scroll {
+        max-height: calc(100vh - 210px);
+        overflow: auto;
+        padding: 18px;
+        display: grid;
+        gap: 16px;
+      }
+
+      .enterprise-card {
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        background: rgba(8, 13, 20, 0.62);
+        padding: 16px;
+      }
+
+      .enterprise-card h3 { margin: 0 0 6px; }
+      .enterprise-card > p { margin: 0 0 14px; color: var(--muted); }
+      .enterprise-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+      .enterprise-form-grid .full-width { grid-column: 1 / -1; }
+      .enterprise-actions { display: flex; align-items: end; gap: 8px; }
+      .enterprise-list { margin-top: 12px; display: grid; gap: 6px; }
+      .enterprise-record { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 7px; }
+      .enterprise-record > span { flex: 1; min-width: 0; }
+      .task-select { min-height: 92px; }
+      .folder-inheritance-note { color: var(--muted); font-size: 12px; }
     </style>
   </head>
   <body>
@@ -1860,6 +1891,8 @@
             <button class="toolbar-button" id="broadcast-targets-button" type="button" disabled>Targets (0/0)</button>
             <button class="toolbar-button" id="toggle-snippets-button" type="button">Snippets</button>
             <button class="toolbar-button" id="toggle-sftp-button" type="button" disabled>Files</button>
+            <button class="toolbar-button" id="external-tools-button" type="button">External Tools</button>
+            <button class="toolbar-button" id="enterprise-button" type="button">Enterprise</button>
             <button class="toolbar-button" id="migration-button" type="button">Import / Export</button>
             <button class="toolbar-button" id="settings-button" type="button">Settings</button>
           </div>
@@ -1964,10 +1997,12 @@
           <div class="field"><label for="server-group">Folder</label><input id="server-group" list="group-options" maxlength="100" placeholder="Production" autocomplete="off" /><datalist id="group-options"></datalist></div>
           <div class="field full-width"><label for="server-tags">Search tags</label><input id="server-tags" maxlength="680" placeholder="database, production, east-coast" autocomplete="off" /></div>
           <div class="checkbox-field full-width"><input id="server-favorite" type="checkbox" /><label class="checkbox-label" for="server-favorite">Favorite in system tray</label></div>
+          <div class="checkbox-field full-width"><input id="server-inherit-folder" type="checkbox" checked /><label class="checkbox-label" for="server-inherit-folder">Inherit credentials and connection properties from parent folders</label></div>
           <div class="field"><label for="server-protocol">Protocol</label><select id="server-protocol"><option value="ssh">SSH</option><option value="rdp">Windows RDP</option><option value="telnet">Telnet</option><option value="raw">RAW TCP</option><option value="vnc">VNC Desktop</option><option value="https">HTTPS Web</option><option value="http">HTTP Web</option><option value="serial">Serial / COM</option></select></div>
           <div class="field"><label for="server-host" id="server-host-label">Hostname or IP</label><input id="server-host" required maxlength="2048" autocomplete="off" /></div>
           <div class="field"><label for="server-port">Port</label><input id="server-port" type="number" min="1" max="65535" value="22" required /></div>
           <div class="field" id="server-username-field"><label for="server-username">Username</label><input id="server-username" maxlength="256" autocomplete="username" /></div>
+          <div class="field" id="server-domain-field"><label for="server-domain">Domain override</label><input id="server-domain" maxlength="256" placeholder="CORP" autocomplete="off" /></div>
           <div class="field" id="server-auth-field"><label for="auth-type">Authentication</label><select id="auth-type"><option value="none">None / interactive</option><option value="password">Password</option><option value="privateKey">SSH private key</option></select></div>
           <div class="auth-section" id="server-serial-section" hidden>
             <div class="field"><label for="server-baud-rate">Baud rate</label><input id="server-baud-rate" type="number" min="50" max="4000000" value="9600" /></div>
@@ -1982,6 +2017,13 @@
             <div class="field full-width"><label for="server-key-path">Private key path</label><div class="path-picker"><input id="server-key-path" maxlength="2048" autocomplete="off" /><button class="secondary-button" id="browse-key-button" type="button">Browse</button></div></div>
             <div class="field full-width"><label for="server-passphrase">Key passphrase (optional)</label><input id="server-passphrase" type="password" maxlength="4096" autocomplete="new-password" /></div>
           </div>
+          <div class="field"><label for="server-timeout">Connection timeout (seconds)</label><input id="server-timeout" type="number" min="1" max="300" placeholder="Inherited / 15" /></div>
+          <div class="field"><label for="server-keepalive">Keepalive interval (seconds)</label><input id="server-keepalive" type="number" min="1" max="300" placeholder="Inherited / 10" /></div>
+          <div class="field"><label for="server-pre-tasks">Pre-connect tasks</label><select class="task-select" id="server-pre-tasks" multiple></select></div>
+          <div class="field"><label for="server-post-tasks">Post-connect tasks</label><select class="task-select" id="server-post-tasks" multiple></select></div>
+          <div class="field full-width"><label for="server-totp-secret">TOTP secret or otpauth URI</label><input id="server-totp-secret" type="password" maxlength="2048" autocomplete="new-password" placeholder="Optional; encrypted in the vault" /></div>
+          <div class="field"><label for="server-totp-digits">TOTP digits</label><select id="server-totp-digits"><option value="6">6 digits</option><option value="8">8 digits</option></select></div>
+          <div class="field"><label for="server-totp-algorithm">TOTP algorithm</label><select id="server-totp-algorithm"><option value="sha1">SHA-1</option><option value="sha256">SHA-256</option><option value="sha512">SHA-512</option></select></div>
           <div class="token-help">Team profiles may reference personal environment variables in host, username, password, key path, and passphrase fields, for example <code>${DOMAIN}\\operator</code> and <code>${USER_SECRET}</code>. Tokens resolve only in the main process when connecting.</div>
           <div class="form-error" id="server-form-error" role="alert"></div>
         </div>
@@ -1990,6 +2032,79 @@
           <button class="primary-button" type="submit">Save server</button>
         </footer>
       </form>
+    </dialog>
+
+    <dialog id="folder-defaults-modal" aria-labelledby="folder-defaults-title">
+      <form id="folder-defaults-form">
+        <header class="modal-header"><h2 id="folder-defaults-title">Folder Inheritance</h2><p>Child folders inherit these encrypted defaults, with the nearest parent taking precedence.</p></header>
+        <div class="modal-body">
+          <div class="field full-width"><label for="folder-defaults-path">Folder path</label><input id="folder-defaults-path" required maxlength="100" readonly /></div>
+          <div class="field"><label for="folder-defaults-username">Default username</label><input id="folder-defaults-username" maxlength="256" autocomplete="username" /></div>
+          <div class="field"><label for="folder-defaults-domain">Default domain</label><input id="folder-defaults-domain" maxlength="256" autocomplete="off" /></div>
+          <div class="field"><label for="folder-defaults-auth">Default authentication</label><select id="folder-defaults-auth"><option value="none">None</option><option value="password">Password</option><option value="privateKey">SSH private key</option></select></div>
+          <div class="field"><label for="folder-defaults-port">Default port</label><input id="folder-defaults-port" type="number" min="1" max="65535" /></div>
+          <div class="field full-width" id="folder-defaults-password-field"><label for="folder-defaults-password">Default password</label><input id="folder-defaults-password" type="password" maxlength="4096" autocomplete="new-password" /></div>
+          <div class="field full-width" id="folder-defaults-key-field" hidden><label for="folder-defaults-key">Default private key path</label><input id="folder-defaults-key" maxlength="2048" autocomplete="off" /></div>
+          <div class="field full-width" id="folder-defaults-passphrase-field" hidden><label for="folder-defaults-passphrase">Key passphrase</label><input id="folder-defaults-passphrase" type="password" maxlength="4096" autocomplete="new-password" /></div>
+          <div class="field"><label for="folder-defaults-timeout">Connection timeout</label><input id="folder-defaults-timeout" type="number" min="1" max="300" placeholder="15 seconds" /></div>
+          <div class="field"><label for="folder-defaults-keepalive">Keepalive interval</label><input id="folder-defaults-keepalive" type="number" min="1" max="300" placeholder="10 seconds" /></div>
+          <div class="folder-inheritance-note full-width">Passwords, key paths, passphrases, and domain settings are stored only inside the encrypted vault.</div>
+          <div class="form-error" id="folder-defaults-error" role="alert"></div>
+        </div>
+        <footer class="modal-actions"><button class="secondary-button" id="folder-defaults-delete" type="button">Clear defaults</button><button class="secondary-button" id="folder-defaults-cancel" type="button">Cancel</button><button class="primary-button" type="submit">Save defaults</button></footer>
+      </form>
+    </dialog>
+
+    <dialog class="enterprise-dialog" id="enterprise-modal" aria-labelledby="enterprise-title">
+      <div>
+        <header class="modal-header"><h2 id="enterprise-title">Enterprise Integrations</h2><p>Manage local tools, connection automation, and authoritative inventory sources.</p></header>
+        <div class="enterprise-scroll">
+          <section class="enterprise-card">
+            <h3>External Tools</h3><p>Arguments accept $HOST, $IP, $PORT, and $USER. Processes launch directly without a command shell.</p>
+            <form id="external-tool-form" class="enterprise-form-grid">
+              <input id="external-tool-id" type="hidden" />
+              <div class="field"><label for="external-tool-name">Name</label><input id="external-tool-name" required maxlength="100" /></div>
+              <div class="field"><label for="external-tool-executable">Executable path or command</label><input id="external-tool-executable" required maxlength="2048" placeholder="C:\Program Files\Wireshark\Wireshark.exe" /></div>
+              <div class="field full-width"><label for="external-tool-arguments">Arguments, one per line</label><textarea id="external-tool-arguments" maxlength="65536" placeholder="-k&#10;-i&#10;$IP"></textarea></div>
+              <div class="enterprise-actions full-width"><button class="primary-button" type="submit">Save tool</button><button class="secondary-button" id="external-tool-reset" type="button">New</button></div>
+            </form>
+            <div class="enterprise-list" id="external-tool-list"></div>
+          </section>
+          <section class="enterprise-card">
+            <h3>VPN &amp; Pre/Post-Connect Tasks</h3><p>VPN launchers and scripts can block until success or start detached before/after a profile opens.</p>
+            <form id="connection-task-form" class="enterprise-form-grid">
+              <input id="connection-task-id" type="hidden" />
+              <div class="field"><label for="connection-task-name">Name</label><input id="connection-task-name" required maxlength="100" /></div>
+              <div class="field"><label for="connection-task-kind">Kind</label><select id="connection-task-kind"><option value="script">Local script</option><option value="vpn">VPN profile launcher</option></select></div>
+              <div class="field full-width"><label for="connection-task-executable">Executable</label><input id="connection-task-executable" required maxlength="2048" /></div>
+              <div class="field full-width"><label for="connection-task-arguments">Arguments, one per line</label><textarea id="connection-task-arguments" maxlength="65536"></textarea></div>
+              <div class="checkbox-field"><input id="connection-task-wait" type="checkbox" checked /><label class="checkbox-label" for="connection-task-wait">Wait for successful exit</label></div>
+              <div class="field"><label for="connection-task-timeout">Timeout seconds</label><input id="connection-task-timeout" type="number" min="1" max="900" value="60" /></div>
+              <div class="enterprise-actions full-width"><button class="primary-button" type="submit">Save task</button><button class="secondary-button" id="connection-task-reset" type="button">New</button></div>
+            </form>
+            <div class="enterprise-list" id="connection-task-list"></div>
+          </section>
+          <section class="enterprise-card">
+            <h3>Directory &amp; Hypervisor Sync</h3><p>Use trusted LDAPS for AD/LDAP, HTTPS for vCenter, or Windows integrated authentication for Hyper-V.</p>
+            <form id="sync-source-form" class="enterprise-form-grid">
+              <input id="sync-source-id" type="hidden" />
+              <div class="field"><label for="sync-source-name">Name</label><input id="sync-source-name" required maxlength="100" /></div>
+              <div class="field"><label for="sync-source-provider">Provider</label><select id="sync-source-provider"><option value="ldap">AD / LDAPS</option><option value="vmware">VMware vCenter</option><option value="hyperv">Microsoft Hyper-V</option></select></div>
+              <div class="field full-width"><label for="sync-source-endpoint">Endpoint / Hyper-V host</label><input id="sync-source-endpoint" required maxlength="2048" placeholder="ldaps://dc.example.com:636" /></div>
+              <div class="field"><label for="sync-source-base-dn">LDAP base DN</label><input id="sync-source-base-dn" maxlength="1024" placeholder="OU=Servers,DC=example,DC=com" /></div>
+              <div class="field"><label for="sync-source-filter">LDAP filter</label><input id="sync-source-filter" maxlength="512" placeholder="(objectClass=computer)" /></div>
+              <div class="field"><label for="sync-source-username">Bind / vCenter username</label><input id="sync-source-username" maxlength="512" autocomplete="username" /></div>
+              <div class="field"><label for="sync-source-password">Bind / vCenter password</label><input id="sync-source-password" type="password" maxlength="4096" autocomplete="new-password" /></div>
+              <div class="field"><label for="sync-source-group">Destination folder</label><input id="sync-source-group" required maxlength="100" value="Synchronized" /></div>
+              <div class="field"><label for="sync-source-protocol">Default connection</label><select id="sync-source-protocol"><option value="ssh">SSH</option><option value="rdp">RDP</option><option value="https">HTTPS</option></select></div>
+              <div class="enterprise-actions full-width"><button class="primary-button" type="submit">Save source</button><button class="secondary-button" id="sync-source-reset" type="button">New</button></div>
+            </form>
+            <div class="enterprise-list" id="sync-source-list"></div>
+          </section>
+          <div class="form-error" id="enterprise-error" role="alert"></div>
+        </div>
+        <footer class="modal-actions"><button class="secondary-button" id="enterprise-close" type="button">Close</button></footer>
+      </div>
     </dialog>
 
     <dialog id="migration-modal" aria-labelledby="migration-modal-title">

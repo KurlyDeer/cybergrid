@@ -13,7 +13,8 @@ import {
   type ProxyConfig,
   type WebContents,
 } from "electron";
-import { readFile, stat } from "node:fs/promises";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { lookup } from "node:dns/promises";
 import { basename, join, posix } from "node:path";
 import {
   IPC_CHANNELS,
@@ -22,10 +23,14 @@ import {
   type AssetInput,
   type AssetMetadata,
   type ConnectionProtocol,
+  type ConnectionTaskInput,
   type DeviceIcon,
   type DeviceOsFamily,
   type DiagnosticKind,
+  type ExternalToolInput,
+  type FolderDefaultsInput,
   type HealthTarget,
+  type InventorySyncSourceInput,
   type MigrationRequest,
   type OpenPortInfo,
   type ProfileConnectionResult,
@@ -33,6 +38,7 @@ import {
   type SerialConnectionConfig,
   type SerialParity,
   type ServerProfileInput,
+  type ScreenshotRequest,
   type SnippetInput,
   type SnippetLanguage,
   type SshConnectionConfig,
@@ -45,7 +51,9 @@ import {
 } from "../shared/ipc";
 import { AuditController, type AuditSessionContext } from "./audit";
 import { runDiagnostic } from "./diagnostics";
+import { launchExternalTool, runConnectionTasks } from "./enterprise";
 import { HealthController } from "./health";
+import { discoverInventory } from "./inventory-sync";
 import { MigrationController } from "./migration";
 import { DEFAULT_APP_PREFERENCES, PreferencesController } from "./preferences";
 import { RdpController } from "./rdp";
@@ -53,6 +61,7 @@ import { ScannerController } from "./scanner";
 import { SerialController } from "./serial";
 import { SshController } from "./ssh";
 import { StreamController } from "./stream";
+import { generateTotp, validateTotpSecret } from "./totp";
 import { VaultController } from "./vault";
 import { VncController } from "./vnc";
 import { WebController } from "./web";
@@ -219,6 +228,21 @@ function readTags(value: unknown, field: string): string[] {
   ))];
 }
 
+function readOptionalInteger(value: unknown, field: string, minimum: number, maximum: number): number | undefined {
+  if (value === undefined || value === null || value === "") return undefined;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < minimum || parsed > maximum) {
+    throw new Error(`${field} must be an integer between ${minimum} and ${maximum}.`);
+  }
+  return parsed;
+}
+
+function readUuidArray(value: unknown, field: string): string[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > 50) throw new Error(`${field} contains too many values.`);
+  return [...new Set(value.map((item) => readUuid(item, field)))];
+}
+
 function normalizeConnectionConfig(value: unknown): SshConnectionConfig {
   if (!isRecord(value)) {
     throw new Error("Invalid SSH connection configuration.");
@@ -313,7 +337,21 @@ function normalizeProfileInput(value: unknown): ServerProfileInput {
     authType,
     tags: readTags(value.tags, "Profile tags"),
     favorite: value.favorite === true,
+    inheritFolderDefaults: value.inheritFolderDefaults !== false,
+    domain: readString(value.domain, "Domain", { maxLength: 256, singleLine: true }),
+    readyTimeoutSeconds: readOptionalInteger(value.readyTimeoutSeconds, "Connection timeout", 1, 300),
+    keepaliveSeconds: readOptionalInteger(value.keepaliveSeconds, "Keepalive interval", 1, 300),
+    preConnectTaskIds: readUuidArray(value.preConnectTaskIds, "pre-connect task ID"),
+    postConnectTaskIds: readUuidArray(value.postConnectTaskIds, "post-connect task ID"),
   };
+  const totpSecret = readString(value.totpSecret, "TOTP secret", { maxLength: 2_048, trim: true });
+  if (totpSecret) {
+    profile.totpSecret = validateTotpSecret(totpSecret);
+    profile.totpDigits = value.totpDigits === 8 ? 8 : 6;
+    profile.totpPeriod = value.totpPeriod === 60 ? 60 : 30;
+    profile.totpAlgorithm = value.totpAlgorithm === "sha256" || value.totpAlgorithm === "sha512"
+      ? value.totpAlgorithm : "sha1";
+  }
   if (authType === "password") {
     profile.password = readString(value.password, "Password", {
       required: true,
@@ -349,6 +387,99 @@ function normalizeProfileInput(value: unknown): ServerProfileInput {
     profile.parity = readSerialParity(value.parity ?? "none");
   }
   return profile;
+}
+
+function normalizeFolderPath(value: unknown): string {
+  const path = (readString(value, "Folder path", { required: true, maxLength: 100, singleLine: true }) as string)
+    .replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+  const parts = path.split("/").map((part) => part.trim());
+  if (parts.some((part) => !part || part === "." || part === "..")) throw new Error("Folder path contains an invalid segment.");
+  return parts.join("/");
+}
+
+function normalizeFolderDefaults(value: unknown): FolderDefaultsInput {
+  if (!isRecord(value)) throw new Error("Invalid folder defaults.");
+  const authType = value.authType === "password" || value.authType === "privateKey" ? value.authType : "none";
+  const result: FolderDefaultsInput = {
+    path: normalizeFolderPath(value.path),
+    username: readString(value.username, "Default username", { maxLength: 256, singleLine: true }),
+    domain: readString(value.domain, "Default domain", { maxLength: 256, singleLine: true }),
+    authType,
+    port: readOptionalInteger(value.port, "Default port", 1, 65_535),
+    readyTimeoutSeconds: readOptionalInteger(value.readyTimeoutSeconds, "Connection timeout", 1, 300),
+    keepaliveSeconds: readOptionalInteger(value.keepaliveSeconds, "Keepalive interval", 1, 300),
+  };
+  if (authType === "password") {
+    result.password = readString(value.password, "Default password", { maxLength: 4_096, trim: false });
+  } else if (authType === "privateKey") {
+    result.privateKeyPath = readString(value.privateKeyPath, "Default private key", { maxLength: 2_048, singleLine: true });
+    result.passphrase = readString(value.passphrase, "Default key passphrase", { maxLength: 4_096, trim: false });
+  }
+  return result;
+}
+
+function readProcessArguments(value: unknown, field: string): string[] {
+  if (!Array.isArray(value) || value.length > 64) throw new Error(`${field} must contain at most 64 arguments.`);
+  return value.map((argument) => readString(argument, field, { required: true, maxLength: 8_192, singleLine: true }) as string);
+}
+
+function normalizeExternalTool(value: unknown): ExternalToolInput {
+  if (!isRecord(value)) throw new Error("Invalid external tool.");
+  return {
+    id: value.id === undefined || value.id === "" ? undefined : readUuid(value.id, "external tool ID"),
+    name: readString(value.name, "Tool name", { required: true, maxLength: 100, singleLine: true }) as string,
+    executablePath: readString(value.executablePath, "Executable", { required: true, maxLength: 2_048, singleLine: true }) as string,
+    arguments: readProcessArguments(value.arguments, "Tool arguments"),
+  };
+}
+
+function normalizeConnectionTask(value: unknown): ConnectionTaskInput {
+  if (!isRecord(value) || (value.kind !== "script" && value.kind !== "vpn")) throw new Error("Invalid connection task.");
+  return {
+    id: value.id === undefined || value.id === "" ? undefined : readUuid(value.id, "connection task ID"),
+    name: readString(value.name, "Task name", { required: true, maxLength: 100, singleLine: true }) as string,
+    kind: value.kind,
+    executablePath: readString(value.executablePath, "Task executable", { required: true, maxLength: 2_048, singleLine: true }) as string,
+    arguments: readProcessArguments(value.arguments, "Task arguments"),
+    waitForExit: value.waitForExit !== false,
+    timeoutSeconds: readOptionalInteger(value.timeoutSeconds, "Task timeout", 1, 900) ?? 60,
+  };
+}
+
+function normalizeSyncSource(value: unknown): InventorySyncSourceInput {
+  if (!isRecord(value) || (value.provider !== "ldap" && value.provider !== "vmware" && value.provider !== "hyperv")) {
+    throw new Error("Invalid inventory sync source.");
+  }
+  const endpoint = readString(value.endpoint, "Sync endpoint", { required: true, maxLength: 2_048, singleLine: true }) as string;
+  if (value.provider === "ldap" && new URL(endpoint).protocol !== "ldaps:") throw new Error("Directory sync requires an ldaps:// endpoint.");
+  if (value.provider === "vmware" && new URL(endpoint).protocol !== "https:") throw new Error("VMware sync requires an https:// endpoint.");
+  if (value.provider === "hyperv" && !/^[a-z0-9_.-]{1,253}$/i.test(endpoint)) throw new Error("Hyper-V host is invalid.");
+  const defaultProtocol = value.defaultProtocol === "rdp" || value.defaultProtocol === "https" ? value.defaultProtocol : "ssh";
+  return {
+    id: value.id === undefined || value.id === "" ? undefined : readUuid(value.id, "sync source ID"),
+    name: readString(value.name, "Sync source name", { required: true, maxLength: 100, singleLine: true }) as string,
+    provider: value.provider,
+    endpoint,
+    baseDn: readString(value.baseDn, "Base DN", { maxLength: 1_024, singleLine: true }),
+    username: readString(value.username, "Sync username", { maxLength: 512, singleLine: true }),
+    password: readString(value.password, "Sync password", { maxLength: 4_096, trim: false }),
+    filter: readString(value.filter, "LDAP filter", { maxLength: 512, singleLine: true }),
+    group: normalizeFolderPath(value.group),
+    defaultProtocol,
+  };
+}
+
+function normalizeScreenshotRequest(value: unknown): ScreenshotRequest {
+  if (!isRecord(value)) throw new Error("Invalid screenshot request.");
+  const values = [value.x, value.y, value.width, value.height].map(Number);
+  if (values.some((item) => !Number.isFinite(item) || item < 0 || item > 20_000) || (values[2] ?? 0) < 1 || (values[3] ?? 0) < 1) {
+    throw new Error("Screenshot bounds are invalid.");
+  }
+  return {
+    x: Math.round(values[0] as number), y: Math.round(values[1] as number),
+    width: Math.round(values[2] as number), height: Math.round(values[3] as number),
+    label: readString(value.label, "Screenshot label", { required: true, maxLength: 100, singleLine: true }) as string,
+  };
 }
 
 function readConnectionProtocol(value: unknown): ConnectionProtocol {
@@ -892,7 +1023,13 @@ async function connectionConfigForProfile(profileId: string): Promise<SshConnect
     host: resolveEnvironmentTokens(profile.host, "Host") as string,
     port: profile.port,
     username: resolveEnvironmentTokens(profile.username, "Username") ?? "",
-    readyTimeout: 15_000,
+    readyTimeout: (profile.readyTimeoutSeconds ?? 15) * 1_000,
+    keepaliveInterval: (profile.keepaliveSeconds ?? 10) * 1_000,
+    totpCode: profile.totpSecret ? generateTotp(profile.totpSecret, {
+      digits: profile.totpDigits,
+      period: profile.totpPeriod,
+      algorithm: profile.totpAlgorithm,
+    }).code : undefined,
   };
 
   if (profile.authType === "password") {
@@ -931,10 +1068,17 @@ async function connectProfile(profileId: string, sender: WebContents): Promise<P
     ip: host,
     username,
     group: profile.group,
+    port: profile.port,
+    profileId,
   };
+  await runConnectionTasks(
+    requireVault().getConnectionTasks(profile.preConnectTaskIds ?? []),
+    context,
+  );
+  const finish = async (result: ProfileConnectionResult): Promise<ProfileConnectionResult> => result;
   switch (profile.protocol) {
     case "ssh":
-      return {
+      return finish({
         protocol: "ssh",
         sessionId: sshController.connect(
           await connectionConfigForProfile(profileId),
@@ -942,12 +1086,12 @@ async function connectProfile(profileId: string, sender: WebContents): Promise<P
           auditContext("ssh", profile.name, `${host}:${profile.port}`, username, profile.group),
         ),
         context,
-      };
+      });
     case "rdp":
-      return { protocol: "rdp", sessionId: await requireRdp().connect({ host, port: profile.port, username }, sender), context };
+      return finish({ protocol: "rdp", sessionId: await requireRdp().connect({ host, port: profile.port, username }, sender), context });
     case "telnet":
     case "raw":
-      return {
+      return finish({
         protocol: profile.protocol,
         sessionId: streamController.connect(
           { protocol: profile.protocol, host, port: profile.port },
@@ -955,9 +1099,9 @@ async function connectProfile(profileId: string, sender: WebContents): Promise<P
           auditContext(profile.protocol, profile.name, `${host}:${profile.port}`, username, profile.group),
         ),
         context,
-      };
+      });
     case "serial":
-      return {
+      return finish({
         protocol: "serial",
         sessionId: serialController.connect(
           {
@@ -971,14 +1115,14 @@ async function connectProfile(profileId: string, sender: WebContents): Promise<P
           auditContext("serial", profile.name, host, username, profile.group),
         ),
         context,
-      };
+      });
     case "vnc": {
       const result = await vncController.connect({
         host,
         port: profile.port,
         password: resolveEnvironmentTokens(profile.password, "VNC password"),
       }, sender);
-      return { protocol: "vnc", ...result, context };
+      return finish({ protocol: "vnc", ...result, context });
     }
     case "http":
     case "https": {
@@ -986,7 +1130,7 @@ async function connectProfile(profileId: string, sender: WebContents): Promise<P
       const normalizedHost = host.replace(/^https?:\/\//i, "").replace(/\/$/, "");
       const port = profile.port === defaultPort ? "" : `:${profile.port}`;
       const sessionId = await requireWeb().connect({ url: `${profile.protocol}://${normalizedHost}${port}/` }, sender);
-      return { protocol: profile.protocol, sessionId, context };
+      return finish({ protocol: profile.protocol, sessionId, context });
     }
   }
 }
@@ -1017,6 +1161,20 @@ function registerIpcHandlers(): void {
   ipcMain.handle(IPC_CHANNELS.profileConnect, async (event, profileId: unknown) => {
     assertTrustedSender(event);
     return connectProfile(readUuid(profileId, "server profile ID"), event.sender);
+  });
+
+  ipcMain.handle(IPC_CHANNELS.profileRunPostConnect, async (event, profileId: unknown) => {
+    assertTrustedSender(event);
+    const profile = requireVault().getConnectionProfile(readUuid(profileId, "server profile ID"));
+    const host = resolveEnvironmentTokens(profile.host, profile.protocol === "serial" ? "Serial port" : "Host") as string;
+    const username = resolveEnvironmentTokens(profile.username, "Username") ?? "";
+    await runConnectionTasks(
+      requireVault().getConnectionTasks(profile.postConnectTaskIds ?? []),
+      {
+        displayName: profile.name, host, ip: host, username, group: profile.group,
+        port: profile.port, profileId: profile.id,
+      },
+    );
   });
 
   ipcMain.handle(IPC_CHANNELS.sshDisconnect, (event, sessionId: unknown) => {
@@ -1252,6 +1410,123 @@ function registerIpcHandlers(): void {
     );
     await refreshTrayMenu();
     return result;
+  });
+
+  ipcMain.handle(IPC_CHANNELS.vaultListFolderDefaults, (event) => {
+    assertTrustedSender(event);
+    return requireVault().listFolderDefaults();
+  });
+
+  ipcMain.handle(IPC_CHANNELS.vaultSaveFolderDefaults, async (event, input: unknown) => {
+    assertTrustedSender(event);
+    return requireVault().saveFolderDefaults(normalizeFolderDefaults(input));
+  });
+
+  ipcMain.handle(IPC_CHANNELS.vaultDeleteFolderDefaults, async (event, path: unknown) => {
+    assertTrustedSender(event);
+    await requireVault().deleteFolderDefaults(normalizeFolderPath(path));
+  });
+
+  ipcMain.handle(IPC_CHANNELS.vaultListExternalTools, (event) => {
+    assertTrustedSender(event);
+    return requireVault().listExternalTools();
+  });
+
+  ipcMain.handle(IPC_CHANNELS.vaultSaveExternalTool, async (event, input: unknown) => {
+    assertTrustedSender(event);
+    return requireVault().saveExternalTool(normalizeExternalTool(input));
+  });
+
+  ipcMain.handle(IPC_CHANNELS.vaultDeleteExternalTool, async (event, toolId: unknown) => {
+    assertTrustedSender(event);
+    await requireVault().deleteExternalTool(readUuid(toolId, "external tool ID"));
+  });
+
+  ipcMain.handle(IPC_CHANNELS.vaultListConnectionTasks, (event) => {
+    assertTrustedSender(event);
+    return requireVault().listConnectionTasks();
+  });
+
+  ipcMain.handle(IPC_CHANNELS.vaultSaveConnectionTask, async (event, input: unknown) => {
+    assertTrustedSender(event);
+    return requireVault().saveConnectionTask(normalizeConnectionTask(input));
+  });
+
+  ipcMain.handle(IPC_CHANNELS.vaultDeleteConnectionTask, async (event, taskId: unknown) => {
+    assertTrustedSender(event);
+    await requireVault().deleteConnectionTask(readUuid(taskId, "connection task ID"));
+  });
+
+  ipcMain.handle(IPC_CHANNELS.vaultListSyncSources, (event) => {
+    assertTrustedSender(event);
+    return requireVault().listSyncSources();
+  });
+
+  ipcMain.handle(IPC_CHANNELS.vaultSaveSyncSource, async (event, input: unknown) => {
+    assertTrustedSender(event);
+    return requireVault().saveSyncSource(normalizeSyncSource(input));
+  });
+
+  ipcMain.handle(IPC_CHANNELS.vaultDeleteSyncSource, async (event, sourceId: unknown) => {
+    assertTrustedSender(event);
+    await requireVault().deleteSyncSource(readUuid(sourceId, "sync source ID"));
+    await refreshTrayMenu();
+  });
+
+  ipcMain.handle(IPC_CHANNELS.vaultGenerateTotp, (event, profileId: unknown) => {
+    assertTrustedSender(event);
+    const profile = requireVault().getConnectionProfile(readUuid(profileId, "server profile ID"));
+    if (!profile.totpSecret) throw new Error("This server profile does not have a TOTP secret.");
+    return generateTotp(profile.totpSecret, {
+      digits: profile.totpDigits, period: profile.totpPeriod, algorithm: profile.totpAlgorithm,
+    });
+  });
+
+  ipcMain.handle(IPC_CHANNELS.externalToolRun, async (event, toolId: unknown, profileId: unknown) => {
+    assertTrustedSender(event);
+    const profile = requireVault().getConnectionProfile(readUuid(profileId, "server profile ID"));
+    const host = resolveEnvironmentTokens(profile.host, "Tool host") as string;
+    const username = resolveEnvironmentTokens(profile.username, "Tool username") ?? "";
+    const ip = profile.protocol === "serial" ? host : (await lookup(host).catch(() => ({ address: host }))).address;
+    return launchExternalTool(
+      requireVault().getExternalTool(readUuid(toolId, "external tool ID")),
+      { displayName: profile.name, host, ip, port: profile.port, username, group: profile.group, profileId: profile.id },
+    );
+  });
+
+  ipcMain.handle(IPC_CHANNELS.inventorySyncRun, async (event, sourceId: unknown) => {
+    assertTrustedSender(event);
+    const id = readUuid(sourceId, "sync source ID");
+    const candidates = await discoverInventory(requireVault().getSyncSource(id));
+    const normalized = candidates.map((candidate) => ({
+      ...normalizeProfileInput(candidate),
+      managedBySyncId: candidate.managedBySyncId,
+      managedObjectId: candidate.managedObjectId,
+    }));
+    const result = await requireVault().replaceSyncedProfiles(id, normalized);
+    await refreshTrayMenu();
+    return result;
+  });
+
+  ipcMain.handle(IPC_CHANNELS.sessionCaptureScreenshot, async (event, input: unknown) => {
+    assertTrustedSender(event);
+    if (!mainWindow) return { path: null };
+    const request = normalizeScreenshotRequest(input);
+    const image = await mainWindow.webContents.capturePage({
+      x: request.x, y: request.y, width: request.width, height: request.height,
+    });
+    const safeLabel = request.label.replace(/[^a-z0-9._-]+/gi, "-").replace(/^-+|-+$/g, "") || "session";
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const pictures = app.getPath("pictures");
+    await mkdir(pictures, { recursive: true });
+    const result = await dialog.showSaveDialog(mainWindow, {
+      title: "Save session screenshot",
+      defaultPath: join(pictures, `CyberGrid-${safeLabel}-${timestamp}.png`),
+      filters: [{ name: "PNG image", extensions: ["png"] }],
+    });
+    if (result.canceled || !result.filePath) return { path: null };
+    await writeFile(result.filePath, image.toPNG(), { mode: 0o600 });
+    return { path: result.filePath };
   });
 
   ipcMain.handle(IPC_CHANNELS.preferencesGet, (event) => {
