@@ -9,3 +9,7 @@ copyFileSync(
   join(projectRoot, "src", "renderer", "index.html"),
   join(rendererOutput, "index.html"),
 );
+copyFileSync(
+  join(projectRoot, "src", "renderer", "vnc-bootstrap.mjs"),
+  join(rendererOutput, "vnc-bootstrap.mjs"),
+);

@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src ws://127.0.0.1:*; object-src 'none'; base-uri 'none'; form-action 'none'"
     />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>CyberGrid</title>
@@ -288,6 +288,26 @@
         border-radius: 999px;
         background: var(--accent);
         box-shadow: 0 0 8px var(--accent-soft);
+      }
+
+      .server-dot.checking {
+        background: #e8b94b;
+        box-shadow: 0 0 8px rgba(232, 185, 75, 0.38);
+      }
+
+      .server-dot.online {
+        background: #4ee28a;
+        box-shadow: 0 0 9px rgba(78, 226, 138, 0.45);
+      }
+
+      .server-dot.offline {
+        background: var(--danger);
+        box-shadow: 0 0 9px color-mix(in srgb, var(--danger) 45%, transparent);
+      }
+
+      .server-dot.unsupported {
+        background: var(--muted);
+        box-shadow: none;
       }
 
       .server-meta {
@@ -708,6 +728,38 @@
         line-height: 1.5;
       }
 
+      .vnc-pane {
+        padding: 10px;
+        overflow: auto;
+        background: #05080c;
+      }
+
+      .vnc-screen {
+        display: grid;
+        min-width: 100%;
+        min-height: 100%;
+        place-items: center;
+        outline: none;
+      }
+
+      .vnc-screen canvas {
+        max-width: 100%;
+        max-height: 100%;
+        box-shadow: 0 0 0 1px var(--border);
+      }
+
+      .web-pane {
+        display: none;
+        place-items: center;
+        background: var(--background);
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .web-pane.active {
+        display: grid;
+      }
+
       .sftp-drawer {
         min-width: 0;
         overflow: hidden;
@@ -1041,6 +1093,52 @@
         white-space: nowrap;
       }
 
+      .token-help,
+      .migration-note {
+        grid-column: 1 / -1;
+        padding: 10px 12px;
+        border: 1px solid var(--border);
+        border-radius: 7px;
+        background: var(--panel-raised);
+        color: var(--muted);
+        font-size: 11px;
+        line-height: 1.5;
+      }
+
+      .token-help code {
+        color: var(--accent);
+        font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+      }
+
+      .migration-actions {
+        grid-column: 1 / -1;
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 12px;
+      }
+
+      .migration-action-card {
+        display: grid;
+        gap: 10px;
+        padding: 14px;
+        border: 1px solid var(--border);
+        border-radius: 9px;
+        background: var(--panel-raised);
+      }
+
+      .migration-action-card h3 {
+        margin: 0;
+        font-size: 13px;
+      }
+
+      .migration-status {
+        grid-column: 1 / -1;
+        min-height: 18px;
+        color: var(--muted);
+        font-size: 12px;
+        white-space: pre-wrap;
+      }
+
       .field {
         display: grid;
         gap: 5px;
@@ -1210,7 +1308,7 @@
 
         <div class="sidebar-scroll">
           <div class="sidebar-toolbar">
-            <h1>SSH Servers</h1>
+            <h1>Connections</h1>
             <div class="sidebar-toolbar-actions">
               <button class="icon-button" id="scan-button" type="button" title="Discover network assets" aria-label="Discover network assets">&#9678;</button>
               <button class="icon-button" id="add-server-button" type="button" title="Add server" aria-label="Add server">+</button>
@@ -1239,15 +1337,15 @@
             required
             autocomplete="off"
             spellcheck="false"
-            placeholder="ssh://user@host:22 or rdp://user@host:3389"
+            placeholder="ssh://, telnet://, raw://, vnc://, serial://, or https://"
             aria-label="Quick Connect URL"
           />
           <input
             id="quick-connect-password"
             type="password"
             autocomplete="current-password"
-            placeholder="SSH password (optional)"
-            aria-label="SSH password"
+            placeholder="SSH / VNC password (optional)"
+            aria-label="Connection password"
           />
           <button class="primary-button" type="submit">Connect</button>
         </form>
@@ -1256,6 +1354,7 @@
           <div class="tabs" id="tabs" role="tablist" aria-label="Connection sessions"></div>
           <div class="tab-actions">
             <button class="toolbar-button" id="toggle-sftp-button" type="button" disabled>Files</button>
+            <button class="toolbar-button" id="migration-button" type="button">Import / Export</button>
             <button class="toolbar-button" id="settings-button" type="button">Settings</button>
           </div>
           <div class="connection-state" id="connection-state">Ready</div>
@@ -1319,16 +1418,23 @@
     <dialog id="server-modal" aria-labelledby="server-modal-title">
       <form id="server-form">
         <header class="modal-header">
-          <h2 id="server-modal-title">Add SSH server</h2>
-          <p>Credentials are encrypted before the profile is persisted.</p>
+          <h2 id="server-modal-title">Add Connection</h2>
+          <p>Credentials and team token templates are encrypted before the profile is persisted.</p>
         </header>
         <div class="modal-body">
           <div class="field"><label for="server-name">Display name</label><input id="server-name" required maxlength="100" autocomplete="off" /></div>
           <div class="field"><label for="server-group">Folder</label><input id="server-group" list="group-options" maxlength="100" placeholder="Production" autocomplete="off" /><datalist id="group-options"></datalist></div>
-          <div class="field"><label for="server-host">Hostname or IP</label><input id="server-host" required maxlength="253" autocomplete="off" /></div>
+          <div class="field"><label for="server-protocol">Protocol</label><select id="server-protocol"><option value="ssh">SSH</option><option value="rdp">Windows RDP</option><option value="telnet">Telnet</option><option value="raw">RAW TCP</option><option value="vnc">VNC Desktop</option><option value="https">HTTPS Web</option><option value="http">HTTP Web</option><option value="serial">Serial / COM</option></select></div>
+          <div class="field"><label for="server-host" id="server-host-label">Hostname or IP</label><input id="server-host" required maxlength="2048" autocomplete="off" /></div>
           <div class="field"><label for="server-port">Port</label><input id="server-port" type="number" min="1" max="65535" value="22" required /></div>
-          <div class="field"><label for="server-username">Username</label><input id="server-username" required maxlength="128" autocomplete="username" /></div>
-          <div class="field"><label for="auth-type">Authentication</label><select id="auth-type"><option value="password">Password</option><option value="privateKey">SSH private key</option></select></div>
+          <div class="field" id="server-username-field"><label for="server-username">Username</label><input id="server-username" maxlength="256" autocomplete="username" /></div>
+          <div class="field" id="server-auth-field"><label for="auth-type">Authentication</label><select id="auth-type"><option value="none">None / interactive</option><option value="password">Password</option><option value="privateKey">SSH private key</option></select></div>
+          <div class="auth-section" id="server-serial-section" hidden>
+            <div class="field"><label for="server-baud-rate">Baud rate</label><input id="server-baud-rate" type="number" min="50" max="4000000" value="9600" /></div>
+            <div class="field"><label for="server-data-bits">Data bits</label><select id="server-data-bits"><option>8</option><option>7</option><option>6</option><option>5</option></select></div>
+            <div class="field"><label for="server-stop-bits">Stop bits</label><select id="server-stop-bits"><option>1</option><option>2</option></select></div>
+            <div class="field"><label for="server-parity">Parity</label><select id="server-parity"><option value="none">None</option><option value="even">Even</option><option value="odd">Odd</option><option value="mark">Mark</option><option value="space">Space</option></select></div>
+          </div>
           <div class="auth-section" id="server-password-section">
             <div class="field full-width"><label for="server-password">Password</label><input id="server-password" type="password" maxlength="4096" required autocomplete="new-password" /></div>
           </div>
@@ -1336,11 +1442,42 @@
             <div class="field full-width"><label for="server-key-path">Private key path</label><div class="path-picker"><input id="server-key-path" maxlength="2048" autocomplete="off" /><button class="secondary-button" id="browse-key-button" type="button">Browse</button></div></div>
             <div class="field full-width"><label for="server-passphrase">Key passphrase (optional)</label><input id="server-passphrase" type="password" maxlength="4096" autocomplete="new-password" /></div>
           </div>
+          <div class="token-help">Team profiles may reference personal environment variables in host, username, password, key path, and passphrase fields, for example <code>${DOMAIN}\\operator</code> and <code>${USER_SECRET}</code>. Tokens resolve only in the main process when connecting.</div>
           <div class="form-error" id="server-form-error" role="alert"></div>
         </div>
         <footer class="modal-actions">
           <button class="secondary-button" id="cancel-server-button" type="button">Cancel</button>
           <button class="primary-button" type="submit">Save server</button>
+        </footer>
+      </form>
+    </dialog>
+
+    <dialog id="migration-modal" aria-labelledby="migration-modal-title">
+      <form id="migration-form">
+        <header class="modal-header">
+          <h2 id="migration-modal-title">Migration &amp; Team Sharing</h2>
+          <p>Move connection trees between CyberGrid, mRemoteNG, PuTTY, and CSV workflows.</p>
+        </header>
+        <div class="modal-body">
+          <div class="migration-actions">
+            <section class="migration-action-card">
+              <h3>Import connections</h3>
+              <div class="field"><label for="migration-import-format">Format</label><select id="migration-import-format"><option value="auto">Auto-detect</option><option value="mremoteng">mRemoteNG XML</option><option value="putty">PuTTY Registry</option><option value="csv">CSV</option><option value="cgvault">CyberGrid Team Vault</option></select></div>
+              <button class="primary-button" id="migration-import-button" type="button">Choose file and import</button>
+            </section>
+            <section class="migration-action-card">
+              <h3>Export connections</h3>
+              <div class="field"><label for="migration-export-format">Format</label><select id="migration-export-format"><option value="cgvault">Encrypted Team Vault</option><option value="mremoteng">mRemoteNG XML</option><option value="putty">PuTTY Registry</option><option value="csv">CSV</option></select></div>
+              <button class="primary-button" id="migration-export-button" type="button">Choose destination and export</button>
+            </section>
+          </div>
+          <div class="field full-width"><label for="migration-passphrase">Team vault passphrase</label><input id="migration-passphrase" type="password" minlength="10" maxlength="1024" autocomplete="new-password" placeholder="Required only for .cgvault files" /></div>
+          <div class="migration-note">Only <strong>.cgvault</strong> exports contain passwords, protected with AES-256-GCM and scrypt. XML and PuTTY exports omit passwords; CSV exports include only environment-token password templates.</div>
+          <div class="migration-status" id="migration-status" role="status"></div>
+          <div class="form-error" id="migration-error" role="alert"></div>
+        </div>
+        <footer class="modal-actions">
+          <button class="secondary-button" id="migration-close-button" type="button">Close</button>
         </footer>
       </form>
     </dialog>
@@ -1427,6 +1564,7 @@
 
     <script src="../../node_modules/xterm/lib/xterm.js" defer></script>
     <script src="../../node_modules/xterm-addon-fit/lib/xterm-addon-fit.js" defer></script>
+    <script type="module" src="./vnc-bootstrap.mjs"></script>
     <script src="./renderer.js" defer></script>
   </body>
 </html>

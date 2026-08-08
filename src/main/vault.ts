@@ -12,12 +12,14 @@ import type {
   AssetInput,
   AssetMetadata,
   AssetRecord,
+  ConnectionProtocol,
   DeviceIcon,
   DeviceOsFamily,
   OpenPortInfo,
   ServerAuthType,
   ServerProfileInput,
   ServerProfileSummary,
+  SerialParity,
   VaultStatus,
 } from "../shared/ipc";
 
@@ -145,10 +147,33 @@ function parseEnvelope(value: unknown): VaultEnvelope {
 }
 
 function parseAuthType(value: unknown): ServerAuthType {
-  if (value === "password" || value === "privateKey") {
+  if (value === "none" || value === "password" || value === "privateKey") {
     return value;
   }
   throw new Error("Vault profile authentication type is invalid.");
+}
+
+function parseConnectionProtocol(value: unknown): ConnectionProtocol {
+  if (value === undefined) {
+    return "ssh";
+  }
+  if (
+    value === "ssh" || value === "rdp" || value === "telnet" || value === "raw" ||
+    value === "vnc" || value === "http" || value === "https" || value === "serial"
+  ) {
+    return value;
+  }
+  throw new Error("Vault profile protocol is invalid.");
+}
+
+function parseSerialParity(value: unknown): SerialParity | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (value === "none" || value === "even" || value === "odd" || value === "mark" || value === "space") {
+    return value;
+  }
+  throw new Error("Vault profile serial parity is invalid.");
 }
 
 function parseProfile(value: unknown): DecryptedServerProfile {
@@ -156,8 +181,9 @@ function parseProfile(value: unknown): DecryptedServerProfile {
     throw new Error("Vault profile is invalid.");
   }
 
+  const protocol = parseConnectionProtocol(value.protocol);
   const port = Number(value.port);
-  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+  if (!Number.isInteger(port) || port < (protocol === "serial" ? 0 : 1) || port > 65_535) {
     throw new Error("Vault profile port is invalid.");
   }
 
@@ -170,13 +196,33 @@ function parseProfile(value: unknown): DecryptedServerProfile {
     username: requireString(value.username, "profile.username"),
     group: requireString(value.group, "profile.group"),
     authType,
+    protocol,
     createdAt: requireString(value.createdAt, "profile.createdAt"),
     updatedAt: requireString(value.updatedAt, "profile.updatedAt"),
   };
 
+  if (protocol === "serial") {
+    const baudRate = Number(value.baudRate ?? 9_600);
+    const dataBits = Number(value.dataBits ?? 8);
+    const stopBits = Number(value.stopBits ?? 1);
+    if (!Number.isInteger(baudRate) || baudRate < 50 || baudRate > 4_000_000) {
+      throw new Error("Vault profile baud rate is invalid.");
+    }
+    if (dataBits !== 5 && dataBits !== 6 && dataBits !== 7 && dataBits !== 8) {
+      throw new Error("Vault profile data bits are invalid.");
+    }
+    if (stopBits !== 1 && stopBits !== 2) {
+      throw new Error("Vault profile stop bits are invalid.");
+    }
+    profile.baudRate = baudRate;
+    profile.dataBits = dataBits;
+    profile.stopBits = stopBits;
+    profile.parity = parseSerialParity(value.parity) ?? "none";
+  }
+
   if (authType === "password") {
     profile.password = requireString(value.password, "profile.password");
-  } else {
+  } else if (authType === "privateKey") {
     profile.privateKeyPath = requireString(value.privateKeyPath, "profile.privateKeyPath");
     if (value.passphrase !== undefined) {
       profile.passphrase = requireString(value.passphrase, "profile.passphrase");
@@ -359,6 +405,11 @@ function summarizeProfile(profile: DecryptedServerProfile): ServerProfileSummary
     username: profile.username,
     group: profile.group,
     authType: profile.authType,
+    protocol: profile.protocol,
+    baudRate: profile.baudRate,
+    dataBits: profile.dataBits,
+    stopBits: profile.stopBits,
+    parity: profile.parity,
   };
 }
 
@@ -473,6 +524,44 @@ export class VaultController {
       throw error;
     }
     return summarizeProfile(profile);
+  }
+
+  async importProfiles(inputs: ServerProfileInput[]): Promise<number> {
+    const payload = this.requirePayload();
+    const timestamp = new Date().toISOString();
+    const profiles: DecryptedServerProfile[] = inputs.map((input) => ({
+      ...input,
+      id: randomUUID(),
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    }));
+    payload.profiles.push(...profiles);
+    try {
+      await this.persist();
+    } catch (error) {
+      payload.profiles.splice(payload.profiles.length - profiles.length, profiles.length);
+      throw error;
+    }
+    return profiles.length;
+  }
+
+  exportProfiles(): ServerProfileInput[] {
+    return this.requirePayload().profiles.map((profile) => ({
+      protocol: profile.protocol,
+      name: profile.name,
+      host: profile.host,
+      port: profile.port,
+      username: profile.username,
+      group: profile.group,
+      authType: profile.authType,
+      password: profile.password,
+      privateKeyPath: profile.privateKeyPath,
+      passphrase: profile.passphrase,
+      baudRate: profile.baudRate,
+      dataBits: profile.dataBits,
+      stopBits: profile.stopBits,
+      parity: profile.parity,
+    }));
   }
 
   async deleteProfile(profileId: string): Promise<void> {

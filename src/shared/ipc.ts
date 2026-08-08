@@ -29,6 +29,31 @@ export const IPC_CHANNELS = {
   discoveryProgress: "cybergrid:discovery:progress",
   discoveryResult: "cybergrid:discovery:result",
   discoveryComplete: "cybergrid:discovery:complete",
+  profileConnect: "cybergrid:profile:connect",
+  streamConnect: "cybergrid:stream:connect",
+  streamDisconnect: "cybergrid:stream:disconnect",
+  streamWrite: "cybergrid:stream:write",
+  streamData: "cybergrid:stream:data",
+  streamStatus: "cybergrid:stream:status",
+  serialList: "cybergrid:serial:list",
+  serialConnect: "cybergrid:serial:connect",
+  serialDisconnect: "cybergrid:serial:disconnect",
+  serialWrite: "cybergrid:serial:write",
+  serialData: "cybergrid:serial:data",
+  serialStatus: "cybergrid:serial:status",
+  vncConnect: "cybergrid:vnc:connect",
+  vncDisconnect: "cybergrid:vnc:disconnect",
+  vncStatus: "cybergrid:vnc:status",
+  webConnect: "cybergrid:web:connect",
+  webDisconnect: "cybergrid:web:disconnect",
+  webSetBounds: "cybergrid:web:set-bounds",
+  webSetVisible: "cybergrid:web:set-visible",
+  webStatus: "cybergrid:web:status",
+  healthSetTargets: "cybergrid:health:set-targets",
+  healthRefresh: "cybergrid:health:refresh",
+  healthStatus: "cybergrid:health:status",
+  migrationImport: "cybergrid:migration:import",
+  migrationExport: "cybergrid:migration:export",
   selectPrivateKey: "cybergrid:dialog:select-private-key",
 } as const;
 
@@ -108,9 +133,21 @@ export interface RdpStatusEvent {
   message?: string;
 }
 
-export type ServerAuthType = "password" | "privateKey";
+export type ConnectionProtocol =
+  | "ssh"
+  | "rdp"
+  | "telnet"
+  | "raw"
+  | "vnc"
+  | "http"
+  | "https"
+  | "serial";
+
+export type ServerAuthType = "none" | "password" | "privateKey";
+export type SerialParity = "none" | "even" | "odd" | "mark" | "space";
 
 export interface ServerProfileInput {
+  protocol: ConnectionProtocol;
   name: string;
   host: string;
   port: number;
@@ -120,6 +157,10 @@ export interface ServerProfileInput {
   password?: string;
   privateKeyPath?: string;
   passphrase?: string;
+  baudRate?: number;
+  dataBits?: 5 | 6 | 7 | 8;
+  stopBits?: 1 | 2;
+  parity?: SerialParity;
 }
 
 export interface ServerProfileSummary {
@@ -130,7 +171,130 @@ export interface ServerProfileSummary {
   username: string;
   group: string;
   authType: ServerAuthType;
+  protocol: ConnectionProtocol;
+  baudRate?: number;
+  dataBits?: 5 | 6 | 7 | 8;
+  stopBits?: 1 | 2;
+  parity?: SerialParity;
 }
+
+export interface StreamConnectionConfig {
+  protocol: "telnet" | "raw";
+  host: string;
+  port: number;
+}
+
+export interface StreamDataEvent {
+  sessionId: string;
+  data: string;
+}
+
+export interface StreamStatusEvent {
+  sessionId: string;
+  status: "connecting" | "connected" | "disconnected" | "error";
+  message?: string;
+}
+
+export interface SerialConnectionConfig {
+  path: string;
+  baudRate: number;
+  dataBits: 5 | 6 | 7 | 8;
+  stopBits: 1 | 2;
+  parity: SerialParity;
+}
+
+export interface SerialPortInfo {
+  path: string;
+  manufacturer?: string;
+  serialNumber?: string;
+  vendorId?: string;
+  productId?: string;
+}
+
+export interface SerialDataEvent {
+  sessionId: string;
+  data: string;
+}
+
+export interface SerialStatusEvent {
+  sessionId: string;
+  status: "opening" | "connected" | "disconnected" | "error";
+  message?: string;
+}
+
+export interface VncConnectionConfig {
+  host: string;
+  port: number;
+  password?: string;
+}
+
+export interface VncConnectionResult {
+  sessionId: string;
+  proxyUrl: string;
+  password?: string;
+}
+
+export interface VncStatusEvent {
+  sessionId: string;
+  status: "connecting" | "connected" | "disconnected" | "error";
+  message?: string;
+}
+
+export interface WebConnectionConfig {
+  url: string;
+}
+
+export interface WebBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface WebStatusEvent {
+  sessionId: string;
+  status: "loading" | "ready" | "error" | "closed";
+  message?: string;
+}
+
+export interface HealthTarget {
+  profileId: string;
+  host: string;
+  protocol: ConnectionProtocol;
+}
+
+export interface HealthStatusEvent {
+  profileId: string;
+  status: "checking" | "online" | "offline" | "unsupported";
+  latencyMs?: number;
+  checkedAt: string;
+}
+
+export type MigrationFormat = "auto" | "mremoteng" | "putty" | "csv" | "cgvault";
+
+export interface MigrationRequest {
+  format: MigrationFormat;
+  teamPassphrase?: string;
+}
+
+export interface MigrationResult {
+  imported: number;
+  warnings: string[];
+  path: string;
+}
+
+export interface MigrationExportResult {
+  exported: number;
+  path: string | null;
+}
+
+export type ProfileConnectionResult =
+  | { protocol: "ssh"; sessionId: string }
+  | { protocol: "rdp"; sessionId: string }
+  | { protocol: "telnet" | "raw"; sessionId: string }
+  | { protocol: "serial"; sessionId: string }
+  | ({ protocol: "vnc" } & VncConnectionResult)
+  | { protocol: "http" | "https"; sessionId: string };
 
 export interface VaultStatus {
   exists: boolean;
@@ -225,6 +389,9 @@ export interface AssetRecord extends Omit<AssetInput, "id"> {
 export type Unsubscribe = () => void;
 
 export interface CyberGridApi {
+  profiles: {
+    connect(profileId: string): Promise<ProfileConnectionResult>;
+  };
   ssh: {
     connect(config: SshConnectionConfig): Promise<string>;
     connectProfile(profileId: string): Promise<string>;
@@ -246,6 +413,33 @@ export interface CyberGridApi {
     disconnect(sessionId: string): Promise<void>;
     onStatus(listener: (event: RdpStatusEvent) => void): Unsubscribe;
   };
+  stream: {
+    connect(config: StreamConnectionConfig): Promise<string>;
+    disconnect(sessionId: string): Promise<void>;
+    write(sessionId: string, data: string): void;
+    onData(listener: (event: StreamDataEvent) => void): Unsubscribe;
+    onStatus(listener: (event: StreamStatusEvent) => void): Unsubscribe;
+  };
+  serial: {
+    list(): Promise<SerialPortInfo[]>;
+    connect(config: SerialConnectionConfig): Promise<string>;
+    disconnect(sessionId: string): Promise<void>;
+    write(sessionId: string, data: string): void;
+    onData(listener: (event: SerialDataEvent) => void): Unsubscribe;
+    onStatus(listener: (event: SerialStatusEvent) => void): Unsubscribe;
+  };
+  vnc: {
+    connect(config: VncConnectionConfig): Promise<VncConnectionResult>;
+    disconnect(sessionId: string): Promise<void>;
+    onStatus(listener: (event: VncStatusEvent) => void): Unsubscribe;
+  };
+  web: {
+    connect(config: WebConnectionConfig): Promise<string>;
+    disconnect(sessionId: string): Promise<void>;
+    setBounds(sessionId: string, bounds: WebBounds): void;
+    setVisible(sessionId: string, visible: boolean): void;
+    onStatus(listener: (event: WebStatusEvent) => void): Unsubscribe;
+  };
   vault: {
     status(): Promise<VaultStatus>;
     create(masterPassword: string): Promise<void>;
@@ -264,6 +458,15 @@ export interface CyberGridApi {
     onProgress(listener: (event: DiscoveryProgressEvent) => void): Unsubscribe;
     onResult(listener: (event: DiscoveryResultEvent) => void): Unsubscribe;
     onComplete(listener: (event: DiscoveryCompleteEvent) => void): Unsubscribe;
+  };
+  health: {
+    setTargets(targets: HealthTarget[]): Promise<void>;
+    refresh(): Promise<void>;
+    onStatus(listener: (event: HealthStatusEvent) => void): Unsubscribe;
+  };
+  migration: {
+    importConnections(request: MigrationRequest): Promise<MigrationResult | null>;
+    exportConnections(request: MigrationRequest): Promise<MigrationExportResult>;
   };
   system: {
     selectPrivateKey(): Promise<string | null>;

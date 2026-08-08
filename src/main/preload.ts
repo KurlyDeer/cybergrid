@@ -5,13 +5,27 @@ import type {
   DiscoveryCompleteEvent,
   DiscoveryProgressEvent,
   DiscoveryResultEvent,
+  HealthStatusEvent,
+  HealthTarget,
+  MigrationRequest,
   RdpStatusEvent,
+  SerialConnectionConfig,
+  SerialDataEvent,
+  SerialStatusEvent,
   ServerProfileInput,
   SftpProgressEvent,
   SshDataEvent,
   SshResizeRequest,
   SshStatusEvent,
   SshWriteRequest,
+  StreamConnectionConfig,
+  StreamDataEvent,
+  StreamStatusEvent,
+  VncConnectionConfig,
+  VncStatusEvent,
+  WebBounds,
+  WebConnectionConfig,
+  WebStatusEvent,
 } from "../shared/ipc";
 
 // Sandboxed Electron preloads cannot require arbitrary local modules at runtime.
@@ -47,10 +61,38 @@ const IPC_CHANNELS: typeof import("../shared/ipc").IPC_CHANNELS = {
   discoveryProgress: "cybergrid:discovery:progress",
   discoveryResult: "cybergrid:discovery:result",
   discoveryComplete: "cybergrid:discovery:complete",
+  profileConnect: "cybergrid:profile:connect",
+  streamConnect: "cybergrid:stream:connect",
+  streamDisconnect: "cybergrid:stream:disconnect",
+  streamWrite: "cybergrid:stream:write",
+  streamData: "cybergrid:stream:data",
+  streamStatus: "cybergrid:stream:status",
+  serialList: "cybergrid:serial:list",
+  serialConnect: "cybergrid:serial:connect",
+  serialDisconnect: "cybergrid:serial:disconnect",
+  serialWrite: "cybergrid:serial:write",
+  serialData: "cybergrid:serial:data",
+  serialStatus: "cybergrid:serial:status",
+  vncConnect: "cybergrid:vnc:connect",
+  vncDisconnect: "cybergrid:vnc:disconnect",
+  vncStatus: "cybergrid:vnc:status",
+  webConnect: "cybergrid:web:connect",
+  webDisconnect: "cybergrid:web:disconnect",
+  webSetBounds: "cybergrid:web:set-bounds",
+  webSetVisible: "cybergrid:web:set-visible",
+  webStatus: "cybergrid:web:status",
+  healthSetTargets: "cybergrid:health:set-targets",
+  healthRefresh: "cybergrid:health:refresh",
+  healthStatus: "cybergrid:health:status",
+  migrationImport: "cybergrid:migration:import",
+  migrationExport: "cybergrid:migration:export",
   selectPrivateKey: "cybergrid:dialog:select-private-key",
 };
 
 const api: CyberGridApi = {
+  profiles: {
+    connect: (profileId) => ipcRenderer.invoke(IPC_CHANNELS.profileConnect, profileId),
+  },
   ssh: {
     connect: (config) => ipcRenderer.invoke(IPC_CHANNELS.sshConnect, config),
     connectProfile: (profileId) =>
@@ -99,6 +141,59 @@ const api: CyberGridApi = {
       return () => ipcRenderer.removeListener(IPC_CHANNELS.rdpStatus, handler);
     },
   },
+  stream: {
+    connect: (config: StreamConnectionConfig) => ipcRenderer.invoke(IPC_CHANNELS.streamConnect, config),
+    disconnect: (sessionId) => ipcRenderer.invoke(IPC_CHANNELS.streamDisconnect, sessionId),
+    write: (sessionId, data) => ipcRenderer.send(IPC_CHANNELS.streamWrite, { sessionId, data }),
+    onData: (listener) => {
+      const handler = (_event: IpcRendererEvent, payload: StreamDataEvent) => listener(payload);
+      ipcRenderer.on(IPC_CHANNELS.streamData, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.streamData, handler);
+    },
+    onStatus: (listener) => {
+      const handler = (_event: IpcRendererEvent, payload: StreamStatusEvent) => listener(payload);
+      ipcRenderer.on(IPC_CHANNELS.streamStatus, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.streamStatus, handler);
+    },
+  },
+  serial: {
+    list: () => ipcRenderer.invoke(IPC_CHANNELS.serialList),
+    connect: (config: SerialConnectionConfig) => ipcRenderer.invoke(IPC_CHANNELS.serialConnect, config),
+    disconnect: (sessionId) => ipcRenderer.invoke(IPC_CHANNELS.serialDisconnect, sessionId),
+    write: (sessionId, data) => ipcRenderer.send(IPC_CHANNELS.serialWrite, { sessionId, data }),
+    onData: (listener) => {
+      const handler = (_event: IpcRendererEvent, payload: SerialDataEvent) => listener(payload);
+      ipcRenderer.on(IPC_CHANNELS.serialData, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.serialData, handler);
+    },
+    onStatus: (listener) => {
+      const handler = (_event: IpcRendererEvent, payload: SerialStatusEvent) => listener(payload);
+      ipcRenderer.on(IPC_CHANNELS.serialStatus, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.serialStatus, handler);
+    },
+  },
+  vnc: {
+    connect: (config: VncConnectionConfig) => ipcRenderer.invoke(IPC_CHANNELS.vncConnect, config),
+    disconnect: (sessionId) => ipcRenderer.invoke(IPC_CHANNELS.vncDisconnect, sessionId),
+    onStatus: (listener) => {
+      const handler = (_event: IpcRendererEvent, payload: VncStatusEvent) => listener(payload);
+      ipcRenderer.on(IPC_CHANNELS.vncStatus, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.vncStatus, handler);
+    },
+  },
+  web: {
+    connect: (config: WebConnectionConfig) => ipcRenderer.invoke(IPC_CHANNELS.webConnect, config),
+    disconnect: (sessionId) => ipcRenderer.invoke(IPC_CHANNELS.webDisconnect, sessionId),
+    setBounds: (sessionId: string, bounds: WebBounds) =>
+      ipcRenderer.send(IPC_CHANNELS.webSetBounds, sessionId, bounds),
+    setVisible: (sessionId: string, visible: boolean) =>
+      ipcRenderer.send(IPC_CHANNELS.webSetVisible, sessionId, visible),
+    onStatus: (listener) => {
+      const handler = (_event: IpcRendererEvent, payload: WebStatusEvent) => listener(payload);
+      ipcRenderer.on(IPC_CHANNELS.webStatus, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.webStatus, handler);
+    },
+  },
   vault: {
     status: () => ipcRenderer.invoke(IPC_CHANNELS.vaultStatus),
     create: (masterPassword) => ipcRenderer.invoke(IPC_CHANNELS.vaultCreate, masterPassword),
@@ -136,6 +231,21 @@ const api: CyberGridApi = {
       ipcRenderer.on(IPC_CHANNELS.discoveryComplete, handler);
       return () => ipcRenderer.removeListener(IPC_CHANNELS.discoveryComplete, handler);
     },
+  },
+  health: {
+    setTargets: (targets: HealthTarget[]) => ipcRenderer.invoke(IPC_CHANNELS.healthSetTargets, targets),
+    refresh: () => ipcRenderer.invoke(IPC_CHANNELS.healthRefresh),
+    onStatus: (listener) => {
+      const handler = (_event: IpcRendererEvent, payload: HealthStatusEvent) => listener(payload);
+      ipcRenderer.on(IPC_CHANNELS.healthStatus, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.healthStatus, handler);
+    },
+  },
+  migration: {
+    importConnections: (request: MigrationRequest) =>
+      ipcRenderer.invoke(IPC_CHANNELS.migrationImport, request),
+    exportConnections: (request: MigrationRequest) =>
+      ipcRenderer.invoke(IPC_CHANNELS.migrationExport, request),
   },
   system: {
     selectPrivateKey: () => ipcRenderer.invoke(IPC_CHANNELS.selectPrivateKey),

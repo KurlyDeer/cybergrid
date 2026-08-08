@@ -5,6 +5,7 @@ import {
   ipcMain,
   type IpcMainEvent,
   type IpcMainInvokeEvent,
+  type WebContents,
 } from "electron";
 import { readFile, stat } from "node:fs/promises";
 import { basename, join, posix } from "node:path";
@@ -13,24 +14,46 @@ import {
   type AdministrationProtocol,
   type AssetInput,
   type AssetMetadata,
+  type ConnectionProtocol,
   type DeviceIcon,
   type DeviceOsFamily,
+  type HealthTarget,
+  type MigrationRequest,
   type OpenPortInfo,
+  type ProfileConnectionResult,
   type RdpConnectionConfig,
+  type SerialConnectionConfig,
+  type SerialParity,
   type ServerProfileInput,
   type SshConnectionConfig,
   type SshResizeRequest,
   type SshWriteRequest,
+  type StreamConnectionConfig,
+  type VncConnectionConfig,
+  type WebBounds,
+  type WebConnectionConfig,
 } from "../shared/ipc";
+import { HealthController } from "./health";
+import { MigrationController } from "./migration";
 import { RdpController } from "./rdp";
 import { ScannerController } from "./scanner";
+import { SerialController } from "./serial";
 import { SshController } from "./ssh";
+import { StreamController } from "./stream";
 import { VaultController } from "./vault";
+import { VncController } from "./vnc";
+import { WebController } from "./web";
 
 const sshController = new SshController();
 const scannerController = new ScannerController();
+const streamController = new StreamController();
+const serialController = new SerialController();
+const vncController = new VncController();
+const healthController = new HealthController();
 let rdpController: RdpController | null = null;
 let vaultController: VaultController | null = null;
+let webController: WebController | null = null;
+let migrationController: MigrationController | null = null;
 let mainWindow: BrowserWindow | null = null;
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 
@@ -91,6 +114,20 @@ function requireRdp(): RdpController {
     throw new Error("RDP controller is not initialized.");
   }
   return rdpController;
+}
+
+function requireWeb(): WebController {
+  if (!webController) {
+    throw new Error("Embedded browser controller is not initialized.");
+  }
+  return webController;
+}
+
+function requireMigration(): MigrationController {
+  if (!migrationController) {
+    throw new Error("Migration controller is not initialized.");
+  }
+  return migrationController;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -196,59 +233,87 @@ function normalizeProfileInput(value: unknown): ServerProfileInput {
   if (!isRecord(value)) {
     throw new Error("Invalid server profile.");
   }
-
-  const name = readString(value.name, "Display name", { required: true, maxLength: 100 });
-  const host = readString(value.host, "Host", {
+  const protocol = readConnectionProtocol(value.protocol ?? "ssh");
+  const host = readString(value.host, protocol === "serial" ? "Serial port" : "Host", {
     required: true,
-    maxLength: 253,
+    maxLength: protocol === "serial" ? 2_048 : 253,
     singleLine: true,
-  });
-  const username = readString(value.username, "Username", {
-    required: true,
-    maxLength: 128,
-    singleLine: true,
-  });
-  const group = readString(value.group, "Folder", { maxLength: 100 }) ?? "Ungrouped";
-
-  if (value.authType === "password") {
-    const password = readString(value.password, "Password", {
+  }) as string;
+  const authType = value.authType === "password" || value.authType === "privateKey"
+    ? value.authType
+    : "none";
+  if (authType === "privateKey" && protocol !== "ssh") {
+    throw new Error("Private-key authentication is only available for SSH profiles.");
+  }
+  const defaultPorts: Record<ConnectionProtocol, number> = {
+    ssh: 22, rdp: 3389, telnet: 23, raw: 23, vnc: 5900,
+    http: 80, https: 443, serial: 0,
+  };
+  const port = protocol === "serial" ? 0 : readPort(value.port, defaultPorts[protocol]);
+  const profile: ServerProfileInput = {
+    protocol,
+    name: readString(value.name, "Display name", { required: true, maxLength: 100 }) as string,
+    host,
+    port,
+    username: readString(value.username, "Username", {
+      maxLength: 256,
+      singleLine: true,
+    }) ?? "",
+    group: readString(value.group, "Folder", { maxLength: 100 }) ?? "Ungrouped",
+    authType,
+  };
+  if (authType === "password") {
+    profile.password = readString(value.password, "Password", {
       required: true,
       maxLength: 4_096,
       trim: false,
     });
-    return {
-      name: name as string,
-      host: host as string,
-      port: readPort(value.port),
-      username: username as string,
-      group,
-      authType: "password",
-      password: password as string,
-    };
-  }
-
-  if (value.authType === "privateKey") {
-    const privateKeyPath = readString(value.privateKeyPath, "Private key path", {
+  } else if (authType === "privateKey") {
+    profile.privateKeyPath = readString(value.privateKeyPath, "Private key path", {
       required: true,
       maxLength: 2_048,
     });
-    const passphrase = readString(value.passphrase, "Key passphrase", {
+    profile.passphrase = readString(value.passphrase, "Key passphrase", {
       maxLength: 4_096,
       trim: false,
     });
-    return {
-      name: name as string,
-      host: host as string,
-      port: readPort(value.port),
-      username: username as string,
-      group,
-      authType: "privateKey",
-      privateKeyPath: privateKeyPath as string,
-      passphrase,
-    };
   }
+  if (protocol === "serial") {
+    const baudRate = Number(value.baudRate ?? 9_600);
+    const dataBits = Number(value.dataBits ?? 8);
+    const stopBits = Number(value.stopBits ?? 1);
+    if (!Number.isInteger(baudRate) || baudRate < 50 || baudRate > 4_000_000) {
+      throw new Error("Baud rate must be between 50 and 4,000,000.");
+    }
+    if (dataBits !== 5 && dataBits !== 6 && dataBits !== 7 && dataBits !== 8) {
+      throw new Error("Data bits must be 5, 6, 7, or 8.");
+    }
+    if (stopBits !== 1 && stopBits !== 2) {
+      throw new Error("Stop bits must be 1 or 2.");
+    }
+    profile.baudRate = baudRate;
+    profile.dataBits = dataBits;
+    profile.stopBits = stopBits;
+    profile.parity = readSerialParity(value.parity ?? "none");
+  }
+  return profile;
+}
 
-  throw new Error("Authentication method must be password or private key.");
+function readConnectionProtocol(value: unknown): ConnectionProtocol {
+  if (
+    value === "ssh" || value === "rdp" || value === "telnet" || value === "raw" ||
+    value === "vnc" || value === "http" || value === "https" || value === "serial"
+  ) {
+    return value;
+  }
+  throw new Error("Unsupported connection protocol.");
+}
+
+function readSerialParity(value: unknown): SerialParity {
+  if (value === "none" || value === "even" || value === "odd" || value === "mark" || value === "space") {
+    return value;
+  }
+  throw new Error("Serial parity must be none, even, odd, mark, or space.");
 }
 
 function readOsFamily(value: unknown): DeviceOsFamily {
@@ -414,20 +479,136 @@ function readRemotePath(value: unknown): string {
   return value;
 }
 
+export function resolveEnvironmentTokens(value: string | undefined, field: string): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const resolved = value.replace(/\$\{([A-Z_][A-Z0-9_]*)\}/g, (_match, variableName: string) => {
+    const replacement = process.env[variableName];
+    if (replacement === undefined) {
+      throw new Error(`${field} requires environment variable ${variableName}, but it is not defined.`);
+    }
+    return replacement;
+  });
+  if (resolved.includes("${")) {
+    throw new Error(`${field} contains an invalid environment-variable token.`);
+  }
+  if (resolved.length > 1_048_576 || resolved.includes("\0")) {
+    throw new Error(`${field} expands to an invalid value.`);
+  }
+  return resolved;
+}
+
+function normalizeStreamConfig(value: unknown): StreamConnectionConfig {
+  if (!isRecord(value) || (value.protocol !== "telnet" && value.protocol !== "raw")) {
+    throw new Error("Invalid Telnet/RAW connection configuration.");
+  }
+  return {
+    protocol: value.protocol,
+    host: readString(value.host, "Host", { required: true, maxLength: 253, singleLine: true }) as string,
+    port: readPort(value.port, value.protocol === "telnet" ? 23 : 23),
+  };
+}
+
+function normalizeSerialConfig(value: unknown): SerialConnectionConfig {
+  if (!isRecord(value)) {
+    throw new Error("Invalid serial connection configuration.");
+  }
+  const baudRate = Number(value.baudRate ?? 9_600);
+  const dataBits = Number(value.dataBits ?? 8);
+  const stopBits = Number(value.stopBits ?? 1);
+  if (!Number.isInteger(baudRate) || baudRate < 50 || baudRate > 4_000_000) {
+    throw new Error("Baud rate must be between 50 and 4,000,000.");
+  }
+  if (dataBits !== 5 && dataBits !== 6 && dataBits !== 7 && dataBits !== 8) {
+    throw new Error("Data bits must be 5, 6, 7, or 8.");
+  }
+  if (stopBits !== 1 && stopBits !== 2) {
+    throw new Error("Stop bits must be 1 or 2.");
+  }
+  return {
+    path: readString(value.path, "Serial port", { required: true, maxLength: 2_048, singleLine: true }) as string,
+    baudRate,
+    dataBits,
+    stopBits,
+    parity: readSerialParity(value.parity ?? "none"),
+  };
+}
+
+function normalizeVncConfig(value: unknown): VncConnectionConfig {
+  if (!isRecord(value)) {
+    throw new Error("Invalid VNC connection configuration.");
+  }
+  return {
+    host: readString(value.host, "Host", { required: true, maxLength: 253, singleLine: true }) as string,
+    port: readPort(value.port, 5900),
+    password: readString(value.password, "VNC password", { maxLength: 4_096, trim: false }),
+  };
+}
+
+function normalizeWebConfig(value: unknown): WebConnectionConfig {
+  if (!isRecord(value)) {
+    throw new Error("Invalid embedded browser configuration.");
+  }
+  const url = readString(value.url, "Web URL", { required: true, maxLength: 2_048, singleLine: true }) as string;
+  const parsed = new URL(url);
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error("Embedded browser URLs must use HTTP or HTTPS.");
+  }
+  return { url: parsed.toString() };
+}
+
+function normalizeWebBounds(value: unknown): WebBounds {
+  if (!isRecord(value)) {
+    throw new Error("Invalid browser bounds.");
+  }
+  const bounds: WebBounds = {
+    x: Number(value.x), y: Number(value.y), width: Number(value.width), height: Number(value.height),
+  };
+  if (Object.values(bounds).some((candidate) => !Number.isFinite(candidate) || candidate < 0 || candidate > 20_000)) {
+    throw new Error("Invalid browser bounds.");
+  }
+  return bounds;
+}
+
+function normalizeMigrationRequest(value: unknown): MigrationRequest {
+  if (!isRecord(value)) {
+    throw new Error("Invalid migration request.");
+  }
+  const format = value.format;
+  if (format !== "auto" && format !== "mremoteng" && format !== "putty" && format !== "csv" && format !== "cgvault") {
+    throw new Error("Unsupported migration format.");
+  }
+  return {
+    format,
+    teamPassphrase: readString(value.teamPassphrase, "Team passphrase", {
+      maxLength: 1_024,
+      trim: false,
+    }),
+  };
+}
+
 async function connectionConfigForProfile(profileId: string): Promise<SshConnectionConfig> {
   const profile = requireVault().getConnectionProfile(profileId);
+  if (profile.protocol !== "ssh") {
+    throw new Error("Selected profile is not an SSH connection.");
+  }
   const baseConfig: SshConnectionConfig = {
-    host: profile.host,
+    host: resolveEnvironmentTokens(profile.host, "Host") as string,
     port: profile.port,
-    username: profile.username,
+    username: resolveEnvironmentTokens(profile.username, "Username") ?? "",
     readyTimeout: 15_000,
   };
 
   if (profile.authType === "password") {
-    return { ...baseConfig, password: profile.password };
+    return { ...baseConfig, password: resolveEnvironmentTokens(profile.password, "Password") };
   }
 
-  const privateKeyPath = profile.privateKeyPath as string;
+  if (profile.authType === "none") {
+    return baseConfig;
+  }
+
+  const privateKeyPath = resolveEnvironmentTokens(profile.privateKeyPath, "Private key path") as string;
   const keyInfo = await stat(privateKeyPath).catch((error: NodeJS.ErrnoException) => {
     if (error.code === "ENOENT") {
       throw new Error(`Private key file not found: ${privateKeyPath}`);
@@ -441,8 +622,53 @@ async function connectionConfigForProfile(profileId: string): Promise<SshConnect
   return {
     ...baseConfig,
     privateKey: await readFile(privateKeyPath, "utf8"),
-    passphrase: profile.passphrase,
+    passphrase: resolveEnvironmentTokens(profile.passphrase, "Private key passphrase"),
   };
+}
+
+async function connectProfile(profileId: string, sender: WebContents): Promise<ProfileConnectionResult> {
+  const profile = requireVault().getConnectionProfile(profileId);
+  const host = resolveEnvironmentTokens(profile.host, profile.protocol === "serial" ? "Serial port" : "Host") as string;
+  const username = resolveEnvironmentTokens(profile.username, "Username") ?? "";
+  switch (profile.protocol) {
+    case "ssh":
+      return { protocol: "ssh", sessionId: sshController.connect(await connectionConfigForProfile(profileId), sender) };
+    case "rdp":
+      return { protocol: "rdp", sessionId: await requireRdp().connect({ host, port: profile.port, username }, sender) };
+    case "telnet":
+    case "raw":
+      return {
+        protocol: profile.protocol,
+        sessionId: streamController.connect({ protocol: profile.protocol, host, port: profile.port }, sender),
+      };
+    case "serial":
+      return {
+        protocol: "serial",
+        sessionId: serialController.connect({
+          path: host,
+          baudRate: profile.baudRate ?? 9_600,
+          dataBits: profile.dataBits ?? 8,
+          stopBits: profile.stopBits ?? 1,
+          parity: profile.parity ?? "none",
+        }, sender),
+      };
+    case "vnc": {
+      const result = await vncController.connect({
+        host,
+        port: profile.port,
+        password: resolveEnvironmentTokens(profile.password, "VNC password"),
+      }, sender);
+      return { protocol: "vnc", ...result };
+    }
+    case "http":
+    case "https": {
+      const defaultPort = profile.protocol === "https" ? 443 : 80;
+      const normalizedHost = host.replace(/^https?:\/\//i, "").replace(/\/$/, "");
+      const port = profile.port === defaultPort ? "" : `:${profile.port}`;
+      const sessionId = await requireWeb().connect({ url: `${profile.protocol}://${normalizedHost}${port}/` }, sender);
+      return { protocol: profile.protocol, sessionId };
+    }
+  }
 }
 
 function registerIpcHandlers(): void {
@@ -455,6 +681,11 @@ function registerIpcHandlers(): void {
     assertTrustedSender(event);
     const config = await connectionConfigForProfile(readUuid(profileId, "server profile ID"));
     return sshController.connect(config, event.sender);
+  });
+
+  ipcMain.handle(IPC_CHANNELS.profileConnect, async (event, profileId: unknown) => {
+    assertTrustedSender(event);
+    return connectProfile(readUuid(profileId, "server profile ID"), event.sender);
   });
 
   ipcMain.handle(IPC_CHANNELS.sshDisconnect, (event, sessionId: unknown) => {
@@ -536,6 +767,69 @@ function registerIpcHandlers(): void {
     requireRdp().disconnect(readUuid(sessionId, "RDP session ID"));
   });
 
+  ipcMain.handle(IPC_CHANNELS.streamConnect, (event, config: unknown) => {
+    assertTrustedSender(event);
+    return streamController.connect(normalizeStreamConfig(config), event.sender);
+  });
+
+  ipcMain.handle(IPC_CHANNELS.streamDisconnect, (event, sessionId: unknown) => {
+    assertTrustedSender(event);
+    streamController.disconnect(readUuid(sessionId, "terminal socket session ID"));
+  });
+
+  ipcMain.handle(IPC_CHANNELS.serialList, async (event) => {
+    assertTrustedSender(event);
+    return serialController.listPorts();
+  });
+
+  ipcMain.handle(IPC_CHANNELS.serialConnect, (event, config: unknown) => {
+    assertTrustedSender(event);
+    return serialController.connect(normalizeSerialConfig(config), event.sender);
+  });
+
+  ipcMain.handle(IPC_CHANNELS.serialDisconnect, (event, sessionId: unknown) => {
+    assertTrustedSender(event);
+    serialController.disconnect(readUuid(sessionId, "serial session ID"));
+  });
+
+  ipcMain.handle(IPC_CHANNELS.vncConnect, async (event, config: unknown) => {
+    assertTrustedSender(event);
+    return vncController.connect(normalizeVncConfig(config), event.sender);
+  });
+
+  ipcMain.handle(IPC_CHANNELS.vncDisconnect, (event, sessionId: unknown) => {
+    assertTrustedSender(event);
+    vncController.disconnect(readUuid(sessionId, "VNC session ID"));
+  });
+
+  ipcMain.handle(IPC_CHANNELS.webConnect, async (event, config: unknown) => {
+    assertTrustedSender(event);
+    return requireWeb().connect(normalizeWebConfig(config), event.sender);
+  });
+
+  ipcMain.handle(IPC_CHANNELS.webDisconnect, (event, sessionId: unknown) => {
+    assertTrustedSender(event);
+    requireWeb().disconnect(readUuid(sessionId, "browser session ID"));
+  });
+
+  ipcMain.on(IPC_CHANNELS.webSetBounds, (event, sessionId: unknown, bounds: unknown) => {
+    if (!isTrustedSender(event)) return;
+    try {
+      requireWeb().setBounds(readUuid(sessionId, "browser session ID"), normalizeWebBounds(bounds));
+    } catch (error) {
+      console.warn("Rejected embedded browser bounds:", error);
+    }
+  });
+
+  ipcMain.on(IPC_CHANNELS.webSetVisible, (event, sessionId: unknown, visible: unknown) => {
+    if (!isTrustedSender(event) || typeof visible !== "boolean") return;
+    try {
+      requireWeb().setVisible(readUuid(sessionId, "browser session ID"), visible);
+    } catch (error) {
+      console.warn("Rejected embedded browser visibility update:", error);
+    }
+  });
+
   ipcMain.handle(IPC_CHANNELS.vaultStatus, async (event) => {
     assertTrustedSender(event);
     return requireVault().status();
@@ -554,7 +848,12 @@ function registerIpcHandlers(): void {
   ipcMain.handle(IPC_CHANNELS.vaultLock, (event) => {
     assertTrustedSender(event);
     scannerController.cancelAll();
+    healthController.stop();
     sshController.disconnectAll("Credential vault locked.");
+    streamController.disconnectAll();
+    serialController.disconnectAll();
+    vncController.disconnectAll();
+    requireWeb().disconnectAll();
     requireRdp().disconnectAll();
     requireVault().lock();
   });
@@ -604,6 +903,70 @@ function registerIpcHandlers(): void {
     scannerController.cancel(readUuid(scanId, "scan ID"));
   });
 
+  ipcMain.handle(IPC_CHANNELS.healthSetTargets, (event, targets: unknown) => {
+    assertTrustedSender(event);
+    if (!Array.isArray(targets) || targets.length > 2_000) {
+      throw new Error("Invalid health-monitor target list.");
+    }
+    const normalized: HealthTarget[] = targets.map((target) => {
+      if (!isRecord(target)) throw new Error("Invalid health-monitor target.");
+      const profileId = readUuid(target.profileId, "health profile ID");
+      const profile = requireVault().getConnectionProfile(profileId);
+      let host = "invalid.invalid";
+      try {
+        host = resolveEnvironmentTokens(profile.host, "Health-check host") as string;
+      } catch {
+        // A teammate may not have populated a profile's local token yet. Keep the
+        // remaining health sweep active and report this target as unreachable.
+      }
+      return {
+        profileId,
+        host,
+        protocol: profile.protocol,
+      };
+    });
+    healthController.setTargets(normalized, event.sender);
+  });
+
+  ipcMain.handle(IPC_CHANNELS.healthRefresh, async (event) => {
+    assertTrustedSender(event);
+    await healthController.sweep();
+  });
+
+  ipcMain.handle(IPC_CHANNELS.migrationImport, async (event, rawRequest: unknown) => {
+    assertTrustedSender(event);
+    const parsed = await requireMigration().importConnections(normalizeMigrationRequest(rawRequest));
+    if (!parsed) return null;
+    const warnings = [...parsed.warnings];
+    const profiles: ServerProfileInput[] = [];
+    for (const candidate of parsed.profiles) {
+      try {
+        profiles.push(normalizeProfileInput(candidate));
+      } catch (error) {
+        warnings.push(`Skipped profile: ${error instanceof Error ? error.message : "invalid data"}`);
+      }
+    }
+    const imported = await requireVault().importProfiles(profiles);
+    for (const candidate of parsed.assets) {
+      try {
+        const asset = normalizeAssetInput(candidate);
+        await requireVault().saveAsset({ ...asset, id: undefined });
+      } catch (error) {
+        warnings.push(`Skipped asset: ${error instanceof Error ? error.message : "invalid data"}`);
+      }
+    }
+    return { imported, warnings, path: parsed.path };
+  });
+
+  ipcMain.handle(IPC_CHANNELS.migrationExport, async (event, rawRequest: unknown) => {
+    assertTrustedSender(event);
+    return requireMigration().exportConnections(
+      normalizeMigrationRequest(rawRequest),
+      requireVault().exportProfiles(),
+      requireVault().listAssets(),
+    );
+  });
+
   ipcMain.handle(IPC_CHANNELS.selectPrivateKey, async (event) => {
     assertTrustedSender(event);
     if (!mainWindow) {
@@ -635,6 +998,26 @@ function registerIpcHandlers(): void {
       sshController.write(payload.sessionId, payload.data);
     } catch (error) {
       console.warn("Rejected SSH write request:", error);
+    }
+  });
+
+  ipcMain.on(IPC_CHANNELS.streamWrite, (event, request: unknown) => {
+    if (!isTrustedSender(event)) return;
+    try {
+      if (!isRecord(request) || typeof request.data !== "string") throw new Error("Invalid stream write.");
+      streamController.write(readUuid(request.sessionId, "terminal socket session ID"), request.data);
+    } catch (error) {
+      console.warn("Rejected terminal socket write:", error);
+    }
+  });
+
+  ipcMain.on(IPC_CHANNELS.serialWrite, (event, request: unknown) => {
+    if (!isTrustedSender(event)) return;
+    try {
+      if (!isRecord(request) || typeof request.data !== "string") throw new Error("Invalid serial write.");
+      serialController.write(readUuid(request.sessionId, "serial session ID"), request.data);
+    } catch (error) {
+      console.warn("Rejected serial write:", error);
     }
   });
 
@@ -687,6 +1070,8 @@ if (!hasSingleInstanceLock) {
       join(app.getPath("userData"), "cybergrid-vault.json"),
     );
     rdpController = new RdpController(join(app.getPath("temp"), "CyberGrid", "rdp"));
+    webController = new WebController(() => mainWindow);
+    migrationController = new MigrationController(() => mainWindow);
     registerIpcHandlers();
     mainWindow = createMainWindow();
 
@@ -700,14 +1085,24 @@ if (!hasSingleInstanceLock) {
 
 app.on("before-quit", () => {
   scannerController.cancelAll();
+  healthController.stop();
   sshController.disconnectAll();
+  streamController.disconnectAll();
+  serialController.disconnectAll();
+  vncController.disconnectAll();
+  webController?.disconnectAll();
   rdpController?.disconnectAll();
   vaultController?.lock();
 });
 
 app.on("window-all-closed", () => {
   scannerController.cancelAll();
+  healthController.stop();
   sshController.disconnectAll();
+  streamController.disconnectAll();
+  serialController.disconnectAll();
+  vncController.disconnectAll();
+  webController?.disconnectAll();
   rdpController?.disconnectAll();
   vaultController?.lock();
   if (process.platform !== "darwin") {

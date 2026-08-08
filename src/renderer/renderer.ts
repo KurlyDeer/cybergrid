@@ -3,6 +3,7 @@ type ITheme = import("xterm").ITheme;
 type XtermTerminal = import("xterm").Terminal;
 type XtermFitAddon = import("xterm-addon-fit").FitAddon;
 type CyberGridApi = import("../shared/ipc").CyberGridApi;
+type ConnectionProtocol = import("../shared/ipc").ConnectionProtocol;
 type AssetInput = import("../shared/ipc").AssetInput;
 type AssetRecord = import("../shared/ipc").AssetRecord;
 type DeviceIcon = import("../shared/ipc").DeviceIcon;
@@ -10,9 +11,15 @@ type DiscoveredDevice = import("../shared/ipc").DiscoveredDevice;
 type DiscoveryCompleteEvent = import("../shared/ipc").DiscoveryCompleteEvent;
 type DiscoveryProgressEvent = import("../shared/ipc").DiscoveryProgressEvent;
 type DiscoveryResultEvent = import("../shared/ipc").DiscoveryResultEvent;
+type HealthStatusEvent = import("../shared/ipc").HealthStatusEvent;
+type MigrationFormat = import("../shared/ipc").MigrationFormat;
+type ProfileConnectionResult = import("../shared/ipc").ProfileConnectionResult;
 type RdpConnectionConfig = import("../shared/ipc").RdpConnectionConfig;
 type RdpConnectionStatus = import("../shared/ipc").RdpConnectionStatus;
 type RdpStatusEvent = import("../shared/ipc").RdpStatusEvent;
+type SerialConnectionConfig = import("../shared/ipc").SerialConnectionConfig;
+type SerialDataEvent = import("../shared/ipc").SerialDataEvent;
+type SerialStatusEvent = import("../shared/ipc").SerialStatusEvent;
 type ServerAuthType = import("../shared/ipc").ServerAuthType;
 type ServerProfileInput = import("../shared/ipc").ServerProfileInput;
 type ServerProfileSummary = import("../shared/ipc").ServerProfileSummary;
@@ -23,25 +30,48 @@ type SshConnectionConfig = import("../shared/ipc").SshConnectionConfig;
 type SshConnectionStatus = import("../shared/ipc").SshConnectionStatus;
 type SshDataEvent = import("../shared/ipc").SshDataEvent;
 type SshStatusEvent = import("../shared/ipc").SshStatusEvent;
+type StreamConnectionConfig = import("../shared/ipc").StreamConnectionConfig;
+type StreamDataEvent = import("../shared/ipc").StreamDataEvent;
+type StreamStatusEvent = import("../shared/ipc").StreamStatusEvent;
+type VncConnectionConfig = import("../shared/ipc").VncConnectionConfig;
+type VncStatusEvent = import("../shared/ipc").VncStatusEvent;
+type WebStatusEvent = import("../shared/ipc").WebStatusEvent;
 
 declare const Terminal: new (options?: ITerminalOptions) => XtermTerminal;
 declare const FitAddon: { FitAddon: new () => XtermFitAddon };
 
 interface Window {
   cybergrid: CyberGridApi;
+  NoVncRfb?: NoVncRfbConstructor;
 }
 
-type WorkspaceTabKind = "ssh" | "rdp" | "welcome";
-type WorkspaceStatus =
-  | SshConnectionStatus
-  | RdpConnectionStatus
-  | "idle";
+interface NoVncRfbInstance {
+  disconnect(): void;
+  focus(): void;
+  scaleViewport: boolean;
+  resizeSession: boolean;
+  addEventListener(type: string, listener: (event: Event) => void): void;
+}
+
+type NoVncRfbConstructor = new (
+  target: HTMLElement,
+  url: string,
+  options?: { credentials?: { password?: string } },
+) => NoVncRfbInstance;
+
+type WorkspaceTabKind = ConnectionProtocol | "welcome";
+type WorkspaceStatus = SshConnectionStatus | RdpConnectionStatus | "idle" | "loading" | "ready" | "opening";
 
 interface WorkspaceTab {
   id: string;
   kind: WorkspaceTabKind;
   sessionId?: string;
   rdpSessionId?: string;
+  streamSessionId?: string;
+  serialSessionId?: string;
+  vncSessionId?: string;
+  webSessionId?: string;
+  vncClient?: NoVncRfbInstance;
   terminal?: XtermTerminal;
   fitAddon?: XtermFitAddon;
   tabElement: HTMLButtonElement;
@@ -78,9 +108,20 @@ const SETTINGS_KEY = "cybergrid:terminal-settings:v1";
 const tabs = new Map<string, WorkspaceTab>();
 const sshSessions = new Map<string, WorkspaceTab>();
 const rdpSessions = new Map<string, WorkspaceTab>();
+const streamSessions = new Map<string, WorkspaceTab>();
+const serialSessions = new Map<string, WorkspaceTab>();
+const vncSessions = new Map<string, WorkspaceTab>();
+const webSessions = new Map<string, WorkspaceTab>();
 const queuedSshData = new Map<string, string[]>();
 const queuedSshStatus = new Map<string, SshStatusEvent>();
 const queuedRdpStatus = new Map<string, RdpStatusEvent>();
+const queuedStreamData = new Map<string, string[]>();
+const queuedStreamStatus = new Map<string, StreamStatusEvent>();
+const queuedSerialData = new Map<string, string[]>();
+const queuedSerialStatus = new Map<string, SerialStatusEvent>();
+const queuedVncStatus = new Map<string, VncStatusEvent>();
+const queuedWebStatus = new Map<string, WebStatusEvent>();
+const healthStatuses = new Map<string, HealthStatusEvent>();
 const collapsedGroups = new Set<string>();
 let savedProfiles: ServerProfileSummary[] = [];
 let savedAssets: AssetRecord[] = [];
@@ -116,6 +157,7 @@ const scanButton = elementById<HTMLButtonElement>("scan-button");
 const addServerButton = elementById<HTMLButtonElement>("add-server-button");
 const lockButton = elementById<HTMLButtonElement>("lock-button");
 const settingsButton = elementById<HTMLButtonElement>("settings-button");
+const migrationButton = elementById<HTMLButtonElement>("migration-button");
 const toggleSftpButton = elementById<HTMLButtonElement>("toggle-sftp-button");
 
 const sftpDrawer = elementById<HTMLElement>("sftp-drawer");
@@ -142,12 +184,21 @@ const vaultSubmit = elementById<HTMLButtonElement>("vault-submit");
 const serverModal = elementById<HTMLDialogElement>("server-modal");
 const serverForm = elementById<HTMLFormElement>("server-form");
 const serverNameInput = elementById<HTMLInputElement>("server-name");
+const serverProtocolInput = elementById<HTMLSelectElement>("server-protocol");
 const serverHostInput = elementById<HTMLInputElement>("server-host");
+const serverHostLabel = elementById<HTMLLabelElement>("server-host-label");
 const serverPortInput = elementById<HTMLInputElement>("server-port");
 const serverUsernameInput = elementById<HTMLInputElement>("server-username");
 const serverGroupInput = elementById<HTMLInputElement>("server-group");
 const groupOptions = elementById<HTMLDataListElement>("group-options");
 const authTypeInput = elementById<HTMLSelectElement>("auth-type");
+const serverUsernameField = elementById<HTMLDivElement>("server-username-field");
+const serverAuthField = elementById<HTMLDivElement>("server-auth-field");
+const serverSerialSection = elementById<HTMLDivElement>("server-serial-section");
+const serverBaudRateInput = elementById<HTMLInputElement>("server-baud-rate");
+const serverDataBitsInput = elementById<HTMLSelectElement>("server-data-bits");
+const serverStopBitsInput = elementById<HTMLSelectElement>("server-stop-bits");
+const serverParityInput = elementById<HTMLSelectElement>("server-parity");
 const serverPasswordSection = elementById<HTMLDivElement>("server-password-section");
 const serverPasswordInput = elementById<HTMLInputElement>("server-password");
 const serverKeySection = elementById<HTMLDivElement>("server-key-section");
@@ -156,6 +207,16 @@ const serverPassphraseInput = elementById<HTMLInputElement>("server-passphrase")
 const browseKeyButton = elementById<HTMLButtonElement>("browse-key-button");
 const cancelServerButton = elementById<HTMLButtonElement>("cancel-server-button");
 const serverFormError = elementById<HTMLDivElement>("server-form-error");
+
+const migrationModal = elementById<HTMLDialogElement>("migration-modal");
+const migrationImportFormat = elementById<HTMLSelectElement>("migration-import-format");
+const migrationExportFormat = elementById<HTMLSelectElement>("migration-export-format");
+const migrationPassphrase = elementById<HTMLInputElement>("migration-passphrase");
+const migrationImportButton = elementById<HTMLButtonElement>("migration-import-button");
+const migrationExportButton = elementById<HTMLButtonElement>("migration-export-button");
+const migrationCloseButton = elementById<HTMLButtonElement>("migration-close-button");
+const migrationStatus = elementById<HTMLDivElement>("migration-status");
+const migrationError = elementById<HTMLDivElement>("migration-error");
 
 const scanModal = elementById<HTMLDialogElement>("scan-modal");
 const scanForm = elementById<HTMLFormElement>("scan-form");
@@ -322,6 +383,11 @@ function errorMessage(error: unknown): string {
     .replace(/^Error:\s*/i, "");
 }
 
+const PROTOCOL_LABELS: Record<WorkspaceTabKind, string> = {
+  ssh: "SSH", rdp: "RDP", telnet: "TEL", raw: "RAW", vnc: "VNC",
+  http: "WEB", https: "WEB", serial: "COM", welcome: "CG",
+};
+
 function createWorkspaceTab(kind: WorkspaceTabKind, label: string): WorkspaceTab {
   const id = `tab-${++tabSequence}`;
   const tabElement = document.createElement("button");
@@ -329,25 +395,13 @@ function createWorkspaceTab(kind: WorkspaceTabKind, label: string): WorkspaceTab
   tabElement.type = "button";
   tabElement.role = "tab";
   tabElement.setAttribute("aria-selected", "false");
-
-  const statusElement = document.createElement("span");
-  statusElement.className = "tab-status";
+  const statusElement = createTextElement("span", "tab-status", "") as HTMLSpanElement;
   statusElement.setAttribute("aria-hidden", "true");
-
-  const protocolElement = document.createElement("span");
-  protocolElement.className = "tab-protocol";
-  protocolElement.textContent = kind === "rdp" ? "RDP" : kind === "ssh" ? "SSH" : "CG";
-
-  const labelElement = document.createElement("span");
-  labelElement.className = "tab-label";
-  labelElement.textContent = label;
-
-  const closeElement = document.createElement("span");
-  closeElement.className = "tab-close";
+  const protocolElement = createTextElement("span", "tab-protocol", PROTOCOL_LABELS[kind]);
+  const labelElement = createTextElement("span", "tab-label", label);
+  const closeElement = createTextElement("span", "tab-close", "\u00d7");
   closeElement.title = "Close tab";
   closeElement.setAttribute("aria-label", `Close ${label}`);
-  closeElement.textContent = "\u00d7";
-
   tabElement.append(statusElement, protocolElement, labelElement, closeElement);
   tabsElement.append(tabElement);
 
@@ -356,31 +410,20 @@ function createWorkspaceTab(kind: WorkspaceTabKind, label: string): WorkspaceTab
   paneElement.id = `pane-${id}`;
   paneElement.role = "tabpanel";
   terminalStack.append(paneElement);
-
-  const tab: WorkspaceTab = {
-    id,
-    kind,
-    tabElement,
-    statusElement,
-    paneElement,
-    status: "idle",
-  };
+  const tab: WorkspaceTab = { id, kind, tabElement, statusElement, paneElement, status: "idle" };
   tabs.set(id, tab);
-
   tabElement.addEventListener("click", (event) => {
-    const target = event.target as HTMLElement;
-    if (target.closest(".tab-close")) {
-      void closeTab(id);
-      return;
-    }
-    activateTab(id);
+    if ((event.target as HTMLElement).closest(".tab-close")) void closeTab(id);
+    else activateTab(id);
   });
-
   activateTab(id);
   return tab;
 }
 
-function createTerminalTab(label: string, kind: "ssh" | "welcome" = "ssh"): WorkspaceTab {
+function createTerminalTab(
+  label: string,
+  kind: "ssh" | "telnet" | "raw" | "serial" | "welcome" = "ssh",
+): WorkspaceTab {
   const tab = createWorkspaceTab(kind, label);
   tab.paneElement.classList.add("terminal-pane");
   const terminal = new Terminal({
@@ -398,16 +441,16 @@ function createTerminalTab(label: string, kind: "ssh" | "welcome" = "ssh"): Work
   terminal.open(tab.paneElement);
   tab.terminal = terminal;
   tab.fitAddon = fitAddon;
-
   terminal.onData((data) => {
-    if (tab.kind === "ssh" && tab.sessionId) {
-      window.cybergrid.ssh.write(tab.sessionId, data);
+    if (tab.kind === "ssh" && tab.sessionId) window.cybergrid.ssh.write(tab.sessionId, data);
+    else if ((tab.kind === "telnet" || tab.kind === "raw") && tab.streamSessionId) {
+      window.cybergrid.stream.write(tab.streamSessionId, data);
+    } else if (tab.kind === "serial" && tab.serialSessionId) {
+      window.cybergrid.serial.write(tab.serialSessionId, data);
     }
   });
   terminal.onResize(({ cols, rows }) => {
-    if (tab.kind === "ssh" && tab.sessionId) {
-      window.cybergrid.ssh.resize(tab.sessionId, cols, rows);
-    }
+    if (tab.kind === "ssh" && tab.sessionId) window.cybergrid.ssh.resize(tab.sessionId, cols, rows);
   });
   return tab;
 }
@@ -415,97 +458,127 @@ function createTerminalTab(label: string, kind: "ssh" | "welcome" = "ssh"): Work
 function createRdpTab(label: string, config: RdpConnectionConfig): WorkspaceTab {
   const tab = createWorkspaceTab("rdp", label);
   tab.paneElement.classList.add("rdp-pane");
-
   const canvas = document.createElement("div");
   canvas.className = "rdp-canvas";
-  const mark = document.createElement("div");
-  mark.className = "rdp-mark";
-  mark.textContent = "RDP";
+  const mark = createTextElement("div", "rdp-mark", "RDP");
   const title = document.createElement("h2");
   title.textContent = `${config.username}@${config.host}:${config.port}`;
   const message = document.createElement("p");
   message.textContent = "Preparing the native Windows Remote Desktop client...";
   tab.rdpMessageElement = message;
-  const note = document.createElement("div");
-  note.className = "rdp-native-note";
-  note.textContent =
-    "The secure desktop surface runs in the Windows RDP client. This tab tracks its lifecycle.";
+  const note = createTextElement("div", "rdp-native-note", "The secure desktop surface runs in the Windows RDP client. This tab tracks its lifecycle.");
   const disconnectButton = document.createElement("button");
   disconnectButton.className = "secondary-button";
   disconnectButton.type = "button";
   disconnectButton.textContent = "Close RDP session";
   disconnectButton.addEventListener("click", () => {
-    if (tab.rdpSessionId) {
-      void window.cybergrid.rdp.disconnect(tab.rdpSessionId);
-    }
+    if (tab.rdpSessionId) void window.cybergrid.rdp.disconnect(tab.rdpSessionId);
   });
   canvas.append(mark, title, message, note, disconnectButton);
   tab.paneElement.append(canvas);
   return tab;
 }
 
+function createVncTab(label: string): WorkspaceTab {
+  const tab = createWorkspaceTab("vnc", label);
+  tab.paneElement.classList.add("vnc-pane");
+  const screen = document.createElement("div");
+  screen.className = "vnc-screen";
+  screen.tabIndex = 0;
+  screen.append(createTextElement("div", "sidebar-empty", "Preparing embedded VNC canvas..."));
+  tab.paneElement.append(screen);
+  return tab;
+}
+
+function createWebTab(label: string, protocol: "http" | "https"): WorkspaceTab {
+  const tab = createWorkspaceTab(protocol, label);
+  tab.paneElement.classList.add("web-pane");
+  tab.paneElement.textContent = "Loading isolated Chromium management view...";
+  return tab;
+}
+
+function updateWebBounds(tab: WorkspaceTab): void {
+  if (!tab.webSessionId || activeTabId !== tab.id) return;
+  const rect = tab.paneElement.getBoundingClientRect();
+  window.cybergrid.web.setBounds(tab.webSessionId, {
+    x: rect.left, y: rect.top, width: rect.width, height: rect.height,
+  });
+}
+
 function activateTab(id: string): void {
   const tab = tabs.get(id);
-  if (!tab) {
-    return;
-  }
-
+  if (!tab) return;
   activeTabId = id;
   for (const candidate of tabs.values()) {
     const isActive = candidate.id === id;
     candidate.tabElement.classList.toggle("active", isActive);
     candidate.tabElement.setAttribute("aria-selected", String(isActive));
     candidate.paneElement.classList.toggle("active", isActive);
+    if (candidate.webSessionId) window.cybergrid.web.setVisible(candidate.webSessionId, isActive);
   }
-
   updateConnectionState(tab);
   updateSftpAvailability();
   requestAnimationFrame(() => {
     tab.fitAddon?.fit();
     tab.terminal?.focus();
+    tab.vncClient?.focus();
+    updateWebBounds(tab);
   });
   if (sftpDrawerOpen && tab.kind === "ssh" && tab.sessionId && tab.status === "connected") {
-    if (tab.sftp) {
-      renderSftpListing(tab.sftp);
-    } else {
-      void loadSftpDirectory(tab, ".");
-    }
+    if (tab.sftp) renderSftpListing(tab.sftp);
+    else void loadSftpDirectory(tab, ".");
   }
 }
 
 async function closeTab(id: string): Promise<void> {
   const tab = tabs.get(id);
-  if (!tab) {
-    return;
-  }
-
+  if (!tab) return;
   const tabOrder = [...tabs.keys()];
   const closedIndex = tabOrder.indexOf(id);
   tabs.delete(id);
   if (tab.sessionId) {
-    const sessionId = tab.sessionId;
-    sshSessions.delete(sessionId);
-    await window.cybergrid.ssh.disconnect(sessionId).catch(() => undefined);
-    queuedSshData.delete(sessionId);
-    queuedSshStatus.delete(sessionId);
+    sshSessions.delete(tab.sessionId);
+    await window.cybergrid.ssh.disconnect(tab.sessionId).catch(() => undefined);
+    queuedSshData.delete(tab.sessionId);
+    queuedSshStatus.delete(tab.sessionId);
   }
   if (tab.rdpSessionId) {
-    const sessionId = tab.rdpSessionId;
-    rdpSessions.delete(sessionId);
-    await window.cybergrid.rdp.disconnect(sessionId).catch(() => undefined);
-    queuedRdpStatus.delete(sessionId);
+    rdpSessions.delete(tab.rdpSessionId);
+    await window.cybergrid.rdp.disconnect(tab.rdpSessionId).catch(() => undefined);
+    queuedRdpStatus.delete(tab.rdpSessionId);
   }
-
+  if (tab.streamSessionId) {
+    streamSessions.delete(tab.streamSessionId);
+    await window.cybergrid.stream.disconnect(tab.streamSessionId).catch(() => undefined);
+    queuedStreamData.delete(tab.streamSessionId);
+    queuedStreamStatus.delete(tab.streamSessionId);
+  }
+  if (tab.serialSessionId) {
+    serialSessions.delete(tab.serialSessionId);
+    await window.cybergrid.serial.disconnect(tab.serialSessionId).catch(() => undefined);
+    queuedSerialData.delete(tab.serialSessionId);
+    queuedSerialStatus.delete(tab.serialSessionId);
+  }
+  if (tab.vncSessionId) {
+    vncSessions.delete(tab.vncSessionId);
+    tab.vncClient?.disconnect();
+    await window.cybergrid.vnc.disconnect(tab.vncSessionId).catch(() => undefined);
+    queuedVncStatus.delete(tab.vncSessionId);
+  }
+  if (tab.webSessionId) {
+    webSessions.delete(tab.webSessionId);
+    window.cybergrid.web.setVisible(tab.webSessionId, false);
+    await window.cybergrid.web.disconnect(tab.webSessionId).catch(() => undefined);
+    queuedWebStatus.delete(tab.webSessionId);
+  }
   tab.terminal?.dispose();
   tab.tabElement.remove();
   tab.paneElement.remove();
-
   if (activeTabId === id) {
     const remainingIds = [...tabs.keys()];
     const nextId = remainingIds[Math.min(closedIndex, remainingIds.length - 1)];
-    if (nextId) {
-      activateTab(nextId);
-    } else {
+    if (nextId) activateTab(nextId);
+    else {
       activeTabId = null;
       connectionState.textContent = "Ready";
       setSftpDrawerOpen(false);
@@ -513,46 +586,32 @@ async function closeTab(id: string): Promise<void> {
   }
 }
 
-function updateSshTabStatus(tab: WorkspaceTab, event: SshStatusEvent): void {
-  tab.status = event.status;
-  tab.statusElement.classList.toggle("connected", event.status === "connected");
-  tab.statusElement.classList.toggle("error", event.status === "error");
-  if (event.status === "error") {
-    tab.terminal?.writeln(
-      `\r\n\x1b[31mConnection error: ${event.message ?? "Unknown error"}\x1b[0m`,
-    );
-  } else if (event.status === "disconnected") {
-    tab.terminal?.writeln(`\r\n\x1b[90m${event.message ?? "Disconnected."}\x1b[0m`);
-  }
-
+function updateTabStatus(tab: WorkspaceTab, status: WorkspaceStatus, message?: string): void {
+  tab.status = status;
+  tab.statusElement.classList.toggle("connected", status === "connected" || status === "running" || status === "ready");
+  tab.statusElement.classList.toggle("error", status === "error");
+  if (status === "error") tab.terminal?.writeln(`\r\n\x1b[31mConnection error: ${message ?? "Unknown error"}\x1b[0m`);
+  else if (status === "disconnected" || status === "closed") tab.terminal?.writeln(`\r\n\x1b[90m${message ?? "Disconnected."}\x1b[0m`);
   if (activeTabId === tab.id) {
-    updateConnectionState(tab, event.message);
+    updateConnectionState(tab, message);
     updateSftpAvailability();
   }
 }
 
+function updateSshTabStatus(tab: WorkspaceTab, event: SshStatusEvent): void {
+  updateTabStatus(tab, event.status, event.message);
+}
+
 function updateRdpTabStatus(tab: WorkspaceTab, event: RdpStatusEvent): void {
-  tab.status = event.status;
-  tab.statusElement.classList.toggle("connected", event.status === "running");
-  tab.statusElement.classList.toggle("error", event.status === "error");
-  if (tab.rdpMessageElement) {
-    tab.rdpMessageElement.textContent = event.message ?? event.status;
-  }
-  if (activeTabId === tab.id) {
-    updateConnectionState(tab, event.message);
-  }
+  updateTabStatus(tab, event.status, event.message);
+  if (tab.rdpMessageElement) tab.rdpMessageElement.textContent = event.message ?? event.status;
 }
 
 function updateConnectionState(tab: WorkspaceTab, message?: string): void {
   const labels: Record<WorkspaceStatus, string> = {
-    idle: "Ready",
-    connecting: "Connecting...",
-    connected: "Connected",
-    disconnected: "Disconnected",
-    launching: "Launching RDP...",
-    running: "RDP running",
-    closed: "RDP closed",
-    error: "Connection error",
+    idle: "Ready", connecting: "Connecting...", connected: "Connected", disconnected: "Disconnected",
+    launching: "Launching RDP...", running: "RDP running", closed: "Closed", error: "Connection error",
+    loading: "Loading...", ready: "Ready", opening: "Opening serial port...",
   };
   connectionState.textContent = message ?? labels[tab.status];
 }
@@ -563,162 +622,251 @@ function setTabConnecting(tab: WorkspaceTab, description: string): void {
   tab.terminal?.writeln(`\x1b[36mCyberGrid\x1b[0m ${description}`);
 }
 
+function replayBufferedData(tab: WorkspaceTab, sessionId: string, queue: Map<string, string[]>): void {
+  for (const data of queue.get(sessionId) ?? []) tab.terminal?.write(data);
+  queue.delete(sessionId);
+}
+
 function attachSshSession(tab: WorkspaceTab, sessionId: string): void {
   tab.sessionId = sessionId;
   sshSessions.set(sessionId, tab);
-
-  const buffered = queuedSshData.get(sessionId);
-  if (buffered) {
-    for (const data of buffered) {
-      tab.terminal?.write(data);
-    }
-    queuedSshData.delete(sessionId);
-  }
-
+  replayBufferedData(tab, sessionId, queuedSshData);
   const status = queuedSshStatus.get(sessionId);
-  if (status) {
-    updateSshTabStatus(tab, status);
-    queuedSshStatus.delete(sessionId);
-  }
-
+  if (status) updateSshTabStatus(tab, status);
+  queuedSshStatus.delete(sessionId);
   tab.fitAddon?.fit();
-  if (tab.terminal) {
-    window.cybergrid.ssh.resize(sessionId, tab.terminal.cols, tab.terminal.rows);
-  }
+  if (tab.terminal) window.cybergrid.ssh.resize(sessionId, tab.terminal.cols, tab.terminal.rows);
 }
 
 function attachRdpSession(tab: WorkspaceTab, sessionId: string): void {
   tab.rdpSessionId = sessionId;
   rdpSessions.set(sessionId, tab);
   const status = queuedRdpStatus.get(sessionId);
-  if (status) {
-    updateRdpTabStatus(tab, status);
-    queuedRdpStatus.delete(sessionId);
-  }
+  if (status) updateRdpTabStatus(tab, status);
+  queuedRdpStatus.delete(sessionId);
 }
 
-function handleConnectionFailure(tab: WorkspaceTab, error: unknown): void {
-  if (tab.kind === "rdp") {
-    updateRdpTabStatus(tab, {
-      sessionId: tab.rdpSessionId ?? "pending",
-      status: "error",
-      message: errorMessage(error),
-    });
-  } else {
-    updateSshTabStatus(tab, {
-      sessionId: tab.sessionId ?? "pending",
-      status: "error",
-      message: errorMessage(error),
-    });
-  }
+function attachStreamSession(tab: WorkspaceTab, sessionId: string): void {
+  tab.streamSessionId = sessionId;
+  streamSessions.set(sessionId, tab);
+  replayBufferedData(tab, sessionId, queuedStreamData);
+  const status = queuedStreamStatus.get(sessionId);
+  if (status) updateTabStatus(tab, status.status, status.message);
+  queuedStreamStatus.delete(sessionId);
 }
 
-function handleSshData(event: SshDataEvent): void {
-  const tab = sshSessions.get(event.sessionId);
+function attachSerialSession(tab: WorkspaceTab, sessionId: string): void {
+  tab.serialSessionId = sessionId;
+  serialSessions.set(sessionId, tab);
+  replayBufferedData(tab, sessionId, queuedSerialData);
+  const status = queuedSerialStatus.get(sessionId);
+  if (status) updateTabStatus(tab, status.status, status.message);
+  queuedSerialStatus.delete(sessionId);
+}
+
+async function waitForNoVnc(): Promise<NoVncRfbConstructor> {
+  if (window.NoVncRfb) return window.NoVncRfb;
+  await new Promise<void>((resolve, reject) => {
+    const timeout = window.setTimeout(() => reject(new Error("noVNC failed to load.")), 5_000);
+    window.addEventListener("cybergrid:novnc-ready", () => {
+      window.clearTimeout(timeout);
+      resolve();
+    }, { once: true });
+  });
+  if (!window.NoVncRfb) throw new Error("noVNC failed to initialize.");
+  return window.NoVncRfb;
+}
+
+async function attachVncSession(tab: WorkspaceTab, result: Extract<ProfileConnectionResult, { protocol: "vnc" }>): Promise<void> {
+  tab.vncSessionId = result.sessionId;
+  vncSessions.set(result.sessionId, tab);
+  const Rfb = await waitForNoVnc();
+  const screen = tab.paneElement.querySelector<HTMLElement>(".vnc-screen");
+  if (!screen) throw new Error("VNC canvas is unavailable.");
+  screen.replaceChildren();
+  const client = new Rfb(screen, result.proxyUrl, { credentials: { password: result.password } });
+  client.scaleViewport = true;
+  client.resizeSession = true;
+  client.addEventListener("connect", () => updateTabStatus(tab, "connected"));
+  client.addEventListener("disconnect", () => updateTabStatus(tab, "disconnected"));
+  client.addEventListener("securityfailure", () => updateTabStatus(tab, "error", "VNC authentication failed."));
+  tab.vncClient = client;
+  const status = queuedVncStatus.get(result.sessionId);
+  if (status) updateTabStatus(tab, status.status, status.message);
+  queuedVncStatus.delete(result.sessionId);
+}
+
+function attachWebSession(tab: WorkspaceTab, sessionId: string): void {
+  tab.webSessionId = sessionId;
+  webSessions.set(sessionId, tab);
+  const status = queuedWebStatus.get(sessionId);
+  if (status) updateTabStatus(tab, status.status, status.message);
+  queuedWebStatus.delete(sessionId);
+  window.cybergrid.web.setVisible(sessionId, activeTabId === tab.id);
+  requestAnimationFrame(() => updateWebBounds(tab));
+}
+
+function queueData(event: { sessionId: string; data: string }, sessions: Map<string, WorkspaceTab>, queue: Map<string, string[]>): void {
+  const tab = sessions.get(event.sessionId);
   if (tab) {
     tab.terminal?.write(event.data);
     return;
   }
-
-  const buffered = queuedSshData.get(event.sessionId) ?? [];
+  const buffered = queue.get(event.sessionId) ?? [];
   if (buffered.reduce((size, chunk) => size + chunk.length, 0) < 1_000_000) {
     buffered.push(event.data);
-    queuedSshData.set(event.sessionId, buffered);
+    queue.set(event.sessionId, buffered);
   }
 }
+
+function handleSshData(event: SshDataEvent): void { queueData(event, sshSessions, queuedSshData); }
+function handleStreamData(event: StreamDataEvent): void { queueData(event, streamSessions, queuedStreamData); }
+function handleSerialData(event: SerialDataEvent): void { queueData(event, serialSessions, queuedSerialData); }
 
 function handleSshStatus(event: SshStatusEvent): void {
   const tab = sshSessions.get(event.sessionId);
-  if (tab) {
-    updateSshTabStatus(tab, event);
-  } else {
-    queuedSshStatus.set(event.sessionId, event);
-  }
+  if (tab) updateSshTabStatus(tab, event); else queuedSshStatus.set(event.sessionId, event);
 }
-
 function handleRdpStatus(event: RdpStatusEvent): void {
   const tab = rdpSessions.get(event.sessionId);
-  if (tab) {
-    updateRdpTabStatus(tab, event);
-  } else {
-    queuedRdpStatus.set(event.sessionId, event);
-  }
+  if (tab) updateRdpTabStatus(tab, event); else queuedRdpStatus.set(event.sessionId, event);
+}
+function handleStreamStatus(event: StreamStatusEvent): void {
+  const tab = streamSessions.get(event.sessionId);
+  if (tab) updateTabStatus(tab, event.status, event.message); else queuedStreamStatus.set(event.sessionId, event);
+}
+function handleSerialStatus(event: SerialStatusEvent): void {
+  const tab = serialSessions.get(event.sessionId);
+  if (tab) updateTabStatus(tab, event.status, event.message); else queuedSerialStatus.set(event.sessionId, event);
+}
+function handleVncStatus(event: VncStatusEvent): void {
+  const tab = vncSessions.get(event.sessionId);
+  if (tab) updateTabStatus(tab, event.status, event.message); else queuedVncStatus.set(event.sessionId, event);
+}
+function handleWebStatus(event: WebStatusEvent): void {
+  const tab = webSessions.get(event.sessionId);
+  if (tab) updateTabStatus(tab, event.status, event.message); else queuedWebStatus.set(event.sessionId, event);
+}
+
+function createTabForProfile(profile: ServerProfileSummary): WorkspaceTab {
+  if (profile.protocol === "rdp") return createRdpTab(profile.name, { host: profile.host, port: profile.port, username: profile.username });
+  if (profile.protocol === "vnc") return createVncTab(profile.name);
+  if (profile.protocol === "http" || profile.protocol === "https") return createWebTab(profile.name, profile.protocol);
+  return createTerminalTab(profile.name, profile.protocol);
+}
+
+async function attachProfileResult(tab: WorkspaceTab, result: ProfileConnectionResult): Promise<void> {
+  if (result.protocol === "ssh") attachSshSession(tab, result.sessionId);
+  else if (result.protocol === "rdp") attachRdpSession(tab, result.sessionId);
+  else if (result.protocol === "telnet" || result.protocol === "raw") attachStreamSession(tab, result.sessionId);
+  else if (result.protocol === "serial") attachSerialSession(tab, result.sessionId);
+  else if (result.protocol === "vnc") await attachVncSession(tab, result);
+  else attachWebSession(tab, result.sessionId);
+}
+
+function handleConnectionFailure(tab: WorkspaceTab, error: unknown): void {
+  updateTabStatus(tab, "error", errorMessage(error));
+  if (tab.rdpMessageElement) tab.rdpMessageElement.textContent = errorMessage(error);
 }
 
 async function connectSavedProfile(profile: ServerProfileSummary): Promise<void> {
-  const tab = createTerminalTab(profile.name);
-  setTabConnecting(
-    tab,
-    `connecting to ${profile.username}@${profile.host}:${profile.port} from the encrypted vault...`,
-  );
-
+  const tab = createTabForProfile(profile);
+  setTabConnecting(tab, `opening ${profile.protocol.toUpperCase()} profile ${profile.name} from the encrypted vault...`);
   try {
-    attachSshSession(tab, await window.cybergrid.ssh.connectProfile(profile.id));
+    await attachProfileResult(tab, await window.cybergrid.profiles.connect(profile.id));
   } catch (error) {
     handleConnectionFailure(tab, error);
   }
 }
 
 async function connectQuickSsh(config: SshConnectionConfig): Promise<void> {
-  const tab = createTerminalTab(config.host);
+  const tab = createTerminalTab(config.host, "ssh");
   setTabConnecting(tab, `connecting to ${config.username}@${config.host}:${config.port}...`);
-  try {
-    attachSshSession(tab, await window.cybergrid.ssh.connect(config));
-  } catch (error) {
-    handleConnectionFailure(tab, error);
-  }
+  try { attachSshSession(tab, await window.cybergrid.ssh.connect(config)); }
+  catch (error) { handleConnectionFailure(tab, error); }
 }
 
 async function connectQuickRdp(config: RdpConnectionConfig): Promise<void> {
   const tab = createRdpTab(config.host, config);
   tab.status = "launching";
   updateConnectionState(tab);
-  try {
-    attachRdpSession(tab, await window.cybergrid.rdp.connect(config));
-  } catch (error) {
-    handleConnectionFailure(tab, error);
-  }
+  try { attachRdpSession(tab, await window.cybergrid.rdp.connect(config)); }
+  catch (error) { handleConnectionFailure(tab, error); }
 }
 
-function parseQuickConnect(value: string):
+async function connectQuickStream(config: StreamConnectionConfig): Promise<void> {
+  const tab = createTerminalTab(config.host, config.protocol);
+  setTabConnecting(tab, `connecting to ${config.host}:${config.port}...`);
+  try { attachStreamSession(tab, await window.cybergrid.stream.connect(config)); }
+  catch (error) { handleConnectionFailure(tab, error); }
+}
+
+async function connectQuickSerial(config: SerialConnectionConfig): Promise<void> {
+  const tab = createTerminalTab(config.path, "serial");
+  setTabConnecting(tab, `opening ${config.path} at ${config.baudRate} baud...`);
+  try { attachSerialSession(tab, await window.cybergrid.serial.connect(config)); }
+  catch (error) { handleConnectionFailure(tab, error); }
+}
+
+async function connectQuickVnc(config: VncConnectionConfig): Promise<void> {
+  const tab = createVncTab(config.host);
+  setTabConnecting(tab, `connecting to VNC ${config.host}:${config.port}...`);
+  try { await attachVncSession(tab, { protocol: "vnc", ...await window.cybergrid.vnc.connect(config) }); }
+  catch (error) { handleConnectionFailure(tab, error); }
+}
+
+async function connectQuickWeb(url: string): Promise<void> {
+  const parsed = new URL(url);
+  const protocol = parsed.protocol === "https:" ? "https" : "http";
+  const tab = createWebTab(parsed.hostname, protocol);
+  updateTabStatus(tab, "loading");
+  try { attachWebSession(tab, await window.cybergrid.web.connect({ url: parsed.toString() })); }
+  catch (error) { handleConnectionFailure(tab, error); }
+}
+
+type QuickConnection =
   | { protocol: "ssh"; config: SshConnectionConfig }
-  | { protocol: "rdp"; config: RdpConnectionConfig } {
+  | { protocol: "rdp"; config: RdpConnectionConfig }
+  | { protocol: "telnet" | "raw"; config: StreamConnectionConfig }
+  | { protocol: "serial"; config: SerialConnectionConfig }
+  | { protocol: "vnc"; config: VncConnectionConfig }
+  | { protocol: "http" | "https"; url: string };
+
+function parseQuickConnect(value: string): QuickConnection {
+  const raw = value.trim();
   let url: URL;
-  try {
-    url = new URL(value.trim());
-  } catch {
-    throw new Error("Use protocol://user@host:port, for example ssh://admin@server:22.");
+  try { url = new URL(raw); }
+  catch { throw new Error("Use protocol://user@host:port, serial://COM3?baud=9600, or an HTTP(S) URL."); }
+  const protocol = url.protocol.replace(":", "") as ConnectionProtocol;
+  if (!(["ssh", "rdp", "telnet", "raw", "vnc", "http", "https", "serial"] as string[]).includes(protocol)) {
+    throw new Error("Unsupported Quick Connect protocol.");
   }
-
-  const protocol = url.protocol.replace(":", "");
-  if (protocol !== "ssh" && protocol !== "rdp") {
-    throw new Error("Quick Connect supports ssh:// and rdp:// URLs.");
+  if (protocol === "http" || protocol === "https") return { protocol, url: url.toString() };
+  if (protocol === "serial") {
+    const pathPart = raw.replace(/^serial:\/\//i, "").split("?")[0] ?? "";
+    const path = decodeURIComponent(pathPart.startsWith("/") ? pathPart : url.hostname);
+    if (!path) throw new Error("Serial Quick Connect requires a COM or device path.");
+    return { protocol, config: {
+      path,
+      baudRate: Number(url.searchParams.get("baud") ?? 9_600),
+      dataBits: Number(url.searchParams.get("dataBits") ?? 8) as 5 | 6 | 7 | 8,
+      stopBits: Number(url.searchParams.get("stopBits") ?? 1) as 1 | 2,
+      parity: (url.searchParams.get("parity") ?? "none") as SerialConnectionConfig["parity"],
+    } };
   }
-  const username = decodeURIComponent(url.username);
   const host = url.hostname.replace(/^\[|\]$/g, "");
-  if (!username || !host) {
-    throw new Error("Quick Connect requires both a username and host.");
-  }
-
+  if (!host) throw new Error("Quick Connect requires a host.");
+  const username = decodeURIComponent(url.username);
   if (protocol === "ssh") {
-    return {
-      protocol,
-      config: {
-        host,
-        port: url.port ? Number(url.port) : 22,
-        username,
-        password: decodeURIComponent(url.password) || quickPasswordInput.value || undefined,
-      },
-    };
+    if (!username) throw new Error("SSH Quick Connect requires a username.");
+    return { protocol, config: { host, port: Number(url.port || 22), username, password: decodeURIComponent(url.password) || quickPasswordInput.value || undefined } };
   }
-  return {
-    protocol,
-    config: {
-      host,
-      port: url.port ? Number(url.port) : 3389,
-      username,
-    },
-  };
+  if (protocol === "rdp") {
+    if (!username) throw new Error("RDP Quick Connect requires a username.");
+    return { protocol, config: { host, port: Number(url.port || 3389), username } };
+  }
+  if (protocol === "vnc") return { protocol, config: { host, port: Number(url.port || 5900), password: decodeURIComponent(url.password) || quickPasswordInput.value || undefined } };
+  return { protocol, config: { protocol, host, port: Number(url.port || 23) } };
 }
 
 function createTextElement(tag: "span" | "div", className: string, text: string): HTMLElement {
@@ -830,6 +978,7 @@ async function refreshVaultContent(): Promise<void> {
   savedAssets = assets;
   renderProfiles();
   renderAssets();
+  await configureHealthMonitor();
 }
 
 function assetInputForDevice(device: DiscoveredDevice): AssetInput {
@@ -958,8 +1107,41 @@ function handleDiscoveryComplete(event: DiscoveryCompleteEvent): void {
 }
 
 function populateQuickConnect(profile: ServerProfileSummary): void {
-  quickConnectInput.value = `ssh://${encodeURIComponent(profile.username)}@${profile.host}:${profile.port}`;
+  if (profile.protocol === "serial") {
+    quickConnectInput.value = `serial://${profile.host}?baud=${profile.baudRate ?? 9_600}`;
+  } else if (profile.protocol === "http" || profile.protocol === "https") {
+    quickConnectInput.value = `${profile.protocol}://${profile.host}:${profile.port}`;
+  } else {
+    const user = profile.username ? `${encodeURIComponent(profile.username)}@` : "";
+    quickConnectInput.value = `${profile.protocol}://${user}${profile.host}:${profile.port}`;
+  }
   quickPasswordInput.value = "";
+}
+
+function applyHealthStatus(dot: HTMLElement, event: HealthStatusEvent | undefined): void {
+  dot.classList.remove("checking", "online", "offline", "unsupported");
+  if (event) {
+    dot.classList.add(event.status);
+    dot.title = event.status === "online" && event.latencyMs
+      ? `Online (${event.latencyMs} ms)`
+      : event.status.charAt(0).toUpperCase() + event.status.slice(1);
+  } else {
+    dot.title = "Health check pending";
+  }
+}
+
+function handleHealthStatus(event: HealthStatusEvent): void {
+  healthStatuses.set(event.profileId, event);
+  const dot = profileTree.querySelector<HTMLElement>(`[data-health-id="${event.profileId}"]`);
+  if (dot) applyHealthStatus(dot, event);
+}
+
+async function configureHealthMonitor(): Promise<void> {
+  await window.cybergrid.health.setTargets(savedProfiles.map((profile) => ({
+    profileId: profile.id,
+    host: profile.host,
+    protocol: profile.protocol,
+  })));
 }
 
 function renderProfiles(): void {
@@ -969,7 +1151,7 @@ function renderProfiles(): void {
   if (savedProfiles.length === 0) {
     const emptyState = document.createElement("div");
     emptyState.className = "sidebar-empty";
-    emptyState.textContent = "No saved SSH servers yet. Add one to create your first folder.";
+    emptyState.textContent = "No saved connections yet. Add one or import an existing connection tree.";
     profileTree.append(emptyState);
     return;
   }
@@ -1021,15 +1203,17 @@ function renderProfiles(): void {
       serverButton.type = "button";
       serverButton.title = "Double-click to connect";
       const meta = createTextElement("span", "server-meta", "");
+      const endpoint = profile.protocol === "serial"
+        ? `${profile.host} / ${profile.baudRate ?? 9_600} baud`
+        : `${profile.protocol.toUpperCase()}  ${profile.username ? `${profile.username}@` : ""}${profile.host}:${profile.port}`;
       meta.append(
         createTextElement("span", "server-name", profile.name),
-        createTextElement(
-          "span",
-          "server-host",
-          `${profile.username}@${profile.host}:${profile.port}`,
-        ),
+        createTextElement("span", "server-host", endpoint),
       );
-      serverButton.append(createTextElement("span", "server-dot", ""), meta);
+      const healthDot = createTextElement("span", "server-dot", "");
+      healthDot.dataset.healthId = profile.id;
+      applyHealthStatus(healthDot, healthStatuses.get(profile.id));
+      serverButton.append(healthDot, meta);
       serverButton.addEventListener("click", () => populateQuickConnect(profile));
       serverButton.addEventListener("dblclick", () => void connectSavedProfile(profile));
 
@@ -1063,6 +1247,7 @@ function renderProfiles(): void {
 async function refreshProfiles(): Promise<void> {
   savedProfiles = await window.cybergrid.vault.listProfiles();
   renderProfiles();
+  await configureHealthMonitor();
 }
 
 function activeSshTab(): WorkspaceTab | undefined {
@@ -1236,20 +1421,58 @@ async function initializeVault(): Promise<void> {
   }
 }
 
-function updateAuthenticationFields(): void {
-  const usesPassword = authTypeInput.value === "password";
+const DEFAULT_PROTOCOL_PORTS: Record<Exclude<ConnectionProtocol, "serial">, number> = {
+  ssh: 22,
+  rdp: 3389,
+  telnet: 23,
+  raw: 23,
+  vnc: 5900,
+  http: 80,
+  https: 443,
+};
+
+function updateProfileFields(resetDefaults = false): void {
+  const protocol = serverProtocolInput.value as ConnectionProtocol;
+  const serial = protocol === "serial";
+  const usesUsername = protocol === "ssh" || protocol === "rdp";
+  const usesAuthentication = protocol === "ssh" || protocol === "rdp" || protocol === "vnc";
+  const privateKeyOption = authTypeInput.querySelector<HTMLOptionElement>('option[value="privateKey"]');
+
+  serverHostLabel.textContent = serial ? "COM port or device path" : "Hostname or IP";
+  serverHostInput.placeholder = serial ? "COM3 or /dev/ttyUSB0" : "server.example.net";
+  serverPortInput.closest<HTMLElement>(".field")?.toggleAttribute("hidden", serial);
+  serverPortInput.disabled = serial;
+  serverPortInput.required = !serial;
+  serverSerialSection.hidden = !serial;
+  serverBaudRateInput.required = serial;
+  serverUsernameField.hidden = !usesUsername;
+  serverUsernameInput.required = usesUsername;
+  serverAuthField.hidden = !usesAuthentication;
+  privateKeyOption?.toggleAttribute("disabled", protocol !== "ssh");
+
+  if (resetDefaults) {
+    if (!serial) serverPortInput.value = String(DEFAULT_PROTOCOL_PORTS[protocol]);
+    authTypeInput.value = usesAuthentication ? "password" : "none";
+  } else if (protocol !== "ssh" && authTypeInput.value === "privateKey") {
+    authTypeInput.value = usesAuthentication ? "password" : "none";
+  } else if (!usesAuthentication) {
+    authTypeInput.value = "none";
+  }
+
+  const usesPassword = usesAuthentication && authTypeInput.value === "password";
+  const usesPrivateKey = protocol === "ssh" && authTypeInput.value === "privateKey";
   serverPasswordSection.hidden = !usesPassword;
-  serverKeySection.hidden = usesPassword;
+  serverKeySection.hidden = !usesPrivateKey;
   serverPasswordInput.required = usesPassword;
-  serverKeyPathInput.required = !usesPassword;
+  serverKeyPathInput.required = usesPrivateKey;
 }
 
 function openServerModal(): void {
   serverForm.reset();
-  serverPortInput.value = "22";
-  authTypeInput.value = "password";
+  serverProtocolInput.value = "ssh";
+  serverBaudRateInput.value = "9600";
   serverFormError.textContent = "";
-  updateAuthenticationFields();
+  updateProfileFields(true);
   if (!serverModal.open) {
     serverModal.showModal();
   }
@@ -1280,11 +1503,12 @@ quickConnectForm.addEventListener("submit", async (event) => {
   connectionState.textContent = "Parsing Quick Connect URL...";
   try {
     const parsed = parseQuickConnect(quickConnectInput.value);
-    if (parsed.protocol === "ssh") {
-      await connectQuickSsh(parsed.config);
-    } else {
-      await connectQuickRdp(parsed.config);
-    }
+    if (parsed.protocol === "ssh") await connectQuickSsh(parsed.config);
+    else if (parsed.protocol === "rdp") await connectQuickRdp(parsed.config);
+    else if (parsed.protocol === "telnet" || parsed.protocol === "raw") await connectQuickStream(parsed.config);
+    else if (parsed.protocol === "serial") await connectQuickSerial(parsed.config);
+    else if (parsed.protocol === "vnc") await connectQuickVnc(parsed.config);
+    else if (parsed.protocol === "http" || parsed.protocol === "https") await connectQuickWeb(parsed.url);
   } catch (error) {
     connectionState.textContent = errorMessage(error);
   } finally {
@@ -1371,6 +1595,69 @@ vaultForm.addEventListener("submit", async (event) => {
 });
 
 addServerButton.addEventListener("click", openServerModal);
+migrationButton.addEventListener("click", () => {
+  migrationStatus.textContent = "";
+  migrationError.textContent = "";
+  migrationPassphrase.value = "";
+  if (!migrationModal.open) migrationModal.showModal();
+});
+
+migrationImportButton.addEventListener("click", async () => {
+  migrationStatus.textContent = "Choose an import file...";
+  migrationError.textContent = "";
+  migrationImportButton.disabled = true;
+  try {
+    const result = await window.cybergrid.migration.importConnections({
+      format: migrationImportFormat.value as MigrationFormat,
+      teamPassphrase: migrationPassphrase.value || undefined,
+    });
+    if (!result) {
+      migrationStatus.textContent = "Import canceled.";
+      return;
+    }
+    await refreshVaultContent();
+    const warningText = result.warnings.length > 0
+      ? ` ${result.warnings.length} warning${result.warnings.length === 1 ? "" : "s"}: ${result.warnings.slice(0, 3).join(" ")}`
+      : "";
+    migrationStatus.textContent = `Imported ${result.imported} connection${result.imported === 1 ? "" : "s"} from ${result.path}.${warningText}`;
+  } catch (error) {
+    migrationStatus.textContent = "";
+    migrationError.textContent = errorMessage(error);
+  } finally {
+    migrationImportButton.disabled = false;
+    migrationPassphrase.value = "";
+  }
+});
+
+migrationExportButton.addEventListener("click", async () => {
+  migrationStatus.textContent = "Choose an export destination...";
+  migrationError.textContent = "";
+  migrationExportButton.disabled = true;
+  try {
+    const result = await window.cybergrid.migration.exportConnections({
+      format: migrationExportFormat.value as MigrationFormat,
+      teamPassphrase: migrationPassphrase.value || undefined,
+    });
+    migrationStatus.textContent = result.path
+      ? `Exported ${result.exported} connection${result.exported === 1 ? "" : "s"} to ${result.path}.`
+      : "Export canceled.";
+  } catch (error) {
+    migrationStatus.textContent = "";
+    migrationError.textContent = errorMessage(error);
+  } finally {
+    migrationExportButton.disabled = false;
+    migrationPassphrase.value = "";
+  }
+});
+
+migrationCloseButton.addEventListener("click", () => migrationModal.close());
+migrationModal.addEventListener("close", () => {
+  migrationPassphrase.value = "";
+});
+migrationModal.addEventListener("click", (event) => {
+  if (event.target === migrationModal) migrationModal.close();
+});
+
 scanButton.addEventListener("click", () => {
   scanError.textContent = "";
   if (!scanModal.open) {
@@ -1497,6 +1784,9 @@ lockButton.addEventListener("click", async () => {
     if (assetModal.open) {
       assetModal.close();
     }
+    if (migrationModal.open) {
+      migrationModal.close();
+    }
     setSftpDrawerOpen(false);
     await window.cybergrid.vault.lock();
     activeScanId = null;
@@ -1504,6 +1794,7 @@ lockButton.addEventListener("click", async () => {
     scanDevices.clear();
     savedProfiles = [];
     savedAssets = [];
+    healthStatuses.clear();
     renderProfiles();
     renderAssets();
     setVaultPrompt(true);
@@ -1512,7 +1803,8 @@ lockButton.addEventListener("click", async () => {
   }
 });
 
-authTypeInput.addEventListener("change", updateAuthenticationFields);
+serverProtocolInput.addEventListener("change", () => updateProfileFields(true));
+authTypeInput.addEventListener("change", () => updateProfileFields(false));
 cancelServerButton.addEventListener("click", () => serverModal.close());
 browseKeyButton.addEventListener("click", async () => {
   const selectedPath = await window.cybergrid.system.selectPrivateKey();
@@ -1528,17 +1820,23 @@ serverModal.addEventListener("click", (event) => {
 serverForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   serverFormError.textContent = "";
+  const protocol = serverProtocolInput.value as ConnectionProtocol;
   const authType = authTypeInput.value as ServerAuthType;
   const profile: ServerProfileInput = {
+    protocol,
     name: serverNameInput.value.trim(),
     host: serverHostInput.value.trim(),
-    port: Number(serverPortInput.value),
+    port: protocol === "serial" ? 0 : Number(serverPortInput.value),
     username: serverUsernameInput.value.trim(),
     group: serverGroupInput.value.trim() || "Ungrouped",
     authType,
     password: authType === "password" ? serverPasswordInput.value : undefined,
     privateKeyPath: authType === "privateKey" ? serverKeyPathInput.value.trim() : undefined,
     passphrase: authType === "privateKey" ? serverPassphraseInput.value : undefined,
+    baudRate: protocol === "serial" ? Number(serverBaudRateInput.value) : undefined,
+    dataBits: protocol === "serial" ? Number(serverDataBitsInput.value) as 5 | 6 | 7 | 8 : undefined,
+    stopBits: protocol === "serial" ? Number(serverStopBitsInput.value) as 1 | 2 : undefined,
+    parity: protocol === "serial" ? serverParityInput.value as ServerProfileInput["parity"] : undefined,
   };
 
   try {
@@ -1583,13 +1881,22 @@ window.cybergrid.ssh.onData(handleSshData);
 window.cybergrid.ssh.onStatus(handleSshStatus);
 window.cybergrid.sftp.onProgress(handleSftpProgress);
 window.cybergrid.rdp.onStatus(handleRdpStatus);
+window.cybergrid.stream.onData(handleStreamData);
+window.cybergrid.stream.onStatus(handleStreamStatus);
+window.cybergrid.serial.onData(handleSerialData);
+window.cybergrid.serial.onStatus(handleSerialStatus);
+window.cybergrid.vnc.onStatus(handleVncStatus);
+window.cybergrid.web.onStatus(handleWebStatus);
+window.cybergrid.health.onStatus(handleHealthStatus);
 window.cybergrid.discovery.onProgress(handleDiscoveryProgress);
 window.cybergrid.discovery.onResult(handleDiscoveryResult);
 window.cybergrid.discovery.onComplete(handleDiscoveryComplete);
 
 const resizeObserver = new ResizeObserver(() => {
   if (activeTabId) {
-    tabs.get(activeTabId)?.fitAddon?.fit();
+    const tab = tabs.get(activeTabId);
+    tab?.fitAddon?.fit();
+    if (tab) updateWebBounds(tab);
   }
 });
 resizeObserver.observe(terminalStack);
@@ -1597,8 +1904,8 @@ resizeObserver.observe(terminalStack);
 applySettings(currentSettings, false);
 const welcomeTab = createTerminalTab("Welcome", "welcome");
 welcomeTab.terminal?.writeln("\x1b[36mCyberGrid\x1b[0m");
-welcomeTab.terminal?.writeln("SSH, SFTP, RDP, subnet discovery, and encrypted asset inventory in one workspace.\r\n");
-welcomeTab.terminal?.writeln("Use Quick Connect: ssh://user@host:22 or rdp://user@host:3389");
-welcomeTab.terminal?.writeln("Use the discovery button in the sidebar to scan a private IPv4 subnet.");
+welcomeTab.terminal?.writeln("SSH, SFTP, RDP, VNC, Telnet, RAW TCP, serial, and web management in one workspace.\r\n");
+welcomeTab.terminal?.writeln("Quick Connect examples: ssh://user@host:22, vnc://host:5900, serial://COM3?baud=9600");
+welcomeTab.terminal?.writeln("Import team vaults and legacy connection trees, or scan a private IPv4 subnet from the sidebar.");
 updateSftpAvailability();
 void initializeVault();
