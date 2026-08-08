@@ -58,7 +58,8 @@
 
       button,
       input,
-      select {
+      select,
+      textarea {
         font: inherit;
       }
 
@@ -620,6 +621,12 @@
         color: var(--accent);
       }
 
+      #broadcast-toggle-button.active {
+        border-color: color-mix(in srgb, var(--danger) 70%, var(--border));
+        background: color-mix(in srgb, var(--danger) 14%, var(--panel-raised));
+        color: var(--danger);
+      }
+
       .toolbar-button:disabled {
         cursor: not-allowed;
         opacity: 0.35;
@@ -646,7 +653,8 @@
         transition: grid-template-columns 160ms ease;
       }
 
-      .content-area.sftp-open {
+      .content-area.sftp-open,
+      .content-area.snippets-open {
         grid-template-columns: minmax(0, 1fr) minmax(320px, 30vw);
       }
 
@@ -760,7 +768,8 @@
         display: grid;
       }
 
-      .sftp-drawer {
+      .sftp-drawer,
+      .snippets-drawer {
         min-width: 0;
         overflow: hidden;
         border-left: 1px solid var(--border);
@@ -774,7 +783,15 @@
         grid-template-rows: auto auto auto minmax(0, 1fr) auto;
       }
 
-      .sftp-header {
+      .snippets-inner {
+        display: grid;
+        width: max(320px, 30vw);
+        height: 100%;
+        grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+      }
+
+      .sftp-header,
+      .snippets-header {
         display: flex;
         align-items: center;
         justify-content: space-between;
@@ -782,7 +799,8 @@
         border-bottom: 1px solid var(--border);
       }
 
-      .sftp-header h2 {
+      .sftp-header h2,
+      .snippets-header h2 {
         margin: 0;
         font-size: 12px;
         letter-spacing: 0.08em;
@@ -906,6 +924,195 @@
         width: 100%;
         height: 5px;
         accent-color: var(--accent);
+      }
+
+      .snippets-toolbar {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 8px;
+        padding: 9px 10px;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .snippets-toolbar input,
+      .snippet-form input,
+      .snippet-form select,
+      .snippet-form textarea {
+        min-width: 0;
+        border: 1px solid var(--border);
+        border-radius: 7px;
+        outline: none;
+        background: #09111a;
+        color: var(--text);
+      }
+
+      .snippets-toolbar input,
+      .snippet-form input,
+      .snippet-form select {
+        height: 34px;
+        padding: 0 9px;
+      }
+
+      .snippet-form textarea {
+        min-height: 112px;
+        padding: 9px;
+        resize: vertical;
+        font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+        font-size: 11px;
+      }
+
+      .snippets-toolbar input:focus,
+      .snippet-form input:focus,
+      .snippet-form select:focus,
+      .snippet-form textarea:focus {
+        border-color: var(--accent);
+        box-shadow: 0 0 0 3px var(--accent-soft);
+      }
+
+      .snippet-form {
+        display: grid;
+        gap: 8px;
+        padding: 11px;
+        border-bottom: 1px solid var(--border);
+        background: color-mix(in srgb, var(--panel-raised) 70%, transparent);
+      }
+
+      .snippet-form h3 {
+        margin: 0;
+        font-size: 12px;
+      }
+
+      .snippet-form-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 110px;
+        gap: 8px;
+      }
+
+      .snippet-form-actions,
+      .snippet-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 7px;
+      }
+
+      .snippet-list {
+        min-height: 0;
+        overflow: auto;
+        padding: 7px;
+      }
+
+      .snippet-card {
+        display: grid;
+        gap: 7px;
+        margin-bottom: 7px;
+        padding: 10px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: color-mix(in srgb, var(--panel-raised) 72%, transparent);
+      }
+
+      .snippet-card-heading {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+      }
+
+      .snippet-name {
+        overflow: hidden;
+        font-size: 12px;
+        font-weight: 750;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .snippet-language,
+      .snippet-tag {
+        color: var(--accent);
+        font-size: 8px;
+        font-weight: 800;
+        letter-spacing: 0.06em;
+      }
+
+      .snippet-tags {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 5px;
+      }
+
+      .snippet-tag {
+        padding: 3px 5px;
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        color: var(--muted);
+      }
+
+      .snippet-preview {
+        overflow: hidden;
+        color: var(--muted);
+        font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+        font-size: 10px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .snippet-footer {
+        min-height: 36px;
+        padding: 9px 10px;
+        border-top: 1px solid var(--border);
+        color: var(--muted);
+        font-size: 10px;
+      }
+
+      .broadcast-target-list {
+        grid-column: 1 / -1;
+        display: grid;
+        gap: 7px;
+        max-height: 340px;
+        overflow: auto;
+      }
+
+      .broadcast-target-row {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr) auto;
+        gap: 10px;
+        align-items: center;
+        padding: 10px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: var(--panel-raised);
+        cursor: pointer;
+      }
+
+      .broadcast-target-row input {
+        width: 16px;
+        height: 16px;
+        accent-color: var(--accent);
+      }
+
+      .broadcast-target-details {
+        display: grid;
+        min-width: 0;
+        gap: 3px;
+      }
+
+      .broadcast-target-group {
+        font-size: 12px;
+        font-weight: 750;
+      }
+
+      .broadcast-target-tabs {
+        overflow: hidden;
+        color: var(--muted);
+        font-size: 10px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .broadcast-target-summary {
+        grid-column: 1 / -1;
+        color: var(--muted);
+        font-size: 11px;
       }
 
       dialog {
@@ -1353,6 +1560,9 @@
         <div class="tabs-row">
           <div class="tabs" id="tabs" role="tablist" aria-label="Connection sessions"></div>
           <div class="tab-actions">
+            <button class="toolbar-button" id="broadcast-toggle-button" type="button" aria-pressed="false" disabled>Broadcast Off</button>
+            <button class="toolbar-button" id="broadcast-targets-button" type="button" disabled>Targets (0/0)</button>
+            <button class="toolbar-button" id="toggle-snippets-button" type="button">Snippets</button>
             <button class="toolbar-button" id="toggle-sftp-button" type="button" disabled>Files</button>
             <button class="toolbar-button" id="migration-button" type="button">Import / Export</button>
             <button class="toolbar-button" id="settings-button" type="button">Settings</button>
@@ -1388,6 +1598,36 @@
                 <div id="sftp-status">Ready</div>
                 <progress id="sftp-progress" max="1" value="0" hidden></progress>
               </footer>
+            </div>
+          </aside>
+
+          <aside class="snippets-drawer" id="snippets-drawer" aria-label="Command snippet library" hidden>
+            <div class="snippets-inner">
+              <header class="snippets-header">
+                <h2>Script Snippets</h2>
+                <button class="icon-button" id="snippets-close-button" type="button" aria-label="Close snippet library">&times;</button>
+              </header>
+              <div class="snippets-toolbar">
+                <input id="snippet-search" type="search" placeholder="Filter name, tag, or command" aria-label="Filter command snippets" autocomplete="off" />
+                <button class="primary-button compact-button" id="add-snippet-button" type="button">New</button>
+              </div>
+              <form class="snippet-form" id="snippet-form" hidden>
+                <h3 id="snippet-form-title">New snippet</h3>
+                <input id="snippet-id" type="hidden" />
+                <div class="snippet-form-grid">
+                  <input id="snippet-name" required maxlength="100" placeholder="Snippet name" aria-label="Snippet name" autocomplete="off" />
+                  <select id="snippet-language" aria-label="Snippet language"><option value="bash">Bash</option><option value="powershell">PowerShell</option><option value="cisco">Cisco CLI</option></select>
+                </div>
+                <input id="snippet-tags" maxlength="680" placeholder="Tags, comma separated" aria-label="Snippet tags" autocomplete="off" />
+                <textarea id="snippet-body" required maxlength="65536" placeholder="Command body. Tokens: ${HOST}, ${USERNAME}, ${IP}" aria-label="Snippet command body" spellcheck="false"></textarea>
+                <div class="form-error" id="snippet-form-error" role="alert"></div>
+                <div class="snippet-form-actions">
+                  <button class="secondary-button compact-button" id="snippet-cancel-button" type="button">Cancel</button>
+                  <button class="primary-button compact-button" type="submit">Save</button>
+                </div>
+              </form>
+              <div class="snippet-list" id="snippet-list"></div>
+              <footer class="snippet-footer" id="snippet-status" role="status">Tokens resolve separately for each target session.</footer>
             </div>
           </aside>
         </div>
@@ -1478,6 +1718,25 @@
         </div>
         <footer class="modal-actions">
           <button class="secondary-button" id="migration-close-button" type="button">Close</button>
+        </footer>
+      </form>
+    </dialog>
+
+    <dialog id="broadcast-targets-modal" aria-labelledby="broadcast-targets-title">
+      <form method="dialog">
+        <header class="modal-header">
+          <h2 id="broadcast-targets-title">Broadcast Targets</h2>
+          <p>Keyboard input from the primary terminal is sent only to connected SSH and serial sessions in selected groups.</p>
+        </header>
+        <div class="modal-body">
+          <div class="broadcast-target-summary"><strong id="broadcast-target-count">0 sessions selected</strong>. Review targets before enabling Broadcast Mode.</div>
+          <div class="broadcast-target-list full-width" id="broadcast-target-list"></div>
+        </div>
+        <footer class="modal-actions">
+          <button class="secondary-button" id="broadcast-select-none" type="button">Select none</button>
+          <button class="secondary-button" id="broadcast-select-all" type="button">Select all</button>
+          <button class="secondary-button" id="broadcast-target-cancel" type="button">Cancel</button>
+          <button class="primary-button" id="broadcast-target-apply" type="button">Apply targets</button>
         </footer>
       </form>
     </dialog>

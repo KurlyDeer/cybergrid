@@ -13,6 +13,7 @@ import type {
   SerialDataEvent,
   SerialStatusEvent,
   ServerProfileInput,
+  SnippetInput,
   SftpProgressEvent,
   SshDataEvent,
   SshResizeRequest,
@@ -56,6 +57,9 @@ const IPC_CHANNELS: typeof import("../shared/ipc").IPC_CHANNELS = {
   vaultListAssets: "cybergrid:vault:list-assets",
   vaultSaveAsset: "cybergrid:vault:save-asset",
   vaultDeleteAsset: "cybergrid:vault:delete-asset",
+  vaultListSnippets: "cybergrid:vault:list-snippets",
+  vaultSaveSnippet: "cybergrid:vault:save-snippet",
+  vaultDeleteSnippet: "cybergrid:vault:delete-snippet",
   discoveryStart: "cybergrid:discovery:start",
   discoveryCancel: "cybergrid:discovery:cancel",
   discoveryProgress: "cybergrid:discovery:progress",
@@ -209,6 +213,11 @@ const api: CyberGridApi = {
       ipcRenderer.invoke(IPC_CHANNELS.vaultSaveAsset, asset),
     deleteAsset: (assetId) =>
       ipcRenderer.invoke(IPC_CHANNELS.vaultDeleteAsset, assetId),
+    listSnippets: () => ipcRenderer.invoke(IPC_CHANNELS.vaultListSnippets),
+    saveSnippet: (snippet: SnippetInput) =>
+      ipcRenderer.invoke(IPC_CHANNELS.vaultSaveSnippet, snippet),
+    deleteSnippet: (snippetId) =>
+      ipcRenderer.invoke(IPC_CHANNELS.vaultDeleteSnippet, snippetId),
   },
   discovery: {
     start: (target) => ipcRenderer.invoke(IPC_CHANNELS.discoveryStart, target),

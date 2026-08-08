@@ -25,6 +25,8 @@ import {
   type SerialConnectionConfig,
   type SerialParity,
   type ServerProfileInput,
+  type SnippetInput,
+  type SnippetLanguage,
   type SshConnectionConfig,
   type SshResizeRequest,
   type SshWriteRequest,
@@ -33,6 +35,7 @@ import {
   type WebBounds,
   type WebConnectionConfig,
 } from "../shared/ipc";
+import { AuditController, type AuditSessionContext } from "./audit";
 import { HealthController } from "./health";
 import { MigrationController } from "./migration";
 import { RdpController } from "./rdp";
@@ -44,10 +47,11 @@ import { VaultController } from "./vault";
 import { VncController } from "./vnc";
 import { WebController } from "./web";
 
-const sshController = new SshController();
+const auditController = new AuditController();
+const sshController = new SshController(auditController);
 const scannerController = new ScannerController();
-const streamController = new StreamController();
-const serialController = new SerialController();
+const streamController = new StreamController(auditController);
+const serialController = new SerialController(auditController);
 const vncController = new VncController();
 const healthController = new HealthController();
 let rdpController: RdpController | null = null;
@@ -56,6 +60,7 @@ let webController: WebController | null = null;
 let migrationController: MigrationController | null = null;
 let mainWindow: BrowserWindow | null = null;
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
+app.setAppUserModelId("com.kurlydeer.cybergrid");
 
 function createMainWindow(): BrowserWindow {
   const window = new BrowserWindow({
@@ -588,6 +593,50 @@ function normalizeMigrationRequest(value: unknown): MigrationRequest {
   };
 }
 
+function readSnippetLanguage(value: unknown): SnippetLanguage {
+  if (value === "powershell" || value === "bash" || value === "cisco") return value;
+  throw new Error("Snippet language must be PowerShell, Bash, or Cisco CLI.");
+}
+
+function normalizeSnippetInput(value: unknown): SnippetInput {
+  if (!isRecord(value)) throw new Error("Invalid command snippet.");
+  const body = readString(value.body, "Snippet command", {
+    required: true,
+    maxLength: 65_536,
+    trim: false,
+  }) as string;
+  if (body.trim().length === 0 || body.includes("\0")) {
+    throw new Error("Snippet command cannot be empty or contain null characters.");
+  }
+  if (!Array.isArray(value.tags) || value.tags.length > 20) {
+    throw new Error("A snippet may contain at most 20 tags.");
+  }
+  const tags = [...new Set(value.tags.map((tag) =>
+    readString(tag, "Snippet tag", { required: true, maxLength: 32, singleLine: true }) as string,
+  ))];
+  return {
+    id: value.id === undefined ? undefined : readUuid(value.id, "snippet ID"),
+    name: readString(value.name, "Snippet name", {
+      required: true,
+      maxLength: 100,
+      singleLine: true,
+    }) as string,
+    language: readSnippetLanguage(value.language),
+    tags,
+    body,
+  };
+}
+
+function auditContext(
+  protocol: AuditSessionContext["protocol"],
+  displayName: string,
+  target: string,
+  username = "",
+  group = "Quick Connect",
+): AuditSessionContext {
+  return { protocol, displayName, target, username, group };
+}
+
 async function connectionConfigForProfile(profileId: string): Promise<SshConnectionConfig> {
   const profile = requireVault().getConnectionProfile(profileId);
   if (profile.protocol !== "ssh") {
@@ -630,27 +679,52 @@ async function connectProfile(profileId: string, sender: WebContents): Promise<P
   const profile = requireVault().getConnectionProfile(profileId);
   const host = resolveEnvironmentTokens(profile.host, profile.protocol === "serial" ? "Serial port" : "Host") as string;
   const username = resolveEnvironmentTokens(profile.username, "Username") ?? "";
+  const context = {
+    displayName: profile.name,
+    host,
+    ip: host,
+    username,
+    group: profile.group,
+  };
   switch (profile.protocol) {
     case "ssh":
-      return { protocol: "ssh", sessionId: sshController.connect(await connectionConfigForProfile(profileId), sender) };
+      return {
+        protocol: "ssh",
+        sessionId: sshController.connect(
+          await connectionConfigForProfile(profileId),
+          sender,
+          auditContext("ssh", profile.name, `${host}:${profile.port}`, username, profile.group),
+        ),
+        context,
+      };
     case "rdp":
-      return { protocol: "rdp", sessionId: await requireRdp().connect({ host, port: profile.port, username }, sender) };
+      return { protocol: "rdp", sessionId: await requireRdp().connect({ host, port: profile.port, username }, sender), context };
     case "telnet":
     case "raw":
       return {
         protocol: profile.protocol,
-        sessionId: streamController.connect({ protocol: profile.protocol, host, port: profile.port }, sender),
+        sessionId: streamController.connect(
+          { protocol: profile.protocol, host, port: profile.port },
+          sender,
+          auditContext(profile.protocol, profile.name, `${host}:${profile.port}`, username, profile.group),
+        ),
+        context,
       };
     case "serial":
       return {
         protocol: "serial",
-        sessionId: serialController.connect({
-          path: host,
-          baudRate: profile.baudRate ?? 9_600,
-          dataBits: profile.dataBits ?? 8,
-          stopBits: profile.stopBits ?? 1,
-          parity: profile.parity ?? "none",
-        }, sender),
+        sessionId: serialController.connect(
+          {
+            path: host,
+            baudRate: profile.baudRate ?? 9_600,
+            dataBits: profile.dataBits ?? 8,
+            stopBits: profile.stopBits ?? 1,
+            parity: profile.parity ?? "none",
+          },
+          sender,
+          auditContext("serial", profile.name, host, username, profile.group),
+        ),
+        context,
       };
     case "vnc": {
       const result = await vncController.connect({
@@ -658,7 +732,7 @@ async function connectProfile(profileId: string, sender: WebContents): Promise<P
         port: profile.port,
         password: resolveEnvironmentTokens(profile.password, "VNC password"),
       }, sender);
-      return { protocol: "vnc", ...result };
+      return { protocol: "vnc", ...result, context };
     }
     case "http":
     case "https": {
@@ -666,7 +740,7 @@ async function connectProfile(profileId: string, sender: WebContents): Promise<P
       const normalizedHost = host.replace(/^https?:\/\//i, "").replace(/\/$/, "");
       const port = profile.port === defaultPort ? "" : `:${profile.port}`;
       const sessionId = await requireWeb().connect({ url: `${profile.protocol}://${normalizedHost}${port}/` }, sender);
-      return { protocol: profile.protocol, sessionId };
+      return { protocol: profile.protocol, sessionId, context };
     }
   }
 }
@@ -674,13 +748,24 @@ async function connectProfile(profileId: string, sender: WebContents): Promise<P
 function registerIpcHandlers(): void {
   ipcMain.handle(IPC_CHANNELS.sshConnect, (event, config: unknown) => {
     assertTrustedSender(event);
-    return sshController.connect(normalizeConnectionConfig(config), event.sender);
+    const normalized = normalizeConnectionConfig(config);
+    return sshController.connect(
+      normalized,
+      event.sender,
+      auditContext("ssh", normalized.host, `${normalized.host}:${normalized.port}`, normalized.username),
+    );
   });
 
   ipcMain.handle(IPC_CHANNELS.sshConnectProfile, async (event, profileId: unknown) => {
     assertTrustedSender(event);
-    const config = await connectionConfigForProfile(readUuid(profileId, "server profile ID"));
-    return sshController.connect(config, event.sender);
+    const id = readUuid(profileId, "server profile ID");
+    const profile = requireVault().getConnectionProfile(id);
+    const config = await connectionConfigForProfile(id);
+    return sshController.connect(
+      config,
+      event.sender,
+      auditContext("ssh", profile.name, `${config.host}:${config.port}`, config.username, profile.group),
+    );
   });
 
   ipcMain.handle(IPC_CHANNELS.profileConnect, async (event, profileId: unknown) => {
@@ -769,7 +854,12 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle(IPC_CHANNELS.streamConnect, (event, config: unknown) => {
     assertTrustedSender(event);
-    return streamController.connect(normalizeStreamConfig(config), event.sender);
+    const normalized = normalizeStreamConfig(config);
+    return streamController.connect(
+      normalized,
+      event.sender,
+      auditContext(normalized.protocol, normalized.host, `${normalized.host}:${normalized.port}`),
+    );
   });
 
   ipcMain.handle(IPC_CHANNELS.streamDisconnect, (event, sessionId: unknown) => {
@@ -784,7 +874,12 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle(IPC_CHANNELS.serialConnect, (event, config: unknown) => {
     assertTrustedSender(event);
-    return serialController.connect(normalizeSerialConfig(config), event.sender);
+    const normalized = normalizeSerialConfig(config);
+    return serialController.connect(
+      normalized,
+      event.sender,
+      auditContext("serial", normalized.path, normalized.path),
+    );
   });
 
   ipcMain.handle(IPC_CHANNELS.serialDisconnect, (event, sessionId: unknown) => {
@@ -886,6 +981,21 @@ function registerIpcHandlers(): void {
   ipcMain.handle(IPC_CHANNELS.vaultDeleteAsset, async (event, assetId: unknown) => {
     assertTrustedSender(event);
     await requireVault().deleteAsset(readUuid(assetId, "asset ID"));
+  });
+
+  ipcMain.handle(IPC_CHANNELS.vaultListSnippets, (event) => {
+    assertTrustedSender(event);
+    return requireVault().listSnippets();
+  });
+
+  ipcMain.handle(IPC_CHANNELS.vaultSaveSnippet, async (event, snippet: unknown) => {
+    assertTrustedSender(event);
+    return requireVault().saveSnippet(normalizeSnippetInput(snippet));
+  });
+
+  ipcMain.handle(IPC_CHANNELS.vaultDeleteSnippet, async (event, snippetId: unknown) => {
+    assertTrustedSender(event);
+    await requireVault().deleteSnippet(readUuid(snippetId, "snippet ID"));
   });
 
   ipcMain.handle(IPC_CHANNELS.discoveryStart, (event, target: unknown) => {
@@ -1066,6 +1176,7 @@ if (!hasSingleInstanceLock) {
   });
 
   void app.whenReady().then(() => {
+    auditController.configure(join(app.getPath("userData"), "logs"));
     vaultController = new VaultController(
       join(app.getPath("userData"), "cybergrid-vault.json"),
     );
@@ -1083,7 +1194,9 @@ if (!hasSingleInstanceLock) {
   });
 }
 
-app.on("before-quit", () => {
+let flushingAuditLogs = false;
+
+app.on("before-quit", (event) => {
   scannerController.cancelAll();
   healthController.stop();
   sshController.disconnectAll();
@@ -1093,6 +1206,12 @@ app.on("before-quit", () => {
   webController?.disconnectAll();
   rdpController?.disconnectAll();
   vaultController?.lock();
+  auditController.closeAll();
+  if (!flushingAuditLogs) {
+    flushingAuditLogs = true;
+    event.preventDefault();
+    void auditController.flush().finally(() => app.quit());
+  }
 });
 
 app.on("window-all-closed", () => {

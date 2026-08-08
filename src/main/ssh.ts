@@ -6,6 +6,7 @@ import {
   type SFTPWrapper,
 } from "ssh2";
 import type { WebContents } from "electron";
+import { AuditController, type AuditSessionContext } from "./audit";
 import {
   IPC_CHANNELS,
   type SftpDirectoryListing,
@@ -30,7 +31,9 @@ export class SshController {
   private readonly sessions = new Map<string, SshSession>();
   private readonly observedSenders = new WeakSet<WebContents>();
 
-  connect(config: SshConnectionConfig, sender: WebContents): string {
+  constructor(private readonly audit: AuditController) {}
+
+  connect(config: SshConnectionConfig, sender: WebContents, auditContext: AuditSessionContext): string {
     const sessionId = randomUUID();
     const client = new Client();
     const session: SshSession = {
@@ -41,6 +44,7 @@ export class SshController {
     };
 
     this.sessions.set(sessionId, session);
+    this.audit.startSession(sessionId, auditContext);
     this.emitStatus(session, "connecting", `Connecting to ${config.host}...`);
 
     client.on("ready", () => {
@@ -57,10 +61,8 @@ export class SshController {
           }
 
           session.stream = stream;
-          stream.setEncoding("utf8");
-          stream.on("data", (data: string) => this.emitData(session, data));
-          stream.stderr.setEncoding("utf8");
-          stream.stderr.on("data", (data: string) => this.emitData(session, data));
+          stream.on("data", (data: Buffer) => this.emitData(session, data));
+          stream.stderr.on("data", (data: Buffer) => this.emitData(session, data));
           stream.on("error", (streamError: Error) => {
             this.closeSession(session, "error", streamError.message);
           });
@@ -274,11 +276,12 @@ export class SshController {
     return directory === "/" ? `/${name}` : `${directory.replace(/\/$/, "")}/${name}`;
   }
 
-  private emitData(session: SshSession, data: string): void {
+  private emitData(session: SshSession, data: string | Buffer): void {
+    this.audit.recordOutput(session.id, data);
     if (!session.closed && !session.sender.isDestroyed()) {
       session.sender.send(IPC_CHANNELS.sshData, {
         sessionId: session.id,
-        data,
+        data: Buffer.isBuffer(data) ? data.toString("utf8") : data,
       });
     }
   }
@@ -332,6 +335,7 @@ export class SshController {
     session.closed = true;
     this.sessions.delete(session.id);
     this.emitStatus(session, status, message);
+    this.audit.endSession(session.id, `${status}: ${message}`);
 
     session.sftp?.end();
     if (session.stream && !session.stream.destroyed) {

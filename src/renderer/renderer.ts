@@ -23,6 +23,10 @@ type SerialStatusEvent = import("../shared/ipc").SerialStatusEvent;
 type ServerAuthType = import("../shared/ipc").ServerAuthType;
 type ServerProfileInput = import("../shared/ipc").ServerProfileInput;
 type ServerProfileSummary = import("../shared/ipc").ServerProfileSummary;
+type SessionVariableContext = import("../shared/ipc").SessionVariableContext;
+type SnippetInput = import("../shared/ipc").SnippetInput;
+type SnippetLanguage = import("../shared/ipc").SnippetLanguage;
+type SnippetRecord = import("../shared/ipc").SnippetRecord;
 type SftpDirectoryListing = import("../shared/ipc").SftpDirectoryListing;
 type SftpEntry = import("../shared/ipc").SftpEntry;
 type SftpProgressEvent = import("../shared/ipc").SftpProgressEvent;
@@ -34,6 +38,7 @@ type StreamConnectionConfig = import("../shared/ipc").StreamConnectionConfig;
 type StreamDataEvent = import("../shared/ipc").StreamDataEvent;
 type StreamStatusEvent = import("../shared/ipc").StreamStatusEvent;
 type VncConnectionConfig = import("../shared/ipc").VncConnectionConfig;
+type VncConnectionResult = import("../shared/ipc").VncConnectionResult;
 type VncStatusEvent = import("../shared/ipc").VncStatusEvent;
 type WebStatusEvent = import("../shared/ipc").WebStatusEvent;
 
@@ -65,6 +70,8 @@ type WorkspaceStatus = SshConnectionStatus | RdpConnectionStatus | "idle" | "loa
 interface WorkspaceTab {
   id: string;
   kind: WorkspaceTabKind;
+  label: string;
+  context: SessionVariableContext;
   sessionId?: string;
   rdpSessionId?: string;
   streamSessionId?: string;
@@ -125,6 +132,7 @@ const healthStatuses = new Map<string, HealthStatusEvent>();
 const collapsedGroups = new Set<string>();
 let savedProfiles: ServerProfileSummary[] = [];
 let savedAssets: AssetRecord[] = [];
+let savedSnippets: SnippetRecord[] = [];
 let activeScanId: string | null = null;
 let editingAssetId: string | null = null;
 const scanDevices = new Map<string, DiscoveredDevice>();
@@ -132,6 +140,9 @@ let activeTabId: string | null = null;
 let tabSequence = 0;
 let vaultMode: "create" | "unlock" = "unlock";
 let sftpDrawerOpen = false;
+let snippetsDrawerOpen = false;
+let broadcastMode = false;
+const excludedBroadcastGroups = new Set<string>();
 let currentSettings = loadSettings();
 
 function elementById<T extends HTMLElement>(id: string): T {
@@ -159,6 +170,9 @@ const lockButton = elementById<HTMLButtonElement>("lock-button");
 const settingsButton = elementById<HTMLButtonElement>("settings-button");
 const migrationButton = elementById<HTMLButtonElement>("migration-button");
 const toggleSftpButton = elementById<HTMLButtonElement>("toggle-sftp-button");
+const toggleSnippetsButton = elementById<HTMLButtonElement>("toggle-snippets-button");
+const broadcastToggleButton = elementById<HTMLButtonElement>("broadcast-toggle-button");
+const broadcastTargetsButton = elementById<HTMLButtonElement>("broadcast-targets-button");
 
 const sftpDrawer = elementById<HTMLElement>("sftp-drawer");
 const sftpCloseButton = elementById<HTMLButtonElement>("sftp-close-button");
@@ -170,6 +184,30 @@ const sftpUploadButton = elementById<HTMLButtonElement>("sftp-upload-button");
 const sftpListing = elementById<HTMLDivElement>("sftp-listing");
 const sftpStatus = elementById<HTMLDivElement>("sftp-status");
 const sftpProgress = elementById<HTMLProgressElement>("sftp-progress");
+
+const snippetsDrawer = elementById<HTMLElement>("snippets-drawer");
+const snippetsCloseButton = elementById<HTMLButtonElement>("snippets-close-button");
+const snippetSearchInput = elementById<HTMLInputElement>("snippet-search");
+const snippetList = elementById<HTMLDivElement>("snippet-list");
+const snippetStatus = elementById<HTMLDivElement>("snippet-status");
+const addSnippetButton = elementById<HTMLButtonElement>("add-snippet-button");
+const snippetForm = elementById<HTMLFormElement>("snippet-form");
+const snippetFormTitle = elementById<HTMLHeadingElement>("snippet-form-title");
+const snippetIdInput = elementById<HTMLInputElement>("snippet-id");
+const snippetNameInput = elementById<HTMLInputElement>("snippet-name");
+const snippetLanguageInput = elementById<HTMLSelectElement>("snippet-language");
+const snippetTagsInput = elementById<HTMLInputElement>("snippet-tags");
+const snippetBodyInput = elementById<HTMLTextAreaElement>("snippet-body");
+const snippetCancelButton = elementById<HTMLButtonElement>("snippet-cancel-button");
+const snippetFormError = elementById<HTMLDivElement>("snippet-form-error");
+
+const broadcastTargetsModal = elementById<HTMLDialogElement>("broadcast-targets-modal");
+const broadcastTargetList = elementById<HTMLDivElement>("broadcast-target-list");
+const broadcastTargetCount = elementById<HTMLSpanElement>("broadcast-target-count");
+const broadcastSelectAllButton = elementById<HTMLButtonElement>("broadcast-select-all");
+const broadcastSelectNoneButton = elementById<HTMLButtonElement>("broadcast-select-none");
+const broadcastTargetCancelButton = elementById<HTMLButtonElement>("broadcast-target-cancel");
+const broadcastTargetApplyButton = elementById<HTMLButtonElement>("broadcast-target-apply");
 
 const vaultOverlay = elementById<HTMLDivElement>("vault-overlay");
 const vaultForm = elementById<HTMLFormElement>("vault-form");
@@ -388,7 +426,21 @@ const PROTOCOL_LABELS: Record<WorkspaceTabKind, string> = {
   http: "WEB", https: "WEB", serial: "COM", welcome: "CG",
 };
 
-function createWorkspaceTab(kind: WorkspaceTabKind, label: string): WorkspaceTab {
+function tabContext(label: string, context?: Partial<SessionVariableContext>): SessionVariableContext {
+  return {
+    displayName: context?.displayName ?? label,
+    host: context?.host ?? "",
+    ip: context?.ip ?? context?.host ?? "",
+    username: context?.username ?? "",
+    group: context?.group ?? (label === "Welcome" ? "Local" : "Quick Connect"),
+  };
+}
+
+function createWorkspaceTab(
+  kind: WorkspaceTabKind,
+  label: string,
+  context?: Partial<SessionVariableContext>,
+): WorkspaceTab {
   const id = `tab-${++tabSequence}`;
   const tabElement = document.createElement("button");
   tabElement.className = "tab";
@@ -410,7 +462,16 @@ function createWorkspaceTab(kind: WorkspaceTabKind, label: string): WorkspaceTab
   paneElement.id = `pane-${id}`;
   paneElement.role = "tabpanel";
   terminalStack.append(paneElement);
-  const tab: WorkspaceTab = { id, kind, tabElement, statusElement, paneElement, status: "idle" };
+  const tab: WorkspaceTab = {
+    id,
+    kind,
+    label,
+    context: tabContext(label, context),
+    tabElement,
+    statusElement,
+    paneElement,
+    status: "idle",
+  };
   tabs.set(id, tab);
   tabElement.addEventListener("click", (event) => {
     if ((event.target as HTMLElement).closest(".tab-close")) void closeTab(id);
@@ -423,8 +484,9 @@ function createWorkspaceTab(kind: WorkspaceTabKind, label: string): WorkspaceTab
 function createTerminalTab(
   label: string,
   kind: "ssh" | "telnet" | "raw" | "serial" | "welcome" = "ssh",
+  context?: Partial<SessionVariableContext>,
 ): WorkspaceTab {
-  const tab = createWorkspaceTab(kind, label);
+  const tab = createWorkspaceTab(kind, label, context);
   tab.paneElement.classList.add("terminal-pane");
   const terminal = new Terminal({
     cursorBlink: currentSettings.cursorBlink,
@@ -442,17 +504,57 @@ function createTerminalTab(
   tab.terminal = terminal;
   tab.fitAddon = fitAddon;
   terminal.onData((data) => {
-    if (tab.kind === "ssh" && tab.sessionId) window.cybergrid.ssh.write(tab.sessionId, data);
-    else if ((tab.kind === "telnet" || tab.kind === "raw") && tab.streamSessionId) {
-      window.cybergrid.stream.write(tab.streamSessionId, data);
-    } else if (tab.kind === "serial" && tab.serialSessionId) {
-      window.cybergrid.serial.write(tab.serialSessionId, data);
+    if (broadcastMode && activeTabId === tab.id && isBroadcastCapable(tab)) {
+      for (const target of selectedBroadcastTabs()) writeTerminalInput(target, data);
+      return;
     }
+    writeTerminalInput(tab, data);
   });
   terminal.onResize(({ cols, rows }) => {
     if (tab.kind === "ssh" && tab.sessionId) window.cybergrid.ssh.resize(tab.sessionId, cols, rows);
   });
   return tab;
+}
+
+function isBroadcastCapable(tab: WorkspaceTab): boolean {
+  return tab.status === "connected" && (
+    (tab.kind === "ssh" && Boolean(tab.sessionId)) ||
+    (tab.kind === "serial" && Boolean(tab.serialSessionId))
+  );
+}
+
+function activeBroadcastTabs(): WorkspaceTab[] {
+  return [...tabs.values()].filter(isBroadcastCapable);
+}
+
+function selectedBroadcastTabs(): WorkspaceTab[] {
+  return activeBroadcastTabs().filter((tab) => !excludedBroadcastGroups.has(tab.context.group));
+}
+
+function writeTerminalInput(tab: WorkspaceTab, data: string): void {
+  if (tab.kind === "ssh" && tab.sessionId) window.cybergrid.ssh.write(tab.sessionId, data);
+  else if ((tab.kind === "telnet" || tab.kind === "raw") && tab.streamSessionId) {
+    window.cybergrid.stream.write(tab.streamSessionId, data);
+  } else if (tab.kind === "serial" && tab.serialSessionId) {
+    window.cybergrid.serial.write(tab.serialSessionId, data);
+  }
+}
+
+function updateBroadcastControls(): void {
+  const available = activeBroadcastTabs();
+  const selected = selectedBroadcastTabs();
+  if (available.length === 0) broadcastMode = false;
+  broadcastToggleButton.disabled = available.length === 0;
+  broadcastTargetsButton.disabled = available.length === 0;
+  broadcastToggleButton.classList.toggle("active", broadcastMode);
+  broadcastToggleButton.setAttribute("aria-pressed", String(broadcastMode));
+  broadcastToggleButton.textContent = broadcastMode
+    ? `Broadcast On (${selected.length})`
+    : "Broadcast Off";
+  broadcastTargetsButton.textContent = `Targets (${selected.length}/${available.length})`;
+  broadcastTargetsButton.title = available.length === 0
+    ? "Open an SSH or serial session to use broadcast mode"
+    : "Choose the active SSH and serial groups that receive broadcast input";
 }
 
 function createRdpTab(label: string, config: RdpConnectionConfig): WorkspaceTab {
@@ -518,6 +620,7 @@ function activateTab(id: string): void {
   }
   updateConnectionState(tab);
   updateSftpAvailability();
+  updateBroadcastControls();
   requestAnimationFrame(() => {
     tab.fitAddon?.fit();
     tab.terminal?.focus();
@@ -584,6 +687,7 @@ async function closeTab(id: string): Promise<void> {
       setSftpDrawerOpen(false);
     }
   }
+  updateBroadcastControls();
 }
 
 function updateTabStatus(tab: WorkspaceTab, status: WorkspaceStatus, message?: string): void {
@@ -596,6 +700,7 @@ function updateTabStatus(tab: WorkspaceTab, status: WorkspaceStatus, message?: s
     updateConnectionState(tab, message);
     updateSftpAvailability();
   }
+  updateBroadcastControls();
 }
 
 function updateSshTabStatus(tab: WorkspaceTab, event: SshStatusEvent): void {
@@ -636,6 +741,7 @@ function attachSshSession(tab: WorkspaceTab, sessionId: string): void {
   queuedSshStatus.delete(sessionId);
   tab.fitAddon?.fit();
   if (tab.terminal) window.cybergrid.ssh.resize(sessionId, tab.terminal.cols, tab.terminal.rows);
+  updateBroadcastControls();
 }
 
 function attachRdpSession(tab: WorkspaceTab, sessionId: string): void {
@@ -662,6 +768,7 @@ function attachSerialSession(tab: WorkspaceTab, sessionId: string): void {
   const status = queuedSerialStatus.get(sessionId);
   if (status) updateTabStatus(tab, status.status, status.message);
   queuedSerialStatus.delete(sessionId);
+  updateBroadcastControls();
 }
 
 async function waitForNoVnc(): Promise<NoVncRfbConstructor> {
@@ -677,7 +784,7 @@ async function waitForNoVnc(): Promise<NoVncRfbConstructor> {
   return window.NoVncRfb;
 }
 
-async function attachVncSession(tab: WorkspaceTab, result: Extract<ProfileConnectionResult, { protocol: "vnc" }>): Promise<void> {
+async function attachVncSession(tab: WorkspaceTab, result: VncConnectionResult): Promise<void> {
   tab.vncSessionId = result.sessionId;
   vncSessions.set(result.sessionId, tab);
   const Rfb = await waitForNoVnc();
@@ -752,10 +859,17 @@ function createTabForProfile(profile: ServerProfileSummary): WorkspaceTab {
   if (profile.protocol === "rdp") return createRdpTab(profile.name, { host: profile.host, port: profile.port, username: profile.username });
   if (profile.protocol === "vnc") return createVncTab(profile.name);
   if (profile.protocol === "http" || profile.protocol === "https") return createWebTab(profile.name, profile.protocol);
-  return createTerminalTab(profile.name, profile.protocol);
+  return createTerminalTab(profile.name, profile.protocol, {
+    displayName: profile.name,
+    host: profile.host,
+    ip: profile.host,
+    username: profile.username,
+    group: profile.group,
+  });
 }
 
 async function attachProfileResult(tab: WorkspaceTab, result: ProfileConnectionResult): Promise<void> {
+  tab.context = result.context;
   if (result.protocol === "ssh") attachSshSession(tab, result.sessionId);
   else if (result.protocol === "rdp") attachRdpSession(tab, result.sessionId);
   else if (result.protocol === "telnet" || result.protocol === "raw") attachStreamSession(tab, result.sessionId);
@@ -780,7 +894,9 @@ async function connectSavedProfile(profile: ServerProfileSummary): Promise<void>
 }
 
 async function connectQuickSsh(config: SshConnectionConfig): Promise<void> {
-  const tab = createTerminalTab(config.host, "ssh");
+  const tab = createTerminalTab(config.host, "ssh", {
+    host: config.host, ip: config.host, username: config.username, group: "Quick Connect",
+  });
   setTabConnecting(tab, `connecting to ${config.username}@${config.host}:${config.port}...`);
   try { attachSshSession(tab, await window.cybergrid.ssh.connect(config)); }
   catch (error) { handleConnectionFailure(tab, error); }
@@ -795,14 +911,18 @@ async function connectQuickRdp(config: RdpConnectionConfig): Promise<void> {
 }
 
 async function connectQuickStream(config: StreamConnectionConfig): Promise<void> {
-  const tab = createTerminalTab(config.host, config.protocol);
+  const tab = createTerminalTab(config.host, config.protocol, {
+    host: config.host, ip: config.host, group: "Quick Connect",
+  });
   setTabConnecting(tab, `connecting to ${config.host}:${config.port}...`);
   try { attachStreamSession(tab, await window.cybergrid.stream.connect(config)); }
   catch (error) { handleConnectionFailure(tab, error); }
 }
 
 async function connectQuickSerial(config: SerialConnectionConfig): Promise<void> {
-  const tab = createTerminalTab(config.path, "serial");
+  const tab = createTerminalTab(config.path, "serial", {
+    host: config.path, ip: config.path, group: "Quick Connect",
+  });
   setTabConnecting(tab, `opening ${config.path} at ${config.baudRate} baud...`);
   try { attachSerialSession(tab, await window.cybergrid.serial.connect(config)); }
   catch (error) { handleConnectionFailure(tab, error); }
@@ -811,7 +931,7 @@ async function connectQuickSerial(config: SerialConnectionConfig): Promise<void>
 async function connectQuickVnc(config: VncConnectionConfig): Promise<void> {
   const tab = createVncTab(config.host);
   setTabConnecting(tab, `connecting to VNC ${config.host}:${config.port}...`);
-  try { await attachVncSession(tab, { protocol: "vnc", ...await window.cybergrid.vnc.connect(config) }); }
+  try { await attachVncSession(tab, await window.cybergrid.vnc.connect(config)); }
   catch (error) { handleConnectionFailure(tab, error); }
 }
 
@@ -970,14 +1090,17 @@ async function refreshAssets(): Promise<void> {
 }
 
 async function refreshVaultContent(): Promise<void> {
-  const [profiles, assets] = await Promise.all([
+  const [profiles, assets, snippets] = await Promise.all([
     window.cybergrid.vault.listProfiles(),
     window.cybergrid.vault.listAssets(),
+    window.cybergrid.vault.listSnippets(),
   ]);
   savedProfiles = profiles;
   savedAssets = assets;
+  savedSnippets = snippets;
   renderProfiles();
   renderAssets();
+  renderSnippets();
   await configureHealthMonitor();
 }
 
@@ -1264,6 +1387,7 @@ function updateSftpAvailability(): void {
 }
 
 function setSftpDrawerOpen(open: boolean): void {
+  if (open) setSnippetsDrawerOpen(false);
   sftpDrawerOpen = open;
   contentArea.classList.toggle("sftp-open", open);
   sftpDrawer.hidden = !open;
@@ -1277,6 +1401,181 @@ function setSftpDrawerOpen(open: boolean): void {
     }
   }
   requestAnimationFrame(() => tabs.get(activeTabId ?? "")?.fitAddon?.fit());
+}
+
+function setSnippetsDrawerOpen(open: boolean): void {
+  if (open && sftpDrawerOpen) setSftpDrawerOpen(false);
+  snippetsDrawerOpen = open;
+  contentArea.classList.toggle("snippets-open", open);
+  snippetsDrawer.hidden = !open;
+  toggleSnippetsButton.classList.toggle("active", open);
+  if (open) renderSnippets();
+  requestAnimationFrame(() => tabs.get(activeTabId ?? "")?.fitAddon?.fit());
+}
+
+function editableSnippet(snippet?: SnippetRecord): void {
+  snippetIdInput.value = snippet?.id ?? "";
+  snippetNameInput.value = snippet?.name ?? "";
+  snippetLanguageInput.value = snippet?.language ?? "bash";
+  snippetTagsInput.value = snippet?.tags.join(", ") ?? "";
+  snippetBodyInput.value = snippet?.body ?? "";
+  snippetFormTitle.textContent = snippet ? "Edit snippet" : "New snippet";
+  snippetFormError.textContent = "";
+  snippetForm.hidden = false;
+  requestAnimationFrame(() => snippetNameInput.focus());
+}
+
+function hideSnippetForm(): void {
+  snippetForm.reset();
+  snippetIdInput.value = "";
+  snippetFormError.textContent = "";
+  snippetForm.hidden = true;
+}
+
+function substituteSnippetTokens(snippet: SnippetRecord, tab: WorkspaceTab): string {
+  const values: Record<string, string> = {
+    HOST: tab.context.host,
+    USERNAME: tab.context.username,
+    IP: tab.context.ip,
+  };
+  return snippet.body.replace(/\$\{([A-Z_][A-Z0-9_]*)\}/g, (token, name: string) => {
+    if (!(name in values)) {
+      throw new Error(`Unsupported snippet token ${token}. Use \${HOST}, \${USERNAME}, or \${IP}.`);
+    }
+    return values[name] ?? "";
+  });
+}
+
+function commandForTerminal(value: string): string {
+  const normalized = value.replace(/\r\n|\r|\n/g, "\r");
+  return normalized.endsWith("\r") ? normalized : `${normalized}\r`;
+}
+
+function activeSnippetTab(): WorkspaceTab | undefined {
+  const tab = activeTabId ? tabs.get(activeTabId) : undefined;
+  if (!tab || tab.status !== "connected") return undefined;
+  if (tab.kind === "ssh" && tab.sessionId) return tab;
+  if ((tab.kind === "telnet" || tab.kind === "raw") && tab.streamSessionId) return tab;
+  if (tab.kind === "serial" && tab.serialSessionId) return tab;
+  return undefined;
+}
+
+function executeSnippet(snippet: SnippetRecord): void {
+  const targets = broadcastMode ? selectedBroadcastTabs() : [activeSnippetTab()].filter(
+    (tab): tab is WorkspaceTab => Boolean(tab),
+  );
+  if (targets.length === 0) {
+    snippetStatus.textContent = broadcastMode
+      ? "No selected broadcast targets are connected."
+      : "Select a connected SSH, Telnet, RAW, or serial tab first.";
+    return;
+  }
+  try {
+    for (const tab of targets) {
+      writeTerminalInput(tab, commandForTerminal(substituteSnippetTokens(snippet, tab)));
+    }
+    snippetStatus.textContent = `Executed "${snippet.name}" on ${targets.length} session${targets.length === 1 ? "" : "s"}.`;
+  } catch (error) {
+    snippetStatus.textContent = errorMessage(error);
+  }
+}
+
+function renderSnippets(): void {
+  const query = snippetSearchInput.value.trim().toLocaleLowerCase();
+  const filtered = savedSnippets.filter((snippet) =>
+    !query || [snippet.name, snippet.language, snippet.body, ...snippet.tags]
+      .some((value) => value.toLocaleLowerCase().includes(query)),
+  );
+  snippetList.replaceChildren();
+  if (filtered.length === 0) {
+    snippetList.append(createTextElement(
+      "div",
+      "sidebar-empty",
+      savedSnippets.length === 0 ? "No command snippets saved yet." : "No snippets match this filter.",
+    ));
+    return;
+  }
+  for (const snippet of filtered) {
+    const card = document.createElement("article");
+    card.className = "snippet-card";
+    const heading = createTextElement("div", "snippet-card-heading", "");
+    heading.append(
+      createTextElement("span", "snippet-name", snippet.name),
+      createTextElement("span", "snippet-language", snippet.language === "cisco" ? "CISCO CLI" : snippet.language.toUpperCase()),
+    );
+    const tags = createTextElement("div", "snippet-tags", "");
+    for (const tag of snippet.tags) tags.append(createTextElement("span", "snippet-tag", tag));
+    const preview = createTextElement("div", "snippet-preview", snippet.body.split(/\r?\n/)[0] ?? "");
+    const actions = createTextElement("div", "snippet-actions", "");
+    const runButton = document.createElement("button");
+    runButton.className = "primary-button compact-button";
+    runButton.type = "button";
+    runButton.textContent = "Run";
+    runButton.addEventListener("click", () => executeSnippet(snippet));
+    const editButton = document.createElement("button");
+    editButton.className = "secondary-button compact-button";
+    editButton.type = "button";
+    editButton.textContent = "Edit";
+    editButton.addEventListener("click", () => editableSnippet(snippet));
+    const deleteButton = document.createElement("button");
+    deleteButton.className = "secondary-button compact-button";
+    deleteButton.type = "button";
+    deleteButton.textContent = "Delete";
+    deleteButton.addEventListener("click", async () => {
+      if (!window.confirm(`Delete the snippet "${snippet.name}"?`)) return;
+      try {
+        await window.cybergrid.vault.deleteSnippet(snippet.id);
+        savedSnippets = await window.cybergrid.vault.listSnippets();
+        renderSnippets();
+      } catch (error) {
+        snippetStatus.textContent = errorMessage(error);
+      }
+    });
+    actions.append(runButton, editButton, deleteButton);
+    card.append(heading, tags, preview, actions);
+    snippetList.append(card);
+  }
+}
+
+function renderBroadcastTargets(): void {
+  const groups = new Map<string, WorkspaceTab[]>();
+  for (const tab of activeBroadcastTabs()) {
+    const entries = groups.get(tab.context.group) ?? [];
+    entries.push(tab);
+    groups.set(tab.context.group, entries);
+  }
+  broadcastTargetList.replaceChildren();
+  for (const [group, groupTabs] of [...groups.entries()].sort(([left], [right]) => left.localeCompare(right))) {
+    const label = document.createElement("label");
+    label.className = "broadcast-target-row";
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.value = group;
+    checkbox.checked = !excludedBroadcastGroups.has(group);
+    const details = createTextElement("span", "broadcast-target-details", "");
+    details.append(
+      createTextElement("span", "broadcast-target-group", group),
+      createTextElement("span", "broadcast-target-tabs", groupTabs.map((tab) => tab.label).join(", ")),
+    );
+    label.append(checkbox, details, createTextElement("span", "folder-count", String(groupTabs.length)));
+    checkbox.addEventListener("change", updateBroadcastTargetCount);
+    broadcastTargetList.append(label);
+  }
+  updateBroadcastTargetCount();
+}
+
+function updateBroadcastTargetCount(): void {
+  const checkedGroups = new Set(
+    [...broadcastTargetList.querySelectorAll<HTMLInputElement>('input[type="checkbox"]:checked')]
+      .map((input) => input.value),
+  );
+  const count = activeBroadcastTabs().filter((tab) => checkedGroups.has(tab.context.group)).length;
+  broadcastTargetCount.textContent = `${count} session${count === 1 ? "" : "s"} selected`;
+}
+
+function openBroadcastTargets(): void {
+  renderBroadcastTargets();
+  if (!broadcastTargetsModal.open) broadcastTargetsModal.showModal();
 }
 
 function parentRemotePath(remotePath: string): string {
@@ -1516,8 +1815,76 @@ quickConnectForm.addEventListener("submit", async (event) => {
   }
 });
 
+broadcastToggleButton.addEventListener("click", () => {
+  if (broadcastMode) {
+    broadcastMode = false;
+  } else if (selectedBroadcastTabs().length === 0) {
+    openBroadcastTargets();
+  } else {
+    broadcastMode = true;
+  }
+  updateBroadcastControls();
+  tabs.get(activeTabId ?? "")?.terminal?.focus();
+});
+broadcastTargetsButton.addEventListener("click", openBroadcastTargets);
+broadcastSelectAllButton.addEventListener("click", () => {
+  for (const input of broadcastTargetList.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')) {
+    input.checked = true;
+  }
+  updateBroadcastTargetCount();
+});
+broadcastSelectNoneButton.addEventListener("click", () => {
+  for (const input of broadcastTargetList.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')) {
+    input.checked = false;
+  }
+  updateBroadcastTargetCount();
+});
+broadcastTargetCancelButton.addEventListener("click", () => broadcastTargetsModal.close());
+broadcastTargetApplyButton.addEventListener("click", () => {
+  const activeGroups = new Set(activeBroadcastTabs().map((tab) => tab.context.group));
+  const checkedGroups = new Set(
+    [...broadcastTargetList.querySelectorAll<HTMLInputElement>('input[type="checkbox"]:checked')]
+      .map((input) => input.value),
+  );
+  for (const group of activeGroups) {
+    if (checkedGroups.has(group)) excludedBroadcastGroups.delete(group);
+    else excludedBroadcastGroups.add(group);
+  }
+  if (selectedBroadcastTabs().length === 0) broadcastMode = false;
+  broadcastTargetsModal.close();
+  updateBroadcastControls();
+});
+broadcastTargetsModal.addEventListener("click", (event) => {
+  if (event.target === broadcastTargetsModal) broadcastTargetsModal.close();
+});
+
 toggleSftpButton.addEventListener("click", () => setSftpDrawerOpen(!sftpDrawerOpen));
 sftpCloseButton.addEventListener("click", () => setSftpDrawerOpen(false));
+toggleSnippetsButton.addEventListener("click", () => setSnippetsDrawerOpen(!snippetsDrawerOpen));
+snippetsCloseButton.addEventListener("click", () => setSnippetsDrawerOpen(false));
+snippetSearchInput.addEventListener("input", renderSnippets);
+addSnippetButton.addEventListener("click", () => editableSnippet());
+snippetCancelButton.addEventListener("click", hideSnippetForm);
+snippetForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  snippetFormError.textContent = "";
+  const input: SnippetInput = {
+    name: snippetNameInput.value.trim(),
+    language: snippetLanguageInput.value as SnippetLanguage,
+    tags: [...new Set(snippetTagsInput.value.split(",").map((tag) => tag.trim()).filter(Boolean))],
+    body: snippetBodyInput.value,
+  };
+  if (snippetIdInput.value) input.id = snippetIdInput.value;
+  try {
+    await window.cybergrid.vault.saveSnippet(input);
+    savedSnippets = await window.cybergrid.vault.listSnippets();
+    hideSnippetForm();
+    renderSnippets();
+    snippetStatus.textContent = `Saved "${input.name}" in the encrypted vault.`;
+  } catch (error) {
+    snippetFormError.textContent = errorMessage(error);
+  }
+});
 sftpRefreshButton.addEventListener("click", () => {
   const tab = activeSshTab();
   if (tab) {
@@ -1787,16 +2154,24 @@ lockButton.addEventListener("click", async () => {
     if (migrationModal.open) {
       migrationModal.close();
     }
+    if (broadcastTargetsModal.open) {
+      broadcastTargetsModal.close();
+    }
     setSftpDrawerOpen(false);
+    setSnippetsDrawerOpen(false);
+    broadcastMode = false;
     await window.cybergrid.vault.lock();
     activeScanId = null;
     setScanRunning(false);
     scanDevices.clear();
     savedProfiles = [];
     savedAssets = [];
+    savedSnippets = [];
     healthStatuses.clear();
     renderProfiles();
     renderAssets();
+    renderSnippets();
+    updateBroadcastControls();
     setVaultPrompt(true);
   } catch (error) {
     window.alert(errorMessage(error));

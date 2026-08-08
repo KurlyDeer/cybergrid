@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { WebContents } from "electron";
 import { SerialPort } from "serialport";
+import { AuditController, type AuditSessionContext } from "./audit";
 import {
   IPC_CHANNELS,
   type SerialConnectionConfig,
@@ -18,6 +19,8 @@ interface SerialSession {
 export class SerialController {
   private readonly sessions = new Map<string, SerialSession>();
 
+  constructor(private readonly audit: AuditController) {}
+
   async listPorts(): Promise<SerialPortInfo[]> {
     const ports = await SerialPort.list();
     return ports.map((port) => ({
@@ -29,14 +32,16 @@ export class SerialController {
     }));
   }
 
-  connect(config: SerialConnectionConfig, sender: WebContents): string {
+  connect(config: SerialConnectionConfig, sender: WebContents, auditContext: AuditSessionContext): string {
     const sessionId = randomUUID();
     const port = new SerialPort({ ...config, autoOpen: false });
     const session: SerialSession = { port, sender, closed: false };
     this.sessions.set(sessionId, session);
+    this.audit.startSession(sessionId, auditContext);
     this.sendStatus(sessionId, session, "opening", `Opening ${config.path} at ${config.baudRate} baud...`);
 
     port.on("data", (chunk: Buffer) => {
+      this.audit.recordOutput(sessionId, chunk);
       if (!sender.isDestroyed()) {
         const event: SerialDataEvent = { sessionId, data: chunk.toString("utf8") };
         sender.send(IPC_CHANNELS.serialData, event);
@@ -96,6 +101,7 @@ export class SerialController {
     }
     session.closed = true;
     this.sessions.delete(sessionId);
+    this.audit.endSession(sessionId, "Serial session disconnected");
     this.sendStatus(sessionId, session, "disconnected");
   }
 

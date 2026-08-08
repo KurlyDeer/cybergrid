@@ -1,6 +1,7 @@
 import { createConnection, type Socket } from "node:net";
 import { randomUUID } from "node:crypto";
 import type { WebContents } from "electron";
+import { AuditController, type AuditSessionContext } from "./audit";
 import {
   IPC_CHANNELS,
   type StreamConnectionConfig,
@@ -30,7 +31,9 @@ const SE = 240;
 export class StreamController {
   private readonly sessions = new Map<string, StreamSession>();
 
-  connect(config: StreamConnectionConfig, sender: WebContents): string {
+  constructor(private readonly audit: AuditController) {}
+
+  connect(config: StreamConnectionConfig, sender: WebContents, auditContext: AuditSessionContext): string {
     const sessionId = randomUUID();
     const socket = createConnection({ host: config.host, port: config.port });
     const session: StreamSession = {
@@ -41,12 +44,14 @@ export class StreamController {
       closed: false,
     };
     this.sessions.set(sessionId, session);
+    this.audit.startSession(sessionId, auditContext);
     this.sendStatus(sessionId, session, "connecting", `Connecting to ${config.host}:${config.port}...`);
 
     socket.setKeepAlive(true, 20_000);
     socket.on("connect", () => this.sendStatus(sessionId, session, "connected"));
     socket.on("data", (chunk: Buffer) => {
       const data = session.protocol === "telnet" ? this.decodeTelnet(session, chunk) : chunk;
+      if (data.length > 0) this.audit.recordOutput(sessionId, data);
       if (data.length > 0 && !sender.isDestroyed()) {
         const event: StreamDataEvent = { sessionId, data: data.toString("utf8") };
         sender.send(IPC_CHANNELS.streamData, event);
@@ -143,6 +148,7 @@ export class StreamController {
     }
     session.closed = true;
     this.sessions.delete(sessionId);
+    this.audit.endSession(sessionId, `${session.protocol.toUpperCase()} session disconnected`);
     this.sendStatus(sessionId, session, "disconnected");
   }
 

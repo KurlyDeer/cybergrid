@@ -20,6 +20,9 @@ import type {
   ServerProfileInput,
   ServerProfileSummary,
   SerialParity,
+  SnippetInput,
+  SnippetLanguage,
+  SnippetRecord,
   VaultStatus,
 } from "../shared/ipc";
 
@@ -65,6 +68,7 @@ interface VaultPayload {
   version: typeof PAYLOAD_VERSION;
   profiles: DecryptedServerProfile[];
   assets: AssetRecord[];
+  snippets: SnippetRecord[];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -332,6 +336,26 @@ function parseAsset(value: unknown): AssetRecord {
   };
 }
 
+function parseSnippetLanguage(value: unknown): SnippetLanguage {
+  if (value === "powershell" || value === "bash" || value === "cisco") return value;
+  throw new Error("Vault snippet language is invalid.");
+}
+
+function parseSnippet(value: unknown): SnippetRecord {
+  if (!isRecord(value) || !Array.isArray(value.tags)) {
+    throw new Error("Vault snippet is invalid.");
+  }
+  return {
+    id: requireString(value.id, "snippet.id"),
+    name: requireString(value.name, "snippet.name"),
+    language: parseSnippetLanguage(value.language),
+    tags: value.tags.map((tag, index) => requireString(tag, `snippet.tags[${index}]`)),
+    body: requireString(value.body, "snippet.body"),
+    createdAt: requireString(value.createdAt, "snippet.createdAt"),
+    updatedAt: requireString(value.updatedAt, "snippet.updatedAt"),
+  };
+}
+
 function parsePayload(value: unknown): VaultPayload {
   if (!isRecord(value) || value.version !== PAYLOAD_VERSION || !Array.isArray(value.profiles)) {
     throw new Error("Vault payload is invalid.");
@@ -339,10 +363,14 @@ function parsePayload(value: unknown): VaultPayload {
   if (value.assets !== undefined && !Array.isArray(value.assets)) {
     throw new Error("Vault asset inventory is invalid.");
   }
+  if (value.snippets !== undefined && !Array.isArray(value.snippets)) {
+    throw new Error("Vault snippet library is invalid.");
+  }
   return {
     version: PAYLOAD_VERSION,
     profiles: value.profiles.map(parseProfile),
     assets: (value.assets ?? []).map(parseAsset),
+    snippets: (value.snippets ?? []).map(parseSnippet),
   };
 }
 
@@ -448,7 +476,7 @@ export class VaultController {
     this.lock();
     this.masterKey = key;
     this.kdf = kdf;
-    this.payload = { version: PAYLOAD_VERSION, profiles: [], assets: [] };
+    this.payload = { version: PAYLOAD_VERSION, profiles: [], assets: [], snippets: [] };
 
     try {
       await this.persist();
@@ -647,6 +675,56 @@ export class VaultController {
       if (removedAsset) {
         payload.assets.splice(assetIndex, 0, removedAsset);
       }
+      throw error;
+    }
+  }
+
+  listSnippets(): SnippetRecord[] {
+    return this.requirePayload().snippets
+      .map((snippet) => ({ ...snippet, tags: [...snippet.tags] }))
+      .sort((left, right) => left.name.localeCompare(right.name));
+  }
+
+  async saveSnippet(input: SnippetInput): Promise<SnippetRecord> {
+    const payload = this.requirePayload();
+    const timestamp = new Date().toISOString();
+    const existingIndex = input.id
+      ? payload.snippets.findIndex((snippet) => snippet.id === input.id)
+      : -1;
+    if (input.id && existingIndex < 0) {
+      throw new Error("Command snippet was not found.");
+    }
+    const existing = existingIndex >= 0 ? payload.snippets[existingIndex] : undefined;
+    const snippet: SnippetRecord = {
+      name: input.name,
+      language: input.language,
+      tags: [...input.tags],
+      body: input.body,
+      id: existing?.id ?? randomUUID(),
+      createdAt: existing?.createdAt ?? timestamp,
+      updatedAt: timestamp,
+    };
+    if (existingIndex >= 0) payload.snippets.splice(existingIndex, 1, snippet);
+    else payload.snippets.push(snippet);
+    try {
+      await this.persist();
+    } catch (error) {
+      if (existingIndex >= 0 && existing) payload.snippets.splice(existingIndex, 1, existing);
+      else payload.snippets.pop();
+      throw error;
+    }
+    return { ...snippet, tags: [...snippet.tags] };
+  }
+
+  async deleteSnippet(snippetId: string): Promise<void> {
+    const payload = this.requirePayload();
+    const snippetIndex = payload.snippets.findIndex((snippet) => snippet.id === snippetId);
+    if (snippetIndex < 0) throw new Error("Command snippet was not found.");
+    const [removed] = payload.snippets.splice(snippetIndex, 1);
+    try {
+      await this.persist();
+    } catch (error) {
+      if (removed) payload.snippets.splice(snippetIndex, 0, removed);
       throw error;
     }
   }

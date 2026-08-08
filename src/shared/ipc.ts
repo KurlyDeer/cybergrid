@@ -24,6 +24,9 @@ export const IPC_CHANNELS = {
   vaultListAssets: "cybergrid:vault:list-assets",
   vaultSaveAsset: "cybergrid:vault:save-asset",
   vaultDeleteAsset: "cybergrid:vault:delete-asset",
+  vaultListSnippets: "cybergrid:vault:list-snippets",
+  vaultSaveSnippet: "cybergrid:vault:save-snippet",
+  vaultDeleteSnippet: "cybergrid:vault:delete-snippet",
   discoveryStart: "cybergrid:discovery:start",
   discoveryCancel: "cybergrid:discovery:cancel",
   discoveryProgress: "cybergrid:discovery:progress",
@@ -288,13 +291,22 @@ export interface MigrationExportResult {
   path: string | null;
 }
 
-export type ProfileConnectionResult =
+export interface SessionVariableContext {
+  displayName: string;
+  host: string;
+  ip: string;
+  username: string;
+  group: string;
+}
+
+export type ProfileConnectionResult = { context: SessionVariableContext } & (
   | { protocol: "ssh"; sessionId: string }
   | { protocol: "rdp"; sessionId: string }
   | { protocol: "telnet" | "raw"; sessionId: string }
   | { protocol: "serial"; sessionId: string }
   | ({ protocol: "vnc" } & VncConnectionResult)
-  | { protocol: "http" | "https"; sessionId: string };
+  | { protocol: "http" | "https"; sessionId: string }
+);
 
 export interface VaultStatus {
   exists: boolean;
@@ -386,6 +398,22 @@ export interface AssetRecord extends Omit<AssetInput, "id"> {
   updatedAt: string;
 }
 
+export type SnippetLanguage = "powershell" | "bash" | "cisco";
+
+export interface SnippetInput {
+  id?: string;
+  name: string;
+  language: SnippetLanguage;
+  tags: string[];
+  body: string;
+}
+
+export interface SnippetRecord extends Omit<SnippetInput, "id"> {
+  id: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export type Unsubscribe = () => void;
 
 export interface CyberGridApi {
@@ -451,6 +479,9 @@ export interface CyberGridApi {
     listAssets(): Promise<AssetRecord[]>;
     saveAsset(asset: AssetInput): Promise<AssetRecord>;
     deleteAsset(assetId: string): Promise<void>;
+    listSnippets(): Promise<SnippetRecord[]>;
+    saveSnippet(snippet: SnippetInput): Promise<SnippetRecord>;
+    deleteSnippet(snippetId: string): Promise<void>;
   };
   discovery: {
     start(target: string): Promise<string>;
