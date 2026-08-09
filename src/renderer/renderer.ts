@@ -104,6 +104,7 @@ interface WorkspaceTab {
 
 const DEFAULT_SETTINGS: AppPreferences = {
   minimizeToTray: true,
+  masterPasswordEnabled: false,
   autoLockMinutes: 15,
   theme: "dark",
   fontFamily: "Cascadia Mono, JetBrains Mono, Consolas, monospace",
@@ -234,6 +235,7 @@ const vaultOverlay = elementById<HTMLDivElement>("vault-overlay");
 const vaultForm = elementById<HTMLFormElement>("vault-form");
 const vaultTitle = elementById<HTMLHeadingElement>("vault-title");
 const vaultSubtitle = elementById<HTMLParagraphElement>("vault-subtitle");
+const masterPasswordField = elementById<HTMLDivElement>("master-password-field");
 const masterPasswordInput = elementById<HTMLInputElement>("master-password");
 const confirmPasswordField = elementById<HTMLDivElement>("confirm-password-field");
 const confirmPasswordInput = elementById<HTMLInputElement>("master-password-confirm");
@@ -370,6 +372,10 @@ const cancelAssetButton = elementById<HTMLButtonElement>("cancel-asset-button");
 const settingsModal = elementById<HTMLDialogElement>("settings-modal");
 const settingsForm = elementById<HTMLFormElement>("settings-form");
 const minimizeToTrayInput = elementById<HTMLInputElement>("minimize-to-tray");
+const masterPasswordEnabledInput = elementById<HTMLInputElement>("enable-master-password");
+const newMasterPasswordFields = elementById<HTMLDivElement>("new-master-password-fields");
+const newMasterPasswordInput = elementById<HTMLInputElement>("new-master-password");
+const newMasterPasswordConfirmInput = elementById<HTMLInputElement>("new-master-password-confirm");
 const autoLockInput = elementById<HTMLSelectElement>("auto-lock-minutes");
 const themeInput = elementById<HTMLSelectElement>("theme-mode");
 const fontFamilyInput = elementById<HTMLInputElement>("terminal-font-family");
@@ -2387,17 +2393,24 @@ function handleSftpProgress(event: SftpProgressEvent): void {
 function setVaultPrompt(shouldExist: boolean): void {
   vaultUnlocked = false;
   vaultMode = shouldExist ? "unlock" : "create";
+  const usesMasterPassword = currentSettings.masterPasswordEnabled || !shouldExist;
   vaultTitle.textContent = shouldExist ? "Unlock CyberGrid" : "Create your credential vault";
   vaultSubtitle.textContent = shouldExist
-    ? "Enter your master password to decrypt saved servers and credentials."
+    ? usesMasterPassword
+      ? "Enter your master password to decrypt saved servers and credentials."
+      : "Unlock the credential vault with your signed-in operating-system account."
     : "Choose a master password. It cannot be recovered if you lose it.";
-  confirmPasswordField.hidden = shouldExist;
-  confirmPasswordInput.required = !shouldExist;
-  vaultSubmit.textContent = shouldExist ? "Unlock vault" : "Create vault";
+  masterPasswordField.hidden = !usesMasterPassword;
+  masterPasswordInput.required = usesMasterPassword;
+  confirmPasswordField.hidden = shouldExist || !usesMasterPassword;
+  confirmPasswordInput.required = !shouldExist && usesMasterPassword;
+  vaultSubmit.textContent = shouldExist
+    ? usesMasterPassword ? "Unlock vault" : "Unlock with OS account"
+    : "Create vault";
   vaultError.textContent = "";
   vaultOverlay.hidden = false;
   appShell.inert = true;
-  requestAnimationFrame(() => masterPasswordInput.focus());
+  requestAnimationFrame(() => usesMasterPassword ? masterPasswordInput.focus() : vaultSubmit.focus());
 }
 
 function hideVaultPrompt(): void {
@@ -2525,6 +2538,15 @@ function updateProxyFields(): void {
   proxyUrlInput.required = proxyModeInput.value === "manual";
 }
 
+function updateMasterPasswordFields(): void {
+  const enabling = masterPasswordEnabledInput.checked && !currentSettings.masterPasswordEnabled;
+  newMasterPasswordFields.hidden = !enabling;
+  newMasterPasswordInput.required = enabling;
+  newMasterPasswordConfirmInput.required = enabling;
+  autoLockInput.disabled = !masterPasswordEnabledInput.checked;
+  if (!masterPasswordEnabledInput.checked) autoLockInput.value = "0";
+}
+
 function selectSettingsPanel(panel: string): void {
   for (const button of settingsModal.querySelectorAll<HTMLButtonElement>("[data-settings-tab]")) {
     button.classList.toggle("active", button.dataset.settingsTab === panel);
@@ -2536,6 +2558,7 @@ function selectSettingsPanel(panel: string): void {
 
 function populateSettingsForm(settings: AppPreferences): void {
   minimizeToTrayInput.checked = settings.minimizeToTray;
+  masterPasswordEnabledInput.checked = settings.masterPasswordEnabled;
   autoLockInput.value = String(settings.autoLockMinutes);
   themeInput.value = settings.theme;
   fontFamilyInput.value = settings.fontFamily;
@@ -2550,7 +2573,10 @@ function populateSettingsForm(settings: AppPreferences): void {
   proxyBypassInput.value = settings.proxyBypassRules;
   customPaletteFields.hidden = settings.theme !== "custom";
   settingsError.textContent = "";
+  newMasterPasswordInput.value = "";
+  newMasterPasswordConfirmInput.value = "";
   updateProxyFields();
+  updateMasterPasswordFields();
 }
 
 function openSettingsModal(): void {
@@ -3084,6 +3110,7 @@ themeInput.addEventListener("change", () => {
   customPaletteFields.hidden = themeInput.value !== "custom";
 });
 proxyModeInput.addEventListener("change", updateProxyFields);
+masterPasswordEnabledInput.addEventListener("change", updateMasterPasswordFields);
 cancelSettingsButton.addEventListener("click", () => settingsModal.close());
 resetSettingsButton.addEventListener("click", () => populateSettingsForm(DEFAULT_SETTINGS));
 settingsModal.addEventListener("click", (event) => {
@@ -3094,9 +3121,25 @@ settingsModal.addEventListener("click", (event) => {
 settingsForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   settingsError.textContent = "";
+  const enablingMasterPassword = masterPasswordEnabledInput.checked && !currentSettings.masterPasswordEnabled;
+  if (enablingMasterPassword) {
+    if (newMasterPasswordInput.value.length < 10) {
+      settingsError.textContent = "New master password must contain at least 10 characters.";
+      return;
+    }
+    if (newMasterPasswordInput.value !== newMasterPasswordConfirmInput.value) {
+      settingsError.textContent = "New master passwords do not match.";
+      return;
+    }
+  }
+  if (currentSettings.masterPasswordEnabled && !masterPasswordEnabledInput.checked &&
+      !window.confirm("Disable Master Password and protect the vault with your signed-in OS account instead?")) {
+    return;
+  }
   const settings: AppPreferences = {
     minimizeToTray: minimizeToTrayInput.checked,
-    autoLockMinutes: Number(autoLockInput.value),
+    masterPasswordEnabled: masterPasswordEnabledInput.checked,
+    autoLockMinutes: masterPasswordEnabledInput.checked ? Number(autoLockInput.value) : 0,
     theme: themeInput.value as AppPreferences["theme"],
     fontFamily: fontFamilyInput.value.trim() || DEFAULT_SETTINGS.fontFamily,
     fontSize: Math.min(28, Math.max(10, Math.round(Number(fontSizeInput.value)))),
@@ -3110,7 +3153,12 @@ settingsForm.addEventListener("submit", async (event) => {
     proxyBypassRules: proxyBypassInput.value.trim(),
   };
   try {
-    currentSettings = await window.cybergrid.preferences.update(settings);
+    currentSettings = await window.cybergrid.preferences.update(
+      settings,
+      enablingMasterPassword ? newMasterPasswordInput.value : undefined,
+    );
+    newMasterPasswordInput.value = "";
+    newMasterPasswordConfirmInput.value = "";
     applySettings(currentSettings);
     settingsModal.close();
   } catch (error) {

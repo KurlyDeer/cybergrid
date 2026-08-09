@@ -15,7 +15,7 @@ import {
 } from "electron";
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { lookup } from "node:dns/promises";
-import { basename, join, posix } from "node:path";
+import { basename, join, posix, resolve, sep } from "node:path";
 import {
   IPC_CHANNELS,
   type AppPreferences,
@@ -50,6 +50,7 @@ import {
   type WebConnectionConfig,
 } from "../shared/ipc";
 import { AuditController, type AuditSessionContext } from "./audit";
+import { AutoUnlockController } from "./auto-unlock";
 import { runDiagnostic } from "./diagnostics";
 import { launchExternalTool, runConnectionTasks } from "./enterprise";
 import { HealthController } from "./health";
@@ -66,6 +67,30 @@ import { VaultController } from "./vault";
 import { VncController } from "./vnc";
 import { WebController } from "./web";
 
+let displayingFatalError = false;
+
+function errorStack(reason: unknown): string {
+  if (reason instanceof Error) return reason.stack ?? `${reason.name}: ${reason.message}`;
+  return typeof reason === "string" ? reason : JSON.stringify(reason, null, 2) || String(reason);
+}
+
+function reportFatalError(source: string, reason: unknown): void {
+  const stack = errorStack(reason);
+  console.error(`[CyberGrid ${source}]`, stack);
+  if (displayingFatalError) return;
+  displayingFatalError = true;
+  try {
+    dialog.showErrorBox(`CyberGrid ${source}`, stack);
+  } catch (dialogError) {
+    console.error("CyberGrid could not display the native error dialog:", dialogError);
+  } finally {
+    displayingFatalError = false;
+  }
+}
+
+process.on("uncaughtException", (error) => reportFatalError("uncaught exception", error));
+process.on("unhandledRejection", (reason) => reportFatalError("unhandled promise rejection", reason));
+
 const auditController = new AuditController();
 const sshController = new SshController(auditController);
 const scannerController = new ScannerController();
@@ -78,12 +103,27 @@ let vaultController: VaultController | null = null;
 let webController: WebController | null = null;
 let migrationController: MigrationController | null = null;
 let preferencesController: PreferencesController | null = null;
+let autoUnlockController: AutoUnlockController | null = null;
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let autoLockTimer: NodeJS.Timeout | undefined;
 let isQuitting = false;
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 app.setAppUserModelId("com.kurlydeer.cybergrid");
+
+function applicationFile(...segments: string[]): string {
+  const applicationRoot = app.isPackaged ? app.getAppPath() : resolve(__dirname, "..", "..");
+  return join(applicationRoot, "build", ...segments);
+}
+
+function userDataFile(...segments: string[]): string {
+  const userDataRoot = resolve(app.getPath("userData"));
+  const target = resolve(userDataRoot, ...segments);
+  if (target !== userDataRoot && !target.startsWith(`${userDataRoot}${sep}`)) {
+    throw new Error(`Refused storage path outside Electron userData: ${target}`);
+  }
+  return target;
+}
 
 function createMainWindow(): BrowserWindow {
   const window = new BrowserWindow({
@@ -95,7 +135,7 @@ function createMainWindow(): BrowserWindow {
     backgroundColor: "#080d14",
     title: "CyberGrid",
     webPreferences: {
-      preload: join(__dirname, "preload.js"),
+      preload: applicationFile("main", "preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
@@ -130,7 +170,9 @@ function createMainWindow(): BrowserWindow {
     }
   });
 
-  void window.loadFile(join(__dirname, "../renderer/index.html"));
+  void window.loadFile(applicationFile("renderer", "index.html")).catch((error: unknown) => {
+    reportFatalError("renderer load failure", error);
+  });
   return window;
 }
 
@@ -177,6 +219,13 @@ function requirePreferences(): PreferencesController {
     throw new Error("Application preferences are not initialized.");
   }
   return preferencesController;
+}
+
+function requireAutoUnlock(): AutoUnlockController {
+  if (!autoUnlockController) {
+    throw new Error("Automatic vault unlock is not initialized.");
+  }
+  return autoUnlockController;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -865,9 +914,11 @@ function normalizePreferences(value: unknown): AppPreferences {
       throw new Error("Do not store credentials in the proxy URL; use system proxy authentication.");
     }
   }
+  const masterPasswordEnabled = value.masterPasswordEnabled === true;
   return {
     minimizeToTray: value.minimizeToTray === true,
-    autoLockMinutes,
+    masterPasswordEnabled,
+    autoLockMinutes: masterPasswordEnabled ? autoLockMinutes : 0,
     theme,
     fontFamily: readString(value.fontFamily, "Terminal font family", {
       required: true,
@@ -904,6 +955,102 @@ async function applyProxyPreferences(preferences: AppPreferences): Promise<void>
   }
   await session.defaultSession.setProxy(config);
   await session.defaultSession.closeAllConnections();
+}
+
+async function getOrCreateAutomaticSecret(): Promise<string> {
+  const controller = requireAutoUnlock();
+  return (await controller.readSecret()) ?? controller.createAndStoreSecret();
+}
+
+async function initializeVaultAccess(): Promise<void> {
+  const vault = requireVault();
+  const preferences = requirePreferences();
+  const automatic = requireAutoUnlock();
+  const status = await vault.status();
+  if (await automatic.hasStoredSecret()) {
+    try {
+      const secret = await automatic.readSecret();
+      if (!secret) throw new Error("Automatic vault key is empty.");
+      if (status.exists) await vault.unlock(secret);
+      else await vault.create(secret);
+      if (preferences.get().masterPasswordEnabled || preferences.get().autoLockMinutes !== 0) {
+        await preferences.save({
+          ...preferences.get(),
+          masterPasswordEnabled: false,
+          autoLockMinutes: 0,
+        });
+      }
+      return;
+    } catch (error) {
+      console.warn("CyberGrid automatic vault unlock failed; falling back to master password:", error);
+      if (!preferences.get().masterPasswordEnabled) {
+        await preferences.save({ ...preferences.get(), masterPasswordEnabled: true });
+      }
+      return;
+    }
+  }
+
+  if (!status.exists && !preferences.get().masterPasswordEnabled) {
+    if (await automatic.isAvailable()) {
+      const secret = await automatic.createAndStoreSecret();
+      try {
+        await vault.create(secret);
+        await preferences.save({
+          ...preferences.get(),
+          masterPasswordEnabled: false,
+          autoLockMinutes: 0,
+        });
+        return;
+      } catch (error) {
+        await automatic.removeSecret().catch(() => undefined);
+        throw error;
+      }
+    }
+    await preferences.save({ ...preferences.get(), masterPasswordEnabled: true });
+    return;
+  }
+
+  if (status.exists && !preferences.get().masterPasswordEnabled) {
+    // Existing installations created before optional master-password support do
+    // not have an OS-protected key. Preserve access by retaining the prompt.
+    await preferences.save({ ...preferences.get(), masterPasswordEnabled: true });
+  }
+}
+
+async function changeMasterPasswordMode(
+  enabled: boolean,
+  newMasterPassword: unknown,
+): Promise<void> {
+  const preferences = requirePreferences().get();
+  if (preferences.masterPasswordEnabled === enabled) return;
+  const vault = requireVault();
+  if (!vault.isVaultUnlocked()) throw new Error("Unlock the credential vault before changing Master Password settings.");
+
+  if (enabled) {
+    const password = readMasterPassword(newMasterPassword);
+    if (password.length < 10) throw new Error("New master password must contain at least 10 characters.");
+    await vault.rotateMasterPassword(password);
+    await requireAutoUnlock().removeSecret();
+    return;
+  }
+
+  const secret = await requireAutoUnlock().createAndStoreSecret();
+  try {
+    await vault.rotateMasterPassword(secret);
+  } catch (error) {
+    await requireAutoUnlock().removeSecret().catch(() => undefined);
+    throw error;
+  }
+}
+
+async function unlockVault(masterPassword: unknown): Promise<void> {
+  if (requirePreferences().get().masterPasswordEnabled) {
+    await requireVault().unlock(readMasterPassword(masterPassword));
+    return;
+  }
+  const secret = await requireAutoUnlock().readSecret();
+  if (!secret) throw new Error("The OS-protected automatic vault key is missing. Enable Master Password recovery is required.");
+  await requireVault().unlock(secret);
 }
 
 function showMainWindow(): void {
@@ -1336,14 +1483,17 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle(IPC_CHANNELS.vaultCreate, async (event, masterPassword: unknown) => {
     assertTrustedSender(event);
-    await requireVault().create(readMasterPassword(masterPassword));
+    const password = requirePreferences().get().masterPasswordEnabled
+      ? readMasterPassword(masterPassword)
+      : await getOrCreateAutomaticSecret();
+    await requireVault().create(password);
     resetAutoLockTimer();
     await refreshTrayMenu();
   });
 
   ipcMain.handle(IPC_CHANNELS.vaultUnlock, async (event, masterPassword: unknown) => {
     assertTrustedSender(event);
-    await requireVault().unlock(readMasterPassword(masterPassword));
+    await unlockVault(masterPassword);
     resetAutoLockTimer();
     await refreshTrayMenu();
   });
@@ -1534,10 +1684,11 @@ function registerIpcHandlers(): void {
     return requirePreferences().get();
   });
 
-  ipcMain.handle(IPC_CHANNELS.preferencesUpdate, async (event, preferences: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.preferencesUpdate, async (event, preferences: unknown, newMasterPassword: unknown) => {
     assertTrustedSender(event);
     const normalized = normalizePreferences(preferences);
     await applyProxyPreferences(normalized);
+    await changeMasterPasswordMode(normalized.masterPasswordEnabled, newMasterPassword);
     const saved = await requirePreferences().save(normalized);
     resetAutoLockTimer();
     return saved;
@@ -1735,9 +1886,10 @@ if (!hasSingleInstanceLock) {
   });
 
   void app.whenReady().then(async () => {
-    auditController.configure(join(app.getPath("userData"), "logs"));
+    app.setAppLogsPath(userDataFile("logs", "application"));
+    auditController.configure(userDataFile("logs", "sessions"));
     preferencesController = new PreferencesController(
-      join(app.getPath("userData"), "cybergrid-preferences.json"),
+      userDataFile("cybergrid-preferences.json"),
     );
     await preferencesController.load().catch((error: unknown) => {
       console.warn("CyberGrid preferences could not be loaded; using defaults:", error);
@@ -1747,8 +1899,12 @@ if (!hasSingleInstanceLock) {
       console.warn("CyberGrid proxy settings could not be applied:", error);
     });
     vaultController = new VaultController(
-      join(app.getPath("userData"), "cybergrid-vault.json"),
+      userDataFile("cybergrid-vault.json"),
     );
+    autoUnlockController = new AutoUnlockController(
+      userDataFile("security", "vault-auto-key.bin"),
+    );
+    await initializeVaultAccess();
     rdpController = new RdpController(join(app.getPath("temp"), "CyberGrid", "rdp"));
     webController = new WebController(() => mainWindow);
     migrationController = new MigrationController(() => mainWindow);
@@ -1763,6 +1919,8 @@ if (!hasSingleInstanceLock) {
         showMainWindow();
       }
     });
+  }).catch((error: unknown) => {
+    reportFatalError("startup failure", error);
   });
 }
 

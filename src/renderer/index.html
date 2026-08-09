@@ -1971,7 +1971,7 @@
         <h1 id="vault-title">Unlock CyberGrid</h1>
         <p id="vault-subtitle">Enter your master password to decrypt saved servers and credentials.</p>
         <form id="vault-form">
-          <div class="field">
+          <div class="field" id="master-password-field">
             <label for="master-password">Master password</label>
             <input id="master-password" type="password" required maxlength="1024" autocomplete="current-password" />
           </div>
@@ -2246,8 +2246,16 @@
               </div>
             </section>
             <section class="settings-panel" data-settings-panel="security" hidden>
+              <h3>Vault Security</h3>
+              <p>Use a master password, or protect an automatic vault key with the signed-in operating-system account.</p>
+              <div class="checkbox-field"><input id="enable-master-password" type="checkbox" /><label class="checkbox-label" for="enable-master-password">Enable Master Password</label></div>
+              <div class="settings-grid" id="new-master-password-fields" hidden>
+                <div class="field"><label for="new-master-password">New master password</label><input id="new-master-password" type="password" minlength="10" maxlength="1024" autocomplete="new-password" /></div>
+                <div class="field"><label for="new-master-password-confirm">Confirm master password</label><input id="new-master-password-confirm" type="password" minlength="10" maxlength="1024" autocomplete="new-password" /></div>
+              </div>
+              <div class="folder-inheritance-note">When disabled, Windows DPAPI, macOS Keychain, or a secure Linux credential store protects the automatic key. Insecure Linux basic-text storage is rejected.</div>
               <h3>Security Auto-Lock</h3>
-              <p>Disconnect active sessions and clear decrypted credentials after application inactivity.</p>
+              <p>Disconnect active sessions and clear decrypted credentials after application inactivity. Auto-lock requires Master Password.</p>
               <div class="field"><label for="auto-lock-minutes">Inactivity timeout</label><select id="auto-lock-minutes"><option value="0">Never</option><option value="1">1 minute</option><option value="5">5 minutes</option><option value="15">15 minutes</option><option value="30">30 minutes</option><option value="60">1 hour</option><option value="120">2 hours</option><option value="480">8 hours</option></select></div>
             </section>
             <section class="settings-panel" data-settings-panel="network" hidden>

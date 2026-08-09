@@ -275,8 +275,8 @@ const api: CyberGridApi = {
   },
   preferences: {
     get: () => ipcRenderer.invoke(IPC_CHANNELS.preferencesGet),
-    update: (preferences: AppPreferences) =>
-      ipcRenderer.invoke(IPC_CHANNELS.preferencesUpdate, preferences),
+    update: (preferences: AppPreferences, newMasterPassword?: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.preferencesUpdate, preferences, newMasterPassword),
     activity: () => ipcRenderer.send(IPC_CHANNELS.preferencesActivity),
   },
   diagnostics: {

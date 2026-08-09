@@ -12,6 +12,7 @@ interface PreferencesFile {
 
 export const DEFAULT_APP_PREFERENCES: AppPreferences = {
   minimizeToTray: true,
+  masterPasswordEnabled: false,
   autoLockMinutes: 15,
   theme: "dark",
   fontFamily: "Cascadia Mono, JetBrains Mono, Consolas, monospace",
@@ -54,6 +55,9 @@ function parseStoredPreferences(value: unknown): AppPreferences {
     minimizeToTray: typeof preferences.minimizeToTray === "boolean"
       ? preferences.minimizeToTray
       : DEFAULT_APP_PREFERENCES.minimizeToTray,
+    masterPasswordEnabled: typeof preferences.masterPasswordEnabled === "boolean"
+      ? preferences.masterPasswordEnabled
+      : true,
     autoLockMinutes: Number.isInteger(preferences.autoLockMinutes) &&
       Number(preferences.autoLockMinutes) >= 0 && Number(preferences.autoLockMinutes) <= 480
       ? Number(preferences.autoLockMinutes)

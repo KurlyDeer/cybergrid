@@ -3,15 +3,16 @@
   "version": "0.1.0",
   "private": true,
   "description": "A fast, cross-platform terminal and remote connection manager.",
-  "main": "dist/main/main.js",
+  "main": "build/main/main.js",
   "type": "commonjs",
   "scripts": {
-    "clean": "rimraf dist",
+    "clean": "rimraf build",
+    "clean:artifacts": "rimraf dist",
     "build": "npm run clean && tsc && node scripts/copy-static.cjs",
     "typecheck": "tsc --noEmit",
     "start": "npm run build && electron .",
     "dev": "npm run build && electron .",
-    "dist:win": "npm run build && electron-builder --win --x64 --publish never",
+    "dist:win": "npm run clean:artifacts && npm run build && electron-builder --win --x64 --publish never",
     "postinstall": "electron-builder install-app-deps"
   },
   "repository": {
@@ -54,13 +55,18 @@
     "productName": "CyberGrid",
     "asar": true,
     "asarUnpack": [
-      "node_modules/@serialport/bindings-cpp/**/*"
+      "**/*.node",
+      "node_modules/better-sqlite3/**/*",
+      "node_modules/@serialport/bindings-cpp/**/*",
+      "node_modules/cpu-features/**/*",
+      "node_modules/ssh2/**/*"
     ],
     "directories": {
-      "output": "release"
+      "output": "dist",
+      "buildResources": "resources"
     },
     "files": [
-      "dist/**/*",
+      "build/**/*",
       "package.json"
     ],
     "win": {
@@ -80,6 +86,8 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
+      "shortcutName": "CyberGrid",
+      "uninstallDisplayName": "CyberGrid Remote Desktop Manager",
       "artifactName": "${productName}-${version}-setup-${arch}.${ext}"
     },
     "portable": {

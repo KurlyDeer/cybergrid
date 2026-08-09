@@ -703,6 +703,28 @@ export class VaultController {
     }
   }
 
+  async rotateMasterPassword(newMasterPassword: string): Promise<void> {
+    if (newMasterPassword.length < 10 || newMasterPassword.length > 1_024) {
+      throw new Error("Master password must contain between 10 and 1,024 characters.");
+    }
+    this.requirePayload();
+    const previousKey = this.masterKey as Buffer;
+    const previousKdf = this.kdf as VaultKdfConfig;
+    const nextKdf = createKdfConfig();
+    const nextKey = await deriveKey(newMasterPassword, nextKdf);
+    this.masterKey = nextKey;
+    this.kdf = nextKdf;
+    try {
+      await this.persist();
+      previousKey.fill(0);
+    } catch (error) {
+      this.masterKey = previousKey;
+      this.kdf = previousKdf;
+      nextKey.fill(0);
+      throw error;
+    }
+  }
+
   lock(): void {
     this.masterKey?.fill(0);
     this.masterKey = undefined;

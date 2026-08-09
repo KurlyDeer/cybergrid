@@ -583,6 +583,7 @@ export type ProxyMode = "system" | "direct" | "manual";
 
 export interface AppPreferences {
   minimizeToTray: boolean;
+  masterPasswordEnabled: boolean;
   autoLockMinutes: number;
   theme: TerminalThemeName;
   fontFamily: string;
@@ -701,7 +702,7 @@ export interface CyberGridApi {
   };
   preferences: {
     get(): Promise<AppPreferences>;
-    update(preferences: AppPreferences): Promise<AppPreferences>;
+    update(preferences: AppPreferences, newMasterPassword?: string): Promise<AppPreferences>;
     activity(): void;
   };
   diagnostics: {
