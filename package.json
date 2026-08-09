@@ -1,6 +1,6 @@
 {
   "name": "cybergrid",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "description": "A fast, cross-platform terminal and remote connection manager.",
   "main": "build/main/main.js",

@@ -1,4 +1,4 @@
-import { Terminal, type ITerminalOptions, type ITheme } from "xterm";
+import { Terminal, type ITheme } from "xterm";
 import { FitAddon } from "xterm-addon-fit";
 
 type XtermTerminal = Terminal;
@@ -170,7 +170,6 @@ let vaultMode: "create" | "unlock" = "unlock";
 let sftpDrawerOpen = false;
 let snippetsDrawerOpen = false;
 let selectedProfileId: string | null = null;
-let activeOperationsPanel: "commands" | "notes" | "backups" = "commands";
 let connectionCategory: ConnectionCategory = "server";
 let broadcastMode = false;
 let layoutMode: "single" | "grid" = "single";
@@ -2328,129 +2327,6 @@ function diagnosticElement(profileId: string): HTMLElement | undefined {
   return panel;
 }
 
-function renderProfilesLegacy(): void {
-  profileTree.replaceChildren();
-  groupOptions.replaceChildren();
-
-  if (savedProfiles.length === 0) {
-    const emptyState = document.createElement("div");
-    emptyState.className = "sidebar-empty";
-    emptyState.textContent = "No saved connections yet. Add one or import an existing connection tree.";
-    profileTree.append(emptyState);
-    return;
-  }
-
-  const profilesByGroup = new Map<string, ServerProfileSummary[]>();
-  for (const profile of savedProfiles) {
-    const group = profile.group || "Ungrouped";
-    const groupProfiles = profilesByGroup.get(group) ?? [];
-    groupProfiles.push(profile);
-    profilesByGroup.set(group, groupProfiles);
-  }
-
-  const groups = [...profilesByGroup.keys()].sort((left, right) => left.localeCompare(right));
-  for (const group of groups) {
-    const option = document.createElement("option");
-    option.value = group;
-    groupOptions.append(option);
-
-    const section = document.createElement("section");
-    section.className = "server-group";
-    section.classList.toggle("collapsed", collapsedGroups.has(group));
-
-    const folderButton = document.createElement("button");
-    folderButton.className = "folder-header";
-    folderButton.type = "button";
-    folderButton.setAttribute("aria-expanded", String(!collapsedGroups.has(group)));
-    folderButton.append(
-      createTextElement("span", "folder-chevron", collapsedGroups.has(group) ? ">" : "v"),
-      createTextElement("span", "folder-name", group),
-      createTextElement("span", "folder-count", String(profilesByGroup.get(group)?.length ?? 0)),
-    );
-    folderButton.addEventListener("click", () => {
-      if (collapsedGroups.has(group)) {
-        collapsedGroups.delete(group);
-      } else {
-        collapsedGroups.add(group);
-      }
-      renderProfiles();
-    });
-    folderButton.addEventListener("contextmenu", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      serverContextMenu.replaceChildren();
-      appendContextAction("Edit inherited properties...", () => {
-        closeServerContextMenu();
-        openFolderDefaultsModal(group);
-      });
-      appendContextAction("Clear inherited properties", () => {
-        closeServerContextMenu();
-        void window.cybergrid.vault.deleteFolderDefaults(group)
-          .then(refreshEnterpriseData)
-          .catch((error: unknown) => window.alert(errorMessage(error)));
-      }, !folderDefaults.some((item) => item.path === group));
-      positionContextMenu(event.clientX, event.clientY, 90);
-    });
-
-    const list = document.createElement("div");
-    list.className = "server-list";
-    for (const profile of profilesByGroup.get(group) ?? []) {
-      const row = document.createElement("div");
-      row.className = "server-row";
-
-      const serverButton = document.createElement("button");
-      serverButton.className = "server-item";
-      serverButton.type = "button";
-      serverButton.title = `Double-click to connect${profile.inheritFolderDefaults ? " · folder defaults enabled" : ""}`;
-      const meta = createTextElement("span", "server-meta", "");
-      const endpoint = profile.protocol === "serial"
-        ? `${profile.host} / ${profile.baudRate ?? 9_600} baud`
-        : `${profile.protocol.toUpperCase()}  ${profile.username ? `${profile.username}@` : ""}${profile.host}:${profile.port}`;
-      meta.append(
-        createTextElement("span", "server-name", `${profile.favorite ? "★ " : ""}${profile.name}${profile.managedBySyncId ? " ↻" : ""}`),
-        createTextElement(
-          "span",
-          "server-host",
-          `${endpoint}${profile.tags.length > 0 ? `  ·  ${profile.tags.join(", ")}` : ""}`,
-        ),
-      );
-      const healthDot = createTextElement("span", "server-dot", "");
-      healthDot.dataset.healthId = profile.id;
-      applyHealthStatus(healthDot, healthStatuses.get(profile.id));
-      serverButton.append(healthDot, meta);
-      serverButton.addEventListener("click", () => populateQuickConnect(profile));
-      serverButton.addEventListener("dblclick", () => void connectSavedProfile(profile));
-      serverButton.addEventListener("contextmenu", (event) => openServerContextMenu(event, profile));
-
-      const deleteButton = document.createElement("button");
-      deleteButton.className = "server-delete";
-      deleteButton.type = "button";
-      deleteButton.title = `Delete ${profile.name}`;
-      deleteButton.setAttribute("aria-label", `Delete ${profile.name}`);
-      deleteButton.textContent = "\u00d7";
-      deleteButton.addEventListener("click", async () => {
-        if (!window.confirm(`Delete the saved server "${profile.name}"?`)) {
-          return;
-        }
-        try {
-          await window.cybergrid.vault.deleteProfile(profile.id);
-          await refreshProfiles();
-        } catch (error) {
-          window.alert(errorMessage(error));
-        }
-      });
-
-      row.append(serverButton, deleteButton);
-      list.append(row);
-      const diagnostic = diagnosticElement(profile.id);
-      if (diagnostic) list.append(diagnostic);
-    }
-
-    section.append(folderButton, list);
-    profileTree.append(section);
-  }
-}
-
 interface ProfileFolderNode {
   name: string;
   path: string;
@@ -2637,7 +2513,6 @@ function selectedProfile(): ServerProfileSummary | undefined {
 }
 
 function selectOperationsPanel(panel: "commands" | "notes" | "backups"): void {
-  activeOperationsPanel = panel;
   for (const button of operationsTabButtons) {
     button.classList.toggle("active", button.dataset.operationsTab === panel);
   }

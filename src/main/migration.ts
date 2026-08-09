@@ -1,5 +1,5 @@
 import { readFile, stat, writeFile } from "node:fs/promises";
-import { basename, extname } from "node:path";
+import { extname } from "node:path";
 import { dialog, type BrowserWindow } from "electron";
 import { XMLParser } from "fast-xml-parser";
 import type {

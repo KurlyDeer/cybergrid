@@ -2,7 +2,6 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { connect as connectTls } from "node:tls";
 import type {
-  ConnectionProtocol,
   InventorySyncProvider,
   ServerProfileInput,
 } from "../shared/ipc";

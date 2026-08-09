@@ -2585,7 +2585,7 @@
 
     <dialog class="help-dialog" id="help-modal" aria-labelledby="help-modal-title">
       <header class="modal-header">
-        <h2 id="help-modal-title">Documentation &amp; Help</h2>
+        <h2 id="help-modal-title">CyberGrid v1.0.0 Documentation &amp; Help</h2>
         <p>Operational guidance stays local and remains available without a network connection.</p>
       </header>
       <div class="help-layout">
@@ -2595,6 +2595,7 @@
           <button type="button" data-help-topic="transfers">SFTP &amp; Backups</button>
           <button type="button" data-help-topic="broadcast">Broadcast Terminal</button>
           <button type="button" data-help-topic="networking">Advanced Networking</button>
+          <button type="button" data-help-topic="security">Security &amp; Recovery</button>
           <button type="button" id="open-shortcuts-button">Keyboard Shortcuts</button>
         </nav>
         <div class="help-content">
@@ -2625,6 +2626,12 @@
             <h3>Jump Hosts, SSH Tunnels &amp; Auto-VPN</h3>
             <p>Advanced Settings stores bastion, proxy, and pre-connect orchestration per connection. Folder inheritance can provide common domain, key, and connection defaults to descendants.</p>
             <ul><li><strong>Jump host:</strong> define the bastion endpoint and inherited credentials with the connection or parent folder.</li><li><strong>SSH tunnel:</strong> create the tunnel as a pre-connect local task, then point the saved connection at the local forwarded endpoint.</li><li><strong>Auto-VPN:</strong> assign a VPN profile or approved local script as a pre-connect task. Add a post-connect or cleanup task where the provider requires explicit teardown.</li><li><strong>Proxy:</strong> global proxy settings apply to embedded Chromium tabs; native socket protocols continue to use their configured direct or task-established path.</li></ul>
+          </article>
+          <article class="help-topic" data-help-panel="security" hidden>
+            <h3>Vault Security &amp; Disaster Recovery</h3>
+            <p>CyberGrid stores the encrypted vault, preferences, workspace layout, and audit logs in the operating system's per-user application-data directory—not beside the executable.</p>
+            <ul><li><strong>Master Password enabled:</strong> the password derives the AES-256-GCM vault key with scrypt and is required after launch or auto-lock.</li><li><strong>Master Password disabled:</strong> a random automatic key is protected by the signed-in user's operating-system credential service through Electron safeStorage.</li><li><strong>Auto-lock:</strong> configure the inactivity timeout and clipboard clearing interval in Settings &gt; Security.</li><li><strong>Workspace restore:</strong> only saved profile identifiers, the active position, and layout are persisted; decrypted credentials are never written to the workspace snapshot.</li><li><strong>DR runbook:</strong> Settings &gt; Security exports inventory, topology, notes, and configuration history as a fully encrypted offline HTML file. Store its passphrase separately.</li></ul>
+            <h4>Operational backup</h4><p>Keep the encrypted vault, the OS-protected key or master password, and DR runbook backups in access-controlled locations. Test recovery periodically on an isolated workstation.</p>
           </article>
         </div>
       </div>
