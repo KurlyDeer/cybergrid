@@ -359,6 +359,7 @@ export class ScannerController {
             scanned,
             total: addresses.length,
             currentIp: ipAddress,
+            hostStatus: device ? "online" : "offline",
           };
           this.send(session, IPC_CHANNELS.discoveryProgress, progress);
         }

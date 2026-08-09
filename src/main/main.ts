@@ -2,6 +2,7 @@ import {
   app,
   BrowserWindow,
   dialog,
+  globalShortcut,
   ipcMain,
   Menu,
   nativeImage,
@@ -13,7 +14,7 @@ import {
   type ProxyConfig,
   type WebContents,
 } from "electron";
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { lookup } from "node:dns/promises";
 import { basename, join, posix, resolve, sep } from "node:path";
 import {
@@ -51,6 +52,7 @@ import {
   type VncConnectionConfig,
   type WebBounds,
   type WebConnectionConfig,
+  type WorkspaceSnapshot,
 } from "../shared/ipc";
 import { AuditController, type AuditSessionContext } from "./audit";
 import type { AutoUnlockController } from "./auto-unlock";
@@ -115,6 +117,7 @@ let migrationControllerPromise: Promise<MigrationController> | null = null;
 let preferencesController: PreferencesController | null = null;
 let autoUnlockController: AutoUnlockController | null = null;
 let mainWindow: BrowserWindow | null = null;
+let quickLauncherWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let autoLockTimer: NodeJS.Timeout | undefined;
 let isQuitting = false;
@@ -190,6 +193,49 @@ function userDataFile(...segments: string[]): string {
     throw new Error(`Refused storage path outside Electron userData: ${target}`);
   }
   return target;
+}
+
+function normalizeWorkspaceSnapshot(value: unknown): WorkspaceSnapshot {
+  if (!isRecord(value) || !Array.isArray(value.profileIds) || value.profileIds.length > 32) {
+    throw new Error("Invalid workspace snapshot.");
+  }
+  const profileIds = value.profileIds.map((id) => readUuid(id, "workspace profile ID"));
+  const activeProfileId = value.activeProfileId === undefined
+    ? undefined : readUuid(value.activeProfileId, "active workspace profile ID");
+  const requestedActiveIndex = Number(value.activeIndex);
+  const activeIndex = Number.isInteger(requestedActiveIndex) && requestedActiveIndex >= 0 && requestedActiveIndex < profileIds.length
+    ? requestedActiveIndex : undefined;
+  return {
+    profileIds,
+    activeProfileId: activeProfileId && profileIds.includes(activeProfileId) ? activeProfileId : undefined,
+    activeIndex,
+    layout: value.layout === "grid" ? "grid" : "single",
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+async function loadWorkspaceSnapshot(): Promise<WorkspaceSnapshot> {
+  const workspacePath = userDataFile("cybergrid-workspace.json");
+  const info = await stat(workspacePath).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return undefined;
+    throw error;
+  });
+  if (!info) return { profileIds: [], layout: "single", updatedAt: new Date(0).toISOString() };
+  if (!info.isFile() || info.size > 64 * 1024) throw new Error("Workspace snapshot is invalid or too large.");
+  return normalizeWorkspaceSnapshot(JSON.parse(await readFile(workspacePath, "utf8")) as unknown);
+}
+
+async function saveWorkspaceSnapshot(value: unknown): Promise<void> {
+  const snapshot = normalizeWorkspaceSnapshot(value);
+  const workspacePath = userDataFile("cybergrid-workspace.json");
+  const temporaryPath = `${workspacePath}.${process.pid}.tmp`;
+  try {
+    await writeFile(temporaryPath, `${JSON.stringify(snapshot, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+    await rename(temporaryPath, workspacePath);
+  } catch (error) {
+    await rm(temporaryPath, { force: true }).catch(() => undefined);
+    throw error;
+  }
 }
 
 const rendererRestartHistory = new Map<number, number[]>();
@@ -292,8 +338,75 @@ function createMainWindow(): BrowserWindow {
   return window;
 }
 
+function destroyQuickLauncher(): void {
+  if (quickLauncherWindow && !quickLauncherWindow.isDestroyed()) quickLauncherWindow.destroy();
+  quickLauncherWindow = null;
+}
+
+function createQuickLauncherWindow(): BrowserWindow {
+  const window = new BrowserWindow({
+    width: 620,
+    height: 360,
+    show: false,
+    frame: false,
+    resizable: false,
+    maximizable: false,
+    minimizable: false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    backgroundColor: "#0d1520",
+    title: "CyberGrid Quick Launcher",
+    webPreferences: {
+      preload: applicationFile("main", "preload.js"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+  quickLauncherWindow = window;
+  window.setAlwaysOnTop(true, "pop-up-menu");
+  window.once("ready-to-show", () => {
+    if (window.isDestroyed()) return;
+    window.center();
+    window.show();
+    window.focus();
+  });
+  window.on("blur", () => destroyQuickLauncher());
+  window.on("closed", () => {
+    if (quickLauncherWindow === window) quickLauncherWindow = null;
+  });
+  window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  window.webContents.on("will-navigate", (event, url) => {
+    if (url !== window.webContents.getURL()) event.preventDefault();
+  });
+  void window.loadFile(applicationFile("renderer", "launcher.html")).catch((error: unknown) => {
+    destroyQuickLauncher();
+    reportFatalError("quick launcher load failure", error);
+  });
+  return window;
+}
+
+function toggleQuickLauncher(): void {
+  if (quickLauncherWindow && !quickLauncherWindow.isDestroyed()) {
+    destroyQuickLauncher();
+    return;
+  }
+  createQuickLauncherWindow();
+}
+
+function registerGlobalQuickLauncher(): void {
+  const registered = globalShortcut.register("Alt+Space", toggleQuickLauncher);
+  if (!registered) {
+    console.warn("CyberGrid could not register Alt+Space; the shortcut may be reserved by the operating system.");
+    globalShortcut.register("CommandOrControl+Alt+Space", toggleQuickLauncher);
+  }
+}
+
 function isTrustedSender(event: IpcMainEvent | IpcMainInvokeEvent): boolean {
-  return Boolean(mainWindow && event.sender === mainWindow.webContents);
+  return Boolean(
+    (mainWindow && event.sender === mainWindow.webContents) ||
+    (quickLauncherWindow && event.sender === quickLauncherWindow.webContents),
+  );
 }
 
 function assertTrustedSender(event: IpcMainInvokeEvent): void {
@@ -1922,6 +2035,62 @@ function registerIpcHandlers(): void {
     return requirePreferences().get();
   });
 
+  ipcMain.handle(IPC_CHANNELS.workspaceLoad, async (event) => {
+    assertTrustedSender(event);
+    return loadWorkspaceSnapshot();
+  });
+
+  ipcMain.handle(IPC_CHANNELS.workspaceSave, async (event, snapshot: unknown) => {
+    assertTrustedSender(event);
+    await saveWorkspaceSnapshot(snapshot);
+  });
+
+  ipcMain.handle(IPC_CHANNELS.disasterRecoveryExport, async (event, rawPassphrase: unknown) => {
+    assertTrustedSender(event);
+    if (!mainWindow) return { path: null, profileCount: 0, assetCount: 0 };
+    const passphrase = readString(rawPassphrase, "Runbook passphrase", {
+      required: true,
+      maxLength: 1_024,
+      trim: false,
+    }) as string;
+    if (passphrase.length < 12) throw new Error("Runbook passphrase must contain at least 12 characters.");
+    const profiles = requireVault().listProfiles();
+    const assets = requireVault().listAssets();
+    const date = new Date().toISOString().slice(0, 10);
+    const result = await dialog.showSaveDialog(mainWindow, {
+      title: "Export encrypted disaster recovery runbook",
+      defaultPath: join(app.getPath("documents"), `CyberGrid-DR-Runbook-${date}.html`),
+      filters: [{ name: "Encrypted HTML runbook", extensions: ["html"] }],
+    });
+    if (result.canceled || !result.filePath) {
+      return { path: null, profileCount: profiles.length, assetCount: assets.length };
+    }
+    const { buildEncryptedRunbook } = await import("./runbook.js");
+    const html = await buildEncryptedRunbook(profiles, assets, passphrase);
+    await writeFile(result.filePath, html, { encoding: "utf8", mode: 0o600 });
+    return { path: result.filePath, profileCount: profiles.length, assetCount: assets.length };
+  });
+
+  ipcMain.handle(IPC_CHANNELS.quickLauncherLaunchProfile, (event, profileId: unknown) => {
+    assertTrustedSender(event);
+    const id = readUuid(profileId, "quick-launch profile ID");
+    if (!requireVault().isVaultUnlocked()) throw new Error("Unlock CyberGrid before launching a saved connection.");
+    if (!requireVault().listProfiles().some((profile) => profile.id === id)) throw new Error("Saved connection was not found.");
+    showMainWindow();
+    mainWindow?.webContents.send(IPC_CHANNELS.trayQuickConnect, id);
+    setImmediate(destroyQuickLauncher);
+  });
+
+  ipcMain.handle(IPC_CHANNELS.quickLauncherShowMain, (event) => {
+    assertTrustedSender(event);
+    showMainWindow();
+    setImmediate(destroyQuickLauncher);
+  });
+
+  ipcMain.on(IPC_CHANNELS.quickLauncherHide, (event) => {
+    if (isTrustedSender(event)) destroyQuickLauncher();
+  });
+
   ipcMain.handle(IPC_CHANNELS.preferencesUpdate, async (event, preferences: unknown, newMasterPassword: unknown) => {
     assertTrustedSender(event);
     const normalized = normalizePreferences(preferences);
@@ -2192,6 +2361,7 @@ if (!hasSingleInstanceLock) {
   void app.whenReady().then(() => {
     registerBootstrapIpcHandler();
     mainWindow = createMainWindow();
+    registerGlobalQuickLauncher();
 
     app.on("activate", () => {
       if (BrowserWindow.getAllWindows().length === 0) {
@@ -2223,6 +2393,8 @@ app.on("window-all-closed", () => {
 });
 
 app.on("will-quit", () => {
+  globalShortcut.unregisterAll();
+  destroyQuickLauncher();
   tray?.destroy();
   tray = null;
 });

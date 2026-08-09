@@ -56,6 +56,13 @@ async function bundleApplication() {
     }),
     build({
       ...common,
+      entryPoints: [join(sourceRoot, "renderer", "launcher.ts")],
+      format: "iife",
+      outfile: join(rendererOutput, "launcher.js"),
+      platform: "browser",
+    }),
+    build({
+      ...common,
       entryPoints: [join(sourceRoot, "renderer", "vnc-bootstrap.mjs")],
       format: "esm",
       outfile: join(rendererOutput, "vnc-bootstrap.mjs"),
@@ -65,6 +72,7 @@ async function bundleApplication() {
 
   await Promise.all([
     copyFile(join(sourceRoot, "renderer", "index.html"), join(rendererOutput, "index.html")),
+    copyFile(join(sourceRoot, "renderer", "launcher.html"), join(rendererOutput, "launcher.html")),
     copyFile(join(sourceRoot, "renderer", "startup.js"), join(rendererOutput, "startup.js")),
     copyFile(
       join(projectRoot, "node_modules", "xterm", "css", "xterm.css"),

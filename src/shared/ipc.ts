@@ -86,6 +86,12 @@ export const IPC_CHANNELS = {
   migrationImport: "cybergrid:migration:import",
   migrationExport: "cybergrid:migration:export",
   selectPrivateKey: "cybergrid:dialog:select-private-key",
+  workspaceLoad: "cybergrid:workspace:load",
+  workspaceSave: "cybergrid:workspace:save",
+  disasterRecoveryExport: "cybergrid:disaster-recovery:export",
+  quickLauncherLaunchProfile: "cybergrid:quick-launcher:launch-profile",
+  quickLauncherShowMain: "cybergrid:quick-launcher:show-main",
+  quickLauncherHide: "cybergrid:quick-launcher:hide",
 } as const;
 
 export interface SshConnectionConfig {
@@ -595,6 +601,7 @@ export interface DiscoveryProgressEvent {
   scanned: number;
   total: number;
   currentIp: string;
+  hostStatus: "online" | "offline";
 }
 
 export interface DiscoveryResultEvent {
@@ -685,6 +692,20 @@ export interface AppPreferences {
     nmap: string;
     powershell: string;
   };
+}
+
+export interface WorkspaceSnapshot {
+  profileIds: string[];
+  activeProfileId?: string;
+  activeIndex?: number;
+  layout: "single" | "grid";
+  updatedAt: string;
+}
+
+export interface DisasterRecoveryExportResult {
+  path: string | null;
+  profileCount: number;
+  assetCount: number;
 }
 
 export type DiagnosticKind = "ping" | "traceroute" | "dns" | "port";
@@ -822,5 +843,11 @@ export interface CyberGridApi {
     onVaultLocked(listener: (reason: string) => void): Unsubscribe;
     onTrayQuickConnect(listener: (profileId: string) => void): Unsubscribe;
     captureScreenshot(request: ScreenshotRequest): Promise<ScreenshotResult>;
+    loadWorkspace(): Promise<WorkspaceSnapshot>;
+    saveWorkspace(snapshot: WorkspaceSnapshot): Promise<void>;
+    exportDisasterRecovery(passphrase: string): Promise<DisasterRecoveryExportResult>;
+    launchProfileFromQuickLauncher(profileId: string): Promise<void>;
+    showMainWindow(): Promise<void>;
+    hideQuickLauncher(): void;
   };
 }

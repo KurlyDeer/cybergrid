@@ -1967,9 +1967,46 @@
       .backup-card pre { max-height: 220px; margin: 0; overflow: auto; padding: 10px; border-top: 1px solid var(--border); color: #b9c9da; font-size: 10px; white-space: pre-wrap; }
       .operations-empty { margin: auto; padding: 24px; color: var(--muted); font-size: 12px; line-height: 1.55; text-align: center; }
       .icon-picker-note { color: var(--muted); font-size: 10px; line-height: 1.45; }
+      .view-switcher { display: flex; gap: 6px; }
+      .view-switcher button[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+      .ipam-panel { display: grid; gap: 10px; }
+      .ipam-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+      .ipam-legend { display: flex; flex-wrap: wrap; gap: 9px 13px; color: var(--muted); font-size: 10px; }
+      .ipam-legend span { display: inline-flex; align-items: center; gap: 5px; }
+      .ipam-swatch { width: 9px; height: 9px; border: 1px solid currentColor; border-radius: 2px; }
+      .ipam-swatch.online { background: #39d98a; color: #39d98a; }
+      .ipam-swatch.offline { background: #e05858; color: #e05858; }
+      .ipam-swatch.saved { background: var(--accent); color: var(--accent); }
+      .ipam-swatch.unassigned { background: #253345; color: #52657a; }
+      .ipam-grid-shell { max-height: min(460px, 52vh); overflow: auto; padding: 10px; border: 1px solid var(--border); border-radius: 9px; background: color-mix(in srgb, var(--background) 65%, transparent); }
+      .ipam-grid { display: grid; grid-template-columns: repeat(16, minmax(25px, 1fr)); gap: 4px; min-width: 540px; }
+      .ipam-host { aspect-ratio: 1; min-width: 0; padding: 0; border: 1px solid var(--border); border-radius: 4px; background: #182433; color: #718399; cursor: pointer; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 9px; font-weight: 800; }
+      .ipam-host:hover, .ipam-host:focus-visible { z-index: 1; border-color: #fff; outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent); transform: scale(1.08); }
+      .ipam-host.online { border-color: #39d98a; background: color-mix(in srgb, #39d98a 32%, #102019); color: #bcf6d9; }
+      .ipam-host.offline { border-color: color-mix(in srgb, #e05858 65%, var(--border)); background: color-mix(in srgb, #e05858 18%, #171116); color: #eaa2a2; }
+      .ipam-host.saved { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 36%, #101a24); color: #e7fff6; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent); }
+      .ipam-status { color: var(--muted); font-size: 10px; }
+      .help-dialog { width: min(960px, calc(100vw - 36px)); max-height: calc(100vh - 36px); }
+      .help-layout { display: grid; grid-template-columns: 220px minmax(0, 1fr); min-height: min(600px, 70vh); }
+      .help-nav { display: grid; align-content: start; gap: 4px; padding: 14px; border-right: 1px solid var(--border); background: color-mix(in srgb, var(--panel-raised) 70%, transparent); }
+      .help-nav button { min-height: 38px; padding: 8px 10px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: var(--muted); cursor: pointer; font-size: 11px; font-weight: 700; text-align: left; }
+      .help-nav button.active { border-color: var(--border); background: var(--accent-soft); color: var(--accent); }
+      .help-content { max-height: min(600px, 70vh); overflow: auto; padding: 22px 26px; }
+      .help-topic h3 { margin: 0 0 8px; font-size: 18px; }
+      .help-topic h4 { margin: 22px 0 7px; color: var(--accent); font-size: 12px; text-transform: uppercase; letter-spacing: .07em; }
+      .help-topic p, .help-topic li { color: #aebdca; font-size: 12px; line-height: 1.65; }
+      .help-topic code { padding: 2px 5px; border: 1px solid var(--border); border-radius: 4px; background: #09111a; color: var(--accent); font-family: ui-monospace, monospace; }
+      .help-topic ol, .help-topic ul { padding-left: 20px; }
+      .shortcuts-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+      .shortcut-row { display: grid; grid-template-columns: 115px minmax(0, 1fr); align-items: center; gap: 10px; padding: 9px 10px; border: 1px solid var(--border); border-radius: 7px; background: var(--panel-raised); color: var(--muted); font-size: 11px; }
+      .shortcut-row kbd { justify-self: start; color: var(--text); }
+      .dr-export-card { display: grid; gap: 12px; margin-top: 20px; padding: 14px; border: 1px solid var(--border); border-radius: 9px; background: color-mix(in srgb, var(--panel-raised) 70%, transparent); }
+      .dr-export-card h4 { margin: 0; font-size: 12px; }
+      .dr-export-card p, .dr-export-status { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
       @media (max-width: 1040px) {
         .category-picker { grid-template-columns: repeat(2, minmax(0, 1fr)); }
         .session-toggles { grid-template-columns: 1fr; }
+        .help-layout { grid-template-columns: 175px minmax(0, 1fr); }
       }
     </style>
   </head>
@@ -2048,6 +2085,7 @@
             <button class="toolbar-button" id="external-tools-button" type="button">External Tools</button>
             <button class="toolbar-button" id="enterprise-button" type="button">Enterprise</button>
             <button class="toolbar-button" id="migration-button" type="button">Import / Export</button>
+            <button class="toolbar-button" id="help-button" type="button" title="Documentation &amp; Help (F1)">Help F1</button>
             <button class="toolbar-button" id="settings-button" type="button">Settings</button>
           </div>
           <div class="connection-state" id="connection-state">Ready</div>
@@ -2394,10 +2432,20 @@
             <progress id="scan-progress" max="1" value="0"></progress>
             <span id="scan-status">Ready to scan</span>
           </div>
-          <div class="scan-results-panel">
-            <div class="scan-columns" aria-hidden="true"><span>Type</span><span>Device</span><span class="scan-vendor-column">Vendor / OS</span><span>Open services</span><span>Inventory</span></div>
-            <div id="scan-results"><div class="sidebar-empty">No discovery results yet.</div></div>
+          <div class="ipam-toolbar">
+            <div class="view-switcher" role="group" aria-label="Discovery result view"><button class="compact-button" id="scan-list-view-button" type="button" aria-pressed="true">Device list</button><button class="compact-button" id="scan-ipam-view-button" type="button" aria-pressed="false">IPAM grid</button></div>
+            <span class="ipam-status" id="ipam-grid-status">Enter a /24 subnet to visualize all 256 addresses.</span>
           </div>
+          <section id="scan-list-view">
+            <div class="scan-results-panel">
+              <div class="scan-columns" aria-hidden="true"><span>Type</span><span>Device</span><span class="scan-vendor-column">Vendor / OS</span><span>Open services</span><span>Inventory</span></div>
+              <div id="scan-results"><div class="sidebar-empty">No discovery results yet.</div></div>
+            </div>
+          </section>
+          <section class="ipam-panel" id="scan-ipam-view" hidden>
+            <div class="ipam-legend" aria-label="IP address state legend"><span><i class="ipam-swatch saved"></i>Saved vault server</span><span><i class="ipam-swatch online"></i>Online</span><span><i class="ipam-swatch offline"></i>Offline</span><span><i class="ipam-swatch unassigned"></i>Unassigned / not scanned</span></div>
+            <div class="ipam-grid-shell"><div class="ipam-grid" id="ipam-grid" role="grid" aria-label="Subnet IP address map"></div></div>
+          </section>
           <div class="form-error" id="scan-error" role="alert"></div>
         </div>
         <footer class="modal-actions">
@@ -2483,6 +2531,16 @@
               <p>Disconnect active sessions and clear decrypted credentials after application inactivity. Auto-lock requires Master Password.</p>
               <div class="field"><label for="auto-lock-minutes">Inactivity timeout</label><select id="auto-lock-minutes"><option value="0">Never</option><option value="1">1 minute</option><option value="5">5 minutes</option><option value="15">15 minutes</option><option value="30">30 minutes</option><option value="60">1 hour</option><option value="120">2 hours</option><option value="480">8 hours</option></select></div>
               <div class="field"><label for="clipboard-clear-seconds">Clear copied secrets after</label><select id="clipboard-clear-seconds"><option value="0">Never</option><option value="15">15 seconds</option><option value="30">30 seconds</option><option value="60">1 minute</option><option value="120">2 minutes</option><option value="300">5 minutes</option></select></div>
+              <div class="dr-export-card">
+                <h4>Disaster Recovery Runbook</h4>
+                <p>Export inventory, topology, and reference notes as one offline HTML file. Its full payload is encrypted with AES-256-GCM and opens only with this export passphrase.</p>
+                <div class="settings-grid">
+                  <div class="field"><label for="dr-passphrase">Export passphrase</label><input id="dr-passphrase" type="password" minlength="12" maxlength="1024" autocomplete="new-password" /></div>
+                  <div class="field"><label for="dr-passphrase-confirm">Confirm passphrase</label><input id="dr-passphrase-confirm" type="password" minlength="12" maxlength="1024" autocomplete="new-password" /></div>
+                </div>
+                <div><button class="secondary-button" id="dr-export-button" type="button">Export encrypted runbook</button></div>
+                <div class="dr-export-status" id="dr-export-status" role="status"></div>
+              </div>
             </section>
             <section class="settings-panel" data-settings-panel="network" hidden>
               <h3>Network Proxy</h3>
@@ -2523,6 +2581,76 @@
         <div class="command-palette-results" id="command-palette-results" role="listbox"></div>
         <div class="command-palette-status" id="command-palette-status" role="status"></div>
       </div>
+    </dialog>
+
+    <dialog class="help-dialog" id="help-modal" aria-labelledby="help-modal-title">
+      <header class="modal-header">
+        <h2 id="help-modal-title">Documentation &amp; Help</h2>
+        <p>Operational guidance stays local and remains available without a network connection.</p>
+      </header>
+      <div class="help-layout">
+        <nav class="help-nav" aria-label="Help topics">
+          <button type="button" class="active" data-help-topic="quick-start">Quick Start</button>
+          <button type="button" data-help-topic="migration">Import / Export</button>
+          <button type="button" data-help-topic="transfers">SFTP &amp; Backups</button>
+          <button type="button" data-help-topic="broadcast">Broadcast Terminal</button>
+          <button type="button" data-help-topic="networking">Advanced Networking</button>
+          <button type="button" id="open-shortcuts-button">Keyboard Shortcuts</button>
+        </nav>
+        <div class="help-content">
+          <article class="help-topic" data-help-panel="quick-start">
+            <h3>Quick Start &amp; Connection Management</h3>
+            <p>Use Quick Connect for temporary sessions, or save a connection when you need credentials, grouping, notes, monitoring, and workspace restore.</p>
+            <ol><li>Select <strong>+</strong> in the Connections sidebar and choose the category that matches the endpoint.</li><li>Enter a name, host, protocol, and credentials. Advanced Settings contains port overrides, bastion metadata, keep-alive, reconnect, proxy, and pre-connect tasks.</li><li>Double-click the saved node to connect. Right-click it for diagnostics, editing, duplication, screenshots, and external tools.</li></ol>
+            <h4>Fast navigation</h4><p>Press <code>Ctrl+K</code> to fuzzy-search the vault, <code>Alt+Space</code> for the system-wide launcher, or paste a URI such as <code>ssh://admin@10.10.1.12:22</code> into Quick Connect.</p>
+          </article>
+          <article class="help-topic" data-help-panel="migration" hidden>
+            <h3>Import / Export</h3>
+            <p>Open <strong>Import / Export</strong> from the top bar. CyberGrid accepts mRemoteNG <code>confCons.xml</code>, PuTTY Registry exports, CSV, and encrypted <code>.cgvault</code> files.</p>
+            <ul><li>Review imported profiles before first use; source formats may omit secrets or use different protocol defaults.</li><li>CSV and legacy exports omit ordinary passwords. Use environment tokens such as <code>${USER_SECRET}</code> for portable team trees.</li><li><code>.cgvault</code> is the credential-preserving team format and requires its own strong passphrase.</li><li>For offline continuity, use the encrypted Disaster Recovery Runbook in Settings &gt; Security.</li></ul>
+          </article>
+          <article class="help-topic" data-help-panel="transfers" hidden>
+            <h3>SFTP Transfers &amp; Config Backups</h3>
+            <p>With an SSH tab active, select <strong>Files</strong> to browse the remote filesystem. Upload and download actions use the same authenticated SSH transport and display transfer progress.</p>
+            <h4>Network configuration snapshots</h4><p>Select a network device, open <strong>Operations</strong>, then choose Config Backups. Paste or capture versioned output such as <code>show running-config</code>. Snapshots and notes remain encrypted in the vault.</p>
+            <p>Confirm the destination path and available space before transferring large files. CyberGrid does not overwrite remote files without using the selected destination name.</p>
+          </article>
+          <article class="help-topic" data-help-panel="broadcast" hidden>
+            <h3>Broadcast Terminal (Multi-Exec)</h3>
+            <p>Broadcast Mode mirrors input from the active primary SSH or serial terminal to explicitly selected connected targets.</p>
+            <ol><li>Open and verify every intended target session.</li><li>Select <strong>Targets</strong>, filter by group, and review the target count.</li><li>Enable <strong>Broadcast</strong> and enter the command in the primary terminal.</li><li>Disable Broadcast immediately after the multi-host operation.</li></ol>
+            <p>Start with a harmless identity command. Interactive prompts and shell state can differ between hosts, so destructive commands require a separate validation step.</p>
+          </article>
+          <article class="help-topic" data-help-panel="networking" hidden>
+            <h3>Jump Hosts, SSH Tunnels &amp; Auto-VPN</h3>
+            <p>Advanced Settings stores bastion, proxy, and pre-connect orchestration per connection. Folder inheritance can provide common domain, key, and connection defaults to descendants.</p>
+            <ul><li><strong>Jump host:</strong> define the bastion endpoint and inherited credentials with the connection or parent folder.</li><li><strong>SSH tunnel:</strong> create the tunnel as a pre-connect local task, then point the saved connection at the local forwarded endpoint.</li><li><strong>Auto-VPN:</strong> assign a VPN profile or approved local script as a pre-connect task. Add a post-connect or cleanup task where the provider requires explicit teardown.</li><li><strong>Proxy:</strong> global proxy settings apply to embedded Chromium tabs; native socket protocols continue to use their configured direct or task-established path.</li></ul>
+          </article>
+        </div>
+      </div>
+      <footer class="modal-actions"><button class="primary-button" id="help-close-button" type="button">Close</button></footer>
+    </dialog>
+
+    <dialog id="shortcuts-modal" aria-labelledby="shortcuts-modal-title">
+      <header class="modal-header"><h2 id="shortcuts-modal-title">Keyboard Shortcuts</h2><p>High-efficiency navigation from anywhere in the main workspace.</p></header>
+      <div class="modal-body"><div class="shortcuts-grid full-width">
+        <div class="shortcut-row"><kbd>Ctrl + K</kbd><span>Search saved connections</span></div><div class="shortcut-row"><kbd>Alt + Space</kbd><span>Global quick launcher</span></div>
+        <div class="shortcut-row"><kbd>F1</kbd><span>Documentation &amp; Help</span></div><div class="shortcut-row"><kbd>Ctrl + /</kbd><span>This shortcut sheet</span></div>
+        <div class="shortcut-row"><kbd>Enter</kbd><span>Open selected search result</span></div><div class="shortcut-row"><kbd>Up / Down</kbd><span>Navigate search results</span></div>
+        <div class="shortcut-row"><kbd>Ctrl + C</kbd><span>Copy terminal selection</span></div><div class="shortcut-row"><kbd>Ctrl + V</kbd><span>Paste into active terminal</span></div>
+        <div class="shortcut-row"><kbd>Esc</kbd><span>Close the topmost modal</span></div><div class="shortcut-row"><kbd>Double-click</kbd><span>Open a saved connection</span></div>
+      </div></div>
+      <footer class="modal-actions"><button class="primary-button" id="shortcuts-close-button" type="button">Close</button></footer>
+    </dialog>
+
+    <dialog id="ipam-action-modal" aria-labelledby="ipam-action-title">
+      <header class="modal-header"><h2 id="ipam-action-title">IP address</h2><p id="ipam-action-summary">Choose an action for this address.</p></header>
+      <div class="modal-body">
+        <div class="field"><label for="ipam-username">Username</label><input id="ipam-username" maxlength="256" autocomplete="username" /></div>
+        <div class="field"><label for="ipam-password">Password (temporary)</label><input id="ipam-password" type="password" maxlength="4096" autocomplete="current-password" /></div>
+        <div class="form-error" id="ipam-action-error" role="alert"></div>
+      </div>
+      <footer class="modal-actions"><button class="secondary-button" id="ipam-action-cancel" type="button">Cancel</button><button class="secondary-button" id="ipam-add-server" type="button">Add to vault</button><button class="secondary-button" id="ipam-open-saved" type="button" hidden>Open saved</button><button class="secondary-button" id="ipam-open-rdp" type="button">RDP</button><button class="primary-button" id="ipam-open-ssh" type="button">SSH</button></footer>
     </dialog>
 
     <script src="./startup.js" defer></script>

@@ -35,6 +35,7 @@ import type {
   WebBounds,
   WebConnectionConfig,
   WebStatusEvent,
+  WorkspaceSnapshot,
 } from "../shared/ipc";
 
 // Sandboxed Electron preloads cannot require arbitrary local modules at runtime.
@@ -127,6 +128,12 @@ const IPC_CHANNELS: typeof import("../shared/ipc").IPC_CHANNELS = {
   migrationImport: "cybergrid:migration:import",
   migrationExport: "cybergrid:migration:export",
   selectPrivateKey: "cybergrid:dialog:select-private-key",
+  workspaceLoad: "cybergrid:workspace:load",
+  workspaceSave: "cybergrid:workspace:save",
+  disasterRecoveryExport: "cybergrid:disaster-recovery:export",
+  quickLauncherLaunchProfile: "cybergrid:quick-launcher:launch-profile",
+  quickLauncherShowMain: "cybergrid:quick-launcher:show-main",
+  quickLauncherHide: "cybergrid:quick-launcher:hide",
 };
 
 const api: CyberGridApi = {
@@ -335,6 +342,13 @@ const api: CyberGridApi = {
     whenReady: () => ipcRenderer.invoke(IPC_CHANNELS.appReady),
     selectPrivateKey: () => ipcRenderer.invoke(IPC_CHANNELS.selectPrivateKey),
     captureScreenshot: (request: ScreenshotRequest) => ipcRenderer.invoke(IPC_CHANNELS.sessionCaptureScreenshot, request),
+    loadWorkspace: () => ipcRenderer.invoke(IPC_CHANNELS.workspaceLoad),
+    saveWorkspace: (snapshot: WorkspaceSnapshot) => ipcRenderer.invoke(IPC_CHANNELS.workspaceSave, snapshot),
+    exportDisasterRecovery: (passphrase: string) => ipcRenderer.invoke(IPC_CHANNELS.disasterRecoveryExport, passphrase),
+    launchProfileFromQuickLauncher: (profileId: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.quickLauncherLaunchProfile, profileId),
+    showMainWindow: () => ipcRenderer.invoke(IPC_CHANNELS.quickLauncherShowMain),
+    hideQuickLauncher: () => ipcRenderer.send(IPC_CHANNELS.quickLauncherHide),
     onVaultLocked: (listener) => {
       const handler = (_event: IpcRendererEvent, reason: string) => listener(reason);
       ipcRenderer.on(IPC_CHANNELS.vaultLocked, handler);

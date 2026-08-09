@@ -57,6 +57,7 @@ type VncConnectionConfig = import("../shared/ipc").VncConnectionConfig;
 type VncConnectionResult = import("../shared/ipc").VncConnectionResult;
 type VncStatusEvent = import("../shared/ipc").VncStatusEvent;
 type WebStatusEvent = import("../shared/ipc").WebStatusEvent;
+type WorkspaceSnapshot = import("../shared/ipc").WorkspaceSnapshot;
 
 declare global {
   interface Window {
@@ -160,6 +161,9 @@ let syncSources: InventorySyncSourceSummary[] = [];
 let activeScanId: string | null = null;
 let editingAssetId: string | null = null;
 const scanDevices = new Map<string, DiscoveredDevice>();
+const ipamHostStatuses = new Map<string, "online" | "offline">();
+let selectedIpamAddress: string | null = null;
+let ipamRenderFrame: number | null = null;
 let activeTabId: string | null = null;
 let tabSequence = 0;
 let vaultMode: "create" | "unlock" = "unlock";
@@ -174,6 +178,10 @@ let recentTerminalTabIds: string[] = [];
 let paletteSelectionIndex = 0;
 let paletteMatches: ServerProfileSummary[] = [];
 let vaultUnlocked = false;
+let workspacePersistenceReady = false;
+let workspaceRestoreStarted = false;
+let restoringWorkspace = false;
+let workspaceSaveTimer: number | null = null;
 const excludedBroadcastGroups = new Set<string>();
 let currentSettings: AppPreferences = { ...DEFAULT_SETTINGS };
 
@@ -203,6 +211,7 @@ const addServerButton = elementById<HTMLButtonElement>("add-server-button");
 const lockButton = elementById<HTMLButtonElement>("lock-button");
 const settingsButton = elementById<HTMLButtonElement>("settings-button");
 const migrationButton = elementById<HTMLButtonElement>("migration-button");
+const helpButton = elementById<HTMLButtonElement>("help-button");
 const toggleSftpButton = elementById<HTMLButtonElement>("toggle-sftp-button");
 const toggleSnippetsButton = elementById<HTMLButtonElement>("toggle-snippets-button");
 const broadcastToggleButton = elementById<HTMLButtonElement>("broadcast-toggle-button");
@@ -406,6 +415,12 @@ const scanProgress = elementById<HTMLProgressElement>("scan-progress");
 const scanStatus = elementById<HTMLSpanElement>("scan-status");
 const scanResults = elementById<HTMLDivElement>("scan-results");
 const scanError = elementById<HTMLDivElement>("scan-error");
+const scanListViewButton = elementById<HTMLButtonElement>("scan-list-view-button");
+const scanIpamViewButton = elementById<HTMLButtonElement>("scan-ipam-view-button");
+const scanListView = elementById<HTMLElement>("scan-list-view");
+const scanIpamView = elementById<HTMLElement>("scan-ipam-view");
+const ipamGrid = elementById<HTMLDivElement>("ipam-grid");
+const ipamGridStatus = elementById<HTMLSpanElement>("ipam-grid-status");
 
 const assetModal = elementById<HTMLDialogElement>("asset-modal");
 const assetForm = elementById<HTMLFormElement>("asset-form");
@@ -454,11 +469,35 @@ const toolPowershellPathInput = elementById<HTMLInputElement>("tool-powershell-p
 const settingsError = elementById<HTMLDivElement>("settings-error");
 const resetSettingsButton = elementById<HTMLButtonElement>("reset-settings-button");
 const cancelSettingsButton = elementById<HTMLButtonElement>("cancel-settings-button");
+const drPassphraseInput = elementById<HTMLInputElement>("dr-passphrase");
+const drPassphraseConfirmInput = elementById<HTMLInputElement>("dr-passphrase-confirm");
+const drExportButton = elementById<HTMLButtonElement>("dr-export-button");
+const drExportStatus = elementById<HTMLDivElement>("dr-export-status");
 
 const commandPalette = elementById<HTMLDialogElement>("command-palette");
 const commandPaletteInput = elementById<HTMLInputElement>("command-palette-input");
 const commandPaletteResults = elementById<HTMLDivElement>("command-palette-results");
 const commandPaletteStatus = elementById<HTMLDivElement>("command-palette-status");
+
+const helpModal = elementById<HTMLDialogElement>("help-modal");
+const helpCloseButton = elementById<HTMLButtonElement>("help-close-button");
+const helpTopicButtons = [...document.querySelectorAll<HTMLButtonElement>("[data-help-topic]")];
+const helpTopicPanels = [...document.querySelectorAll<HTMLElement>("[data-help-panel]")];
+const openShortcutsButton = elementById<HTMLButtonElement>("open-shortcuts-button");
+const shortcutsModal = elementById<HTMLDialogElement>("shortcuts-modal");
+const shortcutsCloseButton = elementById<HTMLButtonElement>("shortcuts-close-button");
+
+const ipamActionModal = elementById<HTMLDialogElement>("ipam-action-modal");
+const ipamActionTitle = elementById<HTMLHeadingElement>("ipam-action-title");
+const ipamActionSummary = elementById<HTMLParagraphElement>("ipam-action-summary");
+const ipamUsernameInput = elementById<HTMLInputElement>("ipam-username");
+const ipamPasswordInput = elementById<HTMLInputElement>("ipam-password");
+const ipamActionError = elementById<HTMLDivElement>("ipam-action-error");
+const ipamActionCancelButton = elementById<HTMLButtonElement>("ipam-action-cancel");
+const ipamAddServerButton = elementById<HTMLButtonElement>("ipam-add-server");
+const ipamOpenSavedButton = elementById<HTMLButtonElement>("ipam-open-saved");
+const ipamOpenRdpButton = elementById<HTMLButtonElement>("ipam-open-rdp");
+const ipamOpenSshButton = elementById<HTMLButtonElement>("ipam-open-ssh");
 
 const serverContextMenu = elementById<HTMLDivElement>("server-context-menu");
 
@@ -710,10 +749,103 @@ function openCommandPalette(): void {
   requestAnimationFrame(() => commandPaletteInput.focus());
 }
 
+function selectHelpTopic(topic: string): void {
+  for (const button of helpTopicButtons) {
+    button.classList.toggle("active", button.dataset.helpTopic === topic);
+  }
+  for (const panel of helpTopicPanels) panel.hidden = panel.dataset.helpPanel !== topic;
+}
+
+function openHelp(): void {
+  selectHelpTopic("quick-start");
+  if (!helpModal.open) helpModal.showModal();
+  requestAnimationFrame(() => helpTopicButtons[0]?.focus());
+}
+
+function openShortcuts(): void {
+  if (helpModal.open) helpModal.close();
+  if (!shortcutsModal.open) shortcutsModal.showModal();
+  requestAnimationFrame(() => shortcutsCloseButton.focus());
+}
+
 const PROTOCOL_LABELS: Record<WorkspaceTabKind, string> = {
   ssh: "SSH", rdp: "RDP", telnet: "TEL", raw: "RAW", vnc: "VNC",
   http: "WEB", https: "WEB", serial: "COM", welcome: "CG",
 };
+
+function currentWorkspaceSnapshot(): WorkspaceSnapshot {
+  const profileTabs = [...tabs.values()].filter((tab) => Boolean(tab.context.profileId));
+  const profileIds = profileTabs.map((tab) => tab.context.profileId as string);
+  const activeProfileId = activeTabId ? tabs.get(activeTabId)?.context.profileId : undefined;
+  const activeIndex = activeTabId ? profileTabs.findIndex((tab) => tab.id === activeTabId) : -1;
+  return {
+    profileIds,
+    activeProfileId,
+    activeIndex: activeIndex >= 0 ? activeIndex : undefined,
+    layout: layoutMode,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function scheduleWorkspaceSave(): void {
+  if (!workspacePersistenceReady || restoringWorkspace) return;
+  if (workspaceSaveTimer !== null) window.clearTimeout(workspaceSaveTimer);
+  workspaceSaveTimer = window.setTimeout(() => {
+    workspaceSaveTimer = null;
+    void window.cybergrid.system.saveWorkspace(currentWorkspaceSnapshot()).catch((error: unknown) => {
+      console.warn("Could not persist workspace layout:", errorMessage(error));
+    });
+  }, 350);
+}
+
+async function restoreWorkspace(): Promise<void> {
+  if (workspaceRestoreStarted || !vaultUnlocked) return;
+  workspaceRestoreStarted = true;
+  let snapshot: WorkspaceSnapshot;
+  try {
+    snapshot = await window.cybergrid.system.loadWorkspace();
+  } catch (error) {
+    console.warn("Could not load the saved workspace:", errorMessage(error));
+    workspacePersistenceReady = true;
+    return;
+  }
+
+  const profilesById = new Map(savedProfiles.map((profile) => [profile.id, profile]));
+  const profiles = snapshot.profileIds
+    .map((profileId) => profilesById.get(profileId))
+    .filter((profile): profile is ServerProfileSummary => Boolean(profile));
+  if (profiles.length === 0) {
+    workspacePersistenceReady = true;
+    return;
+  }
+
+  restoringWorkspace = true;
+  try {
+    const welcome = [...tabs.values()].find((tab) => tab.kind === "welcome");
+    if (welcome) await closeTab(welcome.id);
+    const restoredTabs: WorkspaceTab[] = [];
+    for (const profile of profiles) {
+      const previousIds = new Set(tabs.keys());
+      await connectSavedProfile(profile);
+      const restored = [...tabs.values()].find((tab) => !previousIds.has(tab.id));
+      if (restored) restoredTabs.push(restored);
+    }
+    if (snapshot.layout === "grid" && terminalTabsForGrid().length >= 2) layoutMode = "grid";
+    const indexedActive = snapshot.activeIndex === undefined ? undefined : restoredTabs[snapshot.activeIndex];
+    if (indexedActive) activateTab(indexedActive.id);
+    else if (snapshot.activeProfileId) {
+      const restoredActive = restoredTabs.reverse().find(
+        (tab) => tab.context.profileId === snapshot.activeProfileId,
+      );
+      if (restoredActive) activateTab(restoredActive.id);
+    }
+    renderWorkspaceLayout();
+  } finally {
+    restoringWorkspace = false;
+    workspacePersistenceReady = true;
+    scheduleWorkspaceSave();
+  }
+}
 
 function tabContext(label: string, context?: Partial<SessionVariableContext>): SessionVariableContext {
   return {
@@ -973,6 +1105,7 @@ function activateTab(id: string): void {
     if (tab.sftp) renderSftpListing(tab.sftp);
     else void loadSftpDirectory(tab, ".");
   }
+  scheduleWorkspaceSave();
 }
 
 async function closeTab(id: string): Promise<void> {
@@ -1033,6 +1166,7 @@ async function closeTab(id: string): Promise<void> {
   }
   updateBroadcastControls();
   renderWorkspaceLayout();
+  scheduleWorkspaceSave();
 }
 
 function updateTabStatus(tab: WorkspaceTab, status: WorkspaceStatus, message?: string): void {
@@ -1492,6 +1626,7 @@ function renderAssets(): void {
 async function refreshAssets(): Promise<void> {
   savedAssets = await window.cybergrid.vault.listAssets();
   renderAssets();
+  scheduleIpamRender();
 }
 
 function argumentsFromTextarea(input: HTMLTextAreaElement): string[] {
@@ -1799,6 +1934,97 @@ function renderScanResults(): void {
   }
 }
 
+function parseIpv4(value: string): number[] | null {
+  const parts = value.trim().split(".");
+  if (parts.length !== 4) return null;
+  const octets = parts.map((part) => Number(part));
+  return octets.every((octet) => Number.isInteger(octet) && octet >= 0 && octet <= 255)
+    ? octets
+    : null;
+}
+
+function ipamSubnetPrefix(target: string): string | null {
+  const trimmed = target.trim();
+  const cidr = /^(\d{1,3}(?:\.\d{1,3}){3})\/(\d{1,2})$/.exec(trimmed);
+  if (cidr) {
+    const address = parseIpv4(cidr[1]);
+    if (!address || Number(cidr[2]) !== 24) return null;
+    return `${address[0]}.${address[1]}.${address[2]}`;
+  }
+  const range = /^(\d{1,3}(?:\.\d{1,3}){3})\s*-\s*(\d{1,3}(?:\.\d{1,3}){3})$/.exec(trimmed);
+  if (range) {
+    const start = parseIpv4(range[1]);
+    const end = parseIpv4(range[2]);
+    if (!start || !end || start.slice(0, 3).join(".") !== end.slice(0, 3).join(".")) return null;
+    return start.slice(0, 3).join(".");
+  }
+  const address = parseIpv4(trimmed);
+  return address ? address.slice(0, 3).join(".") : null;
+}
+
+function openIpamAction(address: string): void {
+  selectedIpamAddress = address;
+  const profile = savedProfiles.find((candidate) => candidate.host === address);
+  const device = scanDevices.get(address);
+  const status = profile ? "Saved vault server" : ipamHostStatuses.get(address) === "online"
+    ? "Online with an administration service"
+    : ipamHostStatuses.get(address) === "offline" ? "No supported service detected" : "Not scanned";
+  ipamActionTitle.textContent = profile?.name ?? device?.hostname ?? address;
+  ipamActionSummary.textContent = `${address} · ${status}${device ? ` · ${portSummary(device)}` : ""}`;
+  ipamUsernameInput.value = profile?.username ?? "";
+  ipamPasswordInput.value = "";
+  ipamActionError.textContent = "";
+  ipamOpenSavedButton.hidden = !profile;
+  if (!ipamActionModal.open) ipamActionModal.showModal();
+  requestAnimationFrame(() => (profile ? ipamOpenSavedButton : ipamUsernameInput).focus());
+}
+
+function renderIpamGrid(): void {
+  ipamRenderFrame = null;
+  const prefix = ipamSubnetPrefix(scanTargetInput.value);
+  ipamGrid.replaceChildren();
+  if (!prefix) {
+    ipamGridStatus.textContent = "IPAM supports a /24 subnet, a single IPv4 address, or a range within one /24.";
+    ipamGrid.append(createTextElement("div", "sidebar-empty", "Enter a valid IPv4 /24 subnet to build the address map."));
+    return;
+  }
+  const fragment = document.createDocumentFragment();
+  const totals = { saved: 0, online: 0, offline: 0, unassigned: 0 };
+  for (let host = 0; host <= 255; host += 1) {
+    const address = `${prefix}.${host}`;
+    const profile = savedProfiles.find((candidate) => candidate.host === address);
+    const discoveredStatus = ipamHostStatuses.get(address);
+    const state = profile ? "saved" : discoveredStatus ?? "unassigned";
+    totals[state] += 1;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `ipam-host ${state}`;
+    button.textContent = String(host);
+    button.title = `${address} — ${profile ? `Saved: ${profile.name}` : state === "online" ? "Online" : state === "offline" ? "Offline" : "Unassigned / not scanned"}`;
+    button.setAttribute("role", "gridcell");
+    button.setAttribute("aria-label", button.title);
+    button.addEventListener("click", () => openIpamAction(address));
+    fragment.append(button);
+  }
+  ipamGrid.append(fragment);
+  ipamGridStatus.textContent = `${prefix}.0/24 · ${totals.saved} saved · ${totals.online} online · ${totals.offline} offline · ${totals.unassigned} unassigned`;
+}
+
+function scheduleIpamRender(): void {
+  if (scanIpamView.hidden) return;
+  if (ipamRenderFrame !== null) return;
+  ipamRenderFrame = requestAnimationFrame(renderIpamGrid);
+}
+
+function setScanView(view: "list" | "ipam"): void {
+  const ipam = view === "ipam";
+  scanListView.hidden = ipam;
+  scanIpamView.hidden = !ipam;
+  scanListViewButton.setAttribute("aria-pressed", String(!ipam));
+  scanIpamViewButton.setAttribute("aria-pressed", String(ipam));
+  if (ipam) scheduleIpamRender();
+}
+
 function setScanRunning(running: boolean): void {
   scanStartButton.disabled = running;
   scanTargetInput.disabled = running;
@@ -1812,6 +2038,8 @@ function handleDiscoveryProgress(event: DiscoveryProgressEvent): void {
   scanProgress.max = Math.max(1, event.total);
   scanProgress.value = event.scanned;
   scanStatus.textContent = `${event.scanned} / ${event.total} scanned  -  ${event.currentIp}`;
+  ipamHostStatuses.set(event.currentIp, event.hostStatus);
+  scheduleIpamRender();
 }
 
 function handleDiscoveryResult(event: DiscoveryResultEvent): void {
@@ -1819,7 +2047,9 @@ function handleDiscoveryResult(event: DiscoveryResultEvent): void {
     return;
   }
   scanDevices.set(event.device.ipAddress, event.device);
+  ipamHostStatuses.set(event.device.ipAddress, "online");
   renderScanResults();
+  scheduleIpamRender();
 }
 
 function handleDiscoveryComplete(event: DiscoveryCompleteEvent): void {
@@ -1838,6 +2068,7 @@ function handleDiscoveryComplete(event: DiscoveryCompleteEvent): void {
   } else {
     scanStatus.textContent = `Complete: ${event.discovered} device${event.discovered === 1 ? "" : "s"} found`;
   }
+  scheduleIpamRender();
 }
 
 function populateQuickConnect(profile: ServerProfileSummary): void {
@@ -2354,6 +2585,7 @@ function renderProfiles(): void {
 async function refreshProfiles(): Promise<void> {
   savedProfiles = await window.cybergrid.vault.listProfiles();
   renderProfiles();
+  scheduleIpamRender();
   await configureHealthMonitor();
 }
 
@@ -2827,6 +3059,7 @@ async function initializeVault(): Promise<void> {
     if (status.unlocked) {
       await refreshVaultContent();
       hideVaultPrompt();
+      void restoreWorkspace();
     } else {
       setVaultPrompt(status.exists);
     }
@@ -2981,6 +3214,9 @@ function populateSettingsForm(settings: AppPreferences): void {
   settingsError.textContent = "";
   newMasterPasswordInput.value = "";
   newMasterPasswordConfirmInput.value = "";
+  drPassphraseInput.value = "";
+  drPassphraseConfirmInput.value = "";
+  drExportStatus.textContent = "";
   updateProxyFields();
   updateMasterPasswordFields();
 }
@@ -3183,6 +3419,7 @@ vaultForm.addEventListener("submit", async (event) => {
     }
     await refreshVaultContent();
     hideVaultPrompt();
+    void restoreWorkspace();
   } catch (error) {
     vaultError.textContent = errorMessage(error);
     masterPasswordInput.select();
@@ -3379,12 +3616,17 @@ scanButton.addEventListener("click", () => {
   }
   requestAnimationFrame(() => scanTargetInput.focus());
 });
+scanListViewButton.addEventListener("click", () => setScanView("list"));
+scanIpamViewButton.addEventListener("click", () => setScanView("ipam"));
+scanTargetInput.addEventListener("input", scheduleIpamRender);
 
 scanForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   scanError.textContent = "";
   scanDevices.clear();
+  ipamHostStatuses.clear();
   renderScanResults();
+  scheduleIpamRender();
   scanProgress.max = 1;
   scanProgress.value = 0;
   scanStatus.textContent = "Starting discovery...";
@@ -3417,6 +3659,88 @@ scanModal.addEventListener("click", (event) => {
   if (event.target === scanModal) {
     scanModal.close();
   }
+});
+
+ipamActionCancelButton.addEventListener("click", () => ipamActionModal.close());
+ipamOpenSavedButton.addEventListener("click", () => {
+  const profile = savedProfiles.find((candidate) => candidate.host === selectedIpamAddress);
+  if (!profile) return;
+  ipamActionModal.close();
+  void connectSavedProfile(profile);
+});
+ipamOpenSshButton.addEventListener("click", () => {
+  if (!selectedIpamAddress) return;
+  const profile = savedProfiles.find((candidate) => candidate.host === selectedIpamAddress && candidate.protocol === "ssh");
+  if (profile) {
+    ipamActionModal.close();
+    void connectSavedProfile(profile);
+    return;
+  }
+  const username = ipamUsernameInput.value.trim();
+  if (!username) {
+    ipamActionError.textContent = "Enter an SSH username or add this address to the vault first.";
+    ipamUsernameInput.focus();
+    return;
+  }
+  const config: SshConnectionConfig = {
+    host: selectedIpamAddress,
+    port: 22,
+    username,
+    password: ipamPasswordInput.value || undefined,
+  };
+  ipamActionModal.close();
+  void connectQuickSsh(config);
+});
+ipamOpenRdpButton.addEventListener("click", () => {
+  if (!selectedIpamAddress) return;
+  const profile = savedProfiles.find((candidate) => candidate.host === selectedIpamAddress && candidate.protocol === "rdp");
+  if (profile) {
+    ipamActionModal.close();
+    void connectSavedProfile(profile);
+    return;
+  }
+  const username = ipamUsernameInput.value.trim();
+  if (!username) {
+    ipamActionError.textContent = "Enter an RDP username or add this address to the vault first.";
+    ipamUsernameInput.focus();
+    return;
+  }
+  ipamActionModal.close();
+  void connectQuickRdp({ host: selectedIpamAddress, port: 3389, username });
+});
+ipamAddServerButton.addEventListener("click", () => {
+  if (!selectedIpamAddress) return;
+  const address = selectedIpamAddress;
+  const device = scanDevices.get(address);
+  const username = ipamUsernameInput.value.trim();
+  const password = ipamPasswordInput.value;
+  const protocols = new Set(device?.openPorts.map((port) => port.protocol) ?? []);
+  const protocol: ConnectionProtocol = protocols.has("ssh") ? "ssh"
+    : protocols.has("rdp") ? "rdp" : protocols.has("https") ? "https"
+      : protocols.has("http") ? "http" : protocols.has("telnet") ? "telnet" : "ssh";
+  const category: ConnectionCategory = protocol === "https" || protocol === "http"
+    ? "web" : device?.osFamily === "Network appliance" || protocol === "telnet" ? "network" : "server";
+  ipamActionModal.close();
+  openServerModal();
+  selectConnectionCategory(category);
+  serverProtocolInput.value = protocol;
+  updateProfileFields(true);
+  serverNameInput.value = device?.hostname ?? address;
+  serverHostInput.value = address;
+  serverGroupInput.value = `Discovered / ${address.split(".").slice(0, 3).join(".")}.0-24`;
+  serverUsernameInput.value = username;
+  if (password) {
+    serverInheritFolderInput.checked = false;
+    authTypeInput.value = "password";
+    serverPasswordInput.value = password;
+    updateProfileFields(false);
+  }
+  if (device) serverIconInput.value = device.suggestedIcon;
+});
+ipamActionModal.addEventListener("close", () => {
+  ipamPasswordInput.value = "";
+  ipamActionError.textContent = "";
+  selectedIpamAddress = null;
 });
 
 assetForm.addEventListener("submit", async (event) => {
@@ -3599,6 +3923,33 @@ settingsModal.addEventListener("click", (event) => {
     settingsModal.close();
   }
 });
+drExportButton.addEventListener("click", async () => {
+  drExportStatus.textContent = "";
+  if (drPassphraseInput.value.length < 12) {
+    drExportStatus.textContent = "Use at least 12 characters for the export passphrase.";
+    drPassphraseInput.focus();
+    return;
+  }
+  if (drPassphraseInput.value !== drPassphraseConfirmInput.value) {
+    drExportStatus.textContent = "Export passphrases do not match.";
+    drPassphraseConfirmInput.focus();
+    return;
+  }
+  drExportButton.disabled = true;
+  drExportStatus.textContent = "Encrypting the offline runbook...";
+  try {
+    const result = await window.cybergrid.system.exportDisasterRecovery(drPassphraseInput.value);
+    drExportStatus.textContent = result.path
+      ? `Encrypted ${result.profileCount} connections and ${result.assetCount} assets to ${result.path}.`
+      : "Export canceled.";
+  } catch (error) {
+    drExportStatus.textContent = errorMessage(error);
+  } finally {
+    drPassphraseInput.value = "";
+    drPassphraseConfirmInput.value = "";
+    drExportButton.disabled = false;
+  }
+});
 settingsForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   settingsError.textContent = "";
@@ -3662,7 +4013,18 @@ layoutButton.addEventListener("click", () => {
   layoutMode = layoutMode === "grid" ? "single" : "grid";
   renderWorkspaceLayout();
   tabs.get(activeTabId ?? "")?.terminal?.focus();
+  scheduleWorkspaceSave();
 });
+
+helpButton.addEventListener("click", openHelp);
+helpCloseButton.addEventListener("click", () => helpModal.close());
+for (const button of helpTopicButtons) {
+  button.addEventListener("click", () => selectHelpTopic(button.dataset.helpTopic ?? "quick-start"));
+}
+openShortcutsButton.addEventListener("click", openShortcuts);
+shortcutsCloseButton.addEventListener("click", () => shortcutsModal.close());
+helpModal.addEventListener("click", (event) => { if (event.target === helpModal) helpModal.close(); });
+shortcutsModal.addEventListener("click", (event) => { if (event.target === shortcutsModal) shortcutsModal.close(); });
 
 commandPaletteButton.addEventListener("click", openCommandPalette);
 commandPaletteInput.addEventListener("input", () => {
@@ -3686,7 +4048,13 @@ commandPalette.addEventListener("click", (event) => {
 });
 
 document.addEventListener("keydown", (event) => {
-  if (event.ctrlKey && !event.altKey && !event.shiftKey && event.key.toLocaleLowerCase() === "k") {
+  if (event.key === "F1") {
+    event.preventDefault();
+    if (helpModal.open) helpModal.close(); else openHelp();
+  } else if (event.ctrlKey && !event.altKey && !event.shiftKey && event.key === "/") {
+    event.preventDefault();
+    if (shortcutsModal.open) shortcutsModal.close(); else openShortcuts();
+  } else if (event.ctrlKey && !event.altKey && !event.shiftKey && event.key.toLocaleLowerCase() === "k") {
     event.preventDefault();
     if (commandPalette.open) commandPalette.close();
     else openCommandPalette();
