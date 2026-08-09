@@ -660,8 +660,8 @@ function showUpdateToast(stage: "available" | "downloaded", event: AppUpdateEven
   title.textContent = stage === "available" ? `CyberGrid ${event.version} available` : "CyberGrid update ready";
   const message = document.createElement("p");
   message.textContent = stage === "available"
-    ? "A new version of CyberGrid is available. It is downloading in the background."
-    : "Update downloaded. Restart CyberGrid now to apply?";
+    ? "A new version of CyberGrid is available."
+    : "Update downloaded. Restart CyberGrid to apply update?";
   copy.append(title, message);
   content.append(mark, copy);
 
