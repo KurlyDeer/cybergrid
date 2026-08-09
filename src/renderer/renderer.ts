@@ -8,6 +8,7 @@ type ConnectionProtocol = import("../shared/ipc").ConnectionProtocol;
 type AssetInput = import("../shared/ipc").AssetInput;
 type AssetRecord = import("../shared/ipc").AssetRecord;
 type AppPreferences = import("../shared/ipc").AppPreferences;
+type AppUpdateEvent = import("../shared/ipc").AppUpdateEvent;
 type ConfigBackupInput = import("../shared/ipc").ConfigBackupInput;
 type ConnectionCategory = import("../shared/ipc").ConnectionCategory;
 type DeviceIcon = import("../shared/ipc").DeviceIcon;
@@ -195,6 +196,7 @@ function elementById<T extends HTMLElement>(id: string): T {
 const appShell = elementById<HTMLElement>("app-shell");
 const startupSkeleton = elementById<HTMLElement>("startup-skeleton");
 const startupStatus = elementById<HTMLElement>("startup-status");
+const updateToastRegion = elementById<HTMLElement>("update-toast-region");
 const quickConnectForm = elementById<HTMLFormElement>("quick-connect-form");
 const quickConnectInput = elementById<HTMLInputElement>("quick-connect-uri");
 const quickPasswordInput = elementById<HTMLInputElement>("quick-connect-password");
@@ -640,6 +642,59 @@ function errorMessage(error: unknown): string {
   return raw
     .replace(/^Error invoking remote method '[^']+':\s*/i, "")
     .replace(/^Error:\s*/i, "");
+}
+
+function showUpdateToast(stage: "available" | "downloaded", event: AppUpdateEvent): void {
+  updateToastRegion.replaceChildren();
+  const toast = document.createElement("article");
+  toast.className = "update-toast";
+  toast.dataset.updateStage = stage;
+  toast.setAttribute("role", "status");
+
+  const content = document.createElement("div");
+  content.className = "update-toast-content";
+  const mark = createTextElement("span", "update-toast-mark", "UP");
+  const copy = document.createElement("div");
+  copy.className = "update-toast-copy";
+  const title = document.createElement("strong");
+  title.textContent = stage === "available" ? `CyberGrid ${event.version} available` : "CyberGrid update ready";
+  const message = document.createElement("p");
+  message.textContent = stage === "available"
+    ? "A new version of CyberGrid is available. It is downloading in the background."
+    : "Update downloaded. Restart CyberGrid now to apply?";
+  copy.append(title, message);
+  content.append(mark, copy);
+
+  const actions = document.createElement("div");
+  actions.className = "update-toast-actions";
+  const dismiss = document.createElement("button");
+  dismiss.className = "secondary-button";
+  dismiss.type = "button";
+  dismiss.textContent = stage === "available" ? "Dismiss" : "Later";
+  dismiss.addEventListener("click", () => toast.remove());
+  actions.append(dismiss);
+
+  if (stage === "downloaded") {
+    const restart = document.createElement("button");
+    restart.className = "primary-button";
+    restart.type = "button";
+    restart.textContent = "Restart now";
+    restart.addEventListener("click", async () => {
+      restart.disabled = true;
+      restart.textContent = "Restarting...";
+      try {
+        await window.cybergrid.system.installUpdate();
+      } catch (error) {
+        message.textContent = errorMessage(error);
+        restart.disabled = false;
+        restart.textContent = "Restart now";
+      }
+    });
+    actions.append(restart);
+  }
+
+  toast.append(content, actions);
+  updateToastRegion.append(toast);
 }
 
 function fuzzyFieldScore(needle: string, value: string): number | null {
@@ -3958,6 +4013,8 @@ window.cybergrid.health.onStatus(handleHealthStatus);
 window.cybergrid.discovery.onProgress(handleDiscoveryProgress);
 window.cybergrid.discovery.onResult(handleDiscoveryResult);
 window.cybergrid.discovery.onComplete(handleDiscoveryComplete);
+window.cybergrid.system.onUpdateAvailable((event) => showUpdateToast("available", event));
+window.cybergrid.system.onUpdateDownloaded((event) => showUpdateToast("downloaded", event));
 window.cybergrid.system.onVaultLocked((reason) => applyLockedRendererState(reason));
 window.cybergrid.system.onTrayQuickConnect((profileId) => {
   if (!vaultUnlocked) return;

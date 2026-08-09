@@ -33,6 +33,7 @@
   "homepage": "https://github.com/KurlyDeer/cybergrid#readme",
   "dependencies": {
     "@novnc/novnc": "1.7.0",
+    "electron-updater": "6.8.9",
     "fast-xml-parser": "5.10.1",
     "mac-oui-lookup": "1.1.4",
     "serialport": "13.0.0",
@@ -54,7 +55,6 @@
   "build": {
     "appId": "com.kurlydeer.cybergrid",
     "productName": "CyberGrid",
-    "electronDist": "node_modules/electron/dist",
     "asar": true,
     "asarUnpack": [
       "**/*.node",
@@ -70,6 +70,14 @@
     "files": [
       "build/**/*",
       "package.json"
+    ],
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "KurlyDeer",
+        "repo": "cybergrid",
+        "releaseType": "release"
+      }
     ],
     "win": {
       "target": [

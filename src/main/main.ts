@@ -118,6 +118,8 @@ let preferencesController: PreferencesController | null = null;
 let autoUnlockController: AutoUnlockController | null = null;
 let mainWindow: BrowserWindow | null = null;
 let quickLauncherWindow: BrowserWindow | null = null;
+let applicationUpdater: import("electron-updater").AppUpdater | null = null;
+let applicationUpdaterConfigured = false;
 let tray: Tray | null = null;
 let autoLockTimer: NodeJS.Timeout | undefined;
 let isQuitting = false;
@@ -130,6 +132,43 @@ const servicesReady = new Promise<void>((resolveReady, rejectReady) => {
 void servicesReady.catch(() => undefined);
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 app.setAppUserModelId("com.kurlydeer.cybergrid");
+
+function sendUpdateEvent(
+  channel: typeof IPC_CHANNELS.appUpdateAvailable | typeof IPC_CHANNELS.appUpdateDownloaded,
+  version: string,
+): void {
+  if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) return;
+  mainWindow.webContents.send(channel, { version });
+}
+
+async function configureAutoUpdater(): Promise<void> {
+  if (!app.isPackaged || applicationUpdaterConfigured || isQuitting) return;
+  applicationUpdaterConfigured = true;
+  const { autoUpdater } = await import("electron-updater");
+  applicationUpdater = autoUpdater;
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.on("update-available", (info) => {
+    sendUpdateEvent(IPC_CHANNELS.appUpdateAvailable, info.version);
+  });
+  autoUpdater.on("update-downloaded", (info) => {
+    sendUpdateEvent(IPC_CHANNELS.appUpdateDownloaded, info.version);
+  });
+  autoUpdater.on("error", (error) => {
+    console.warn("CyberGrid update check failed:", error);
+  });
+  await autoUpdater.checkForUpdatesAndNotify();
+}
+
+function scheduleUpdateCheck(): void {
+  if (!app.isPackaged) return;
+  const timer = setTimeout(() => {
+    void servicesReady
+      .then(configureAutoUpdater)
+      .catch((error: unknown) => console.warn("CyberGrid updater did not start:", error));
+  }, 2_000);
+  timer.unref();
+}
 
 async function getSshController(): Promise<SshController> {
   if (sshController) return sshController;
@@ -302,6 +341,7 @@ function createMainWindow(): BrowserWindow {
     revealed = true;
     window.show();
     setImmediate(startBackgroundServices);
+    scheduleUpdateCheck();
   };
   window.once("ready-to-show", revealWindow);
   window.webContents.once("dom-ready", () => setImmediate(revealWindow));
@@ -2294,6 +2334,13 @@ function registerBootstrapIpcHandler(): void {
   ipcMain.handle(IPC_CHANNELS.appReady, async (event) => {
     assertTrustedSender(event);
     await servicesReady;
+  });
+  ipcMain.handle(IPC_CHANNELS.appUpdateInstall, (event) => {
+    assertTrustedSender(event);
+    if (!app.isPackaged || !applicationUpdater) {
+      throw new Error("A downloaded CyberGrid update is not ready to install.");
+    }
+    setImmediate(() => applicationUpdater?.quitAndInstall(false, true));
   });
 }
 

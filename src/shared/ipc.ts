@@ -92,6 +92,9 @@ export const IPC_CHANNELS = {
   quickLauncherLaunchProfile: "cybergrid:quick-launcher:launch-profile",
   quickLauncherShowMain: "cybergrid:quick-launcher:show-main",
   quickLauncherHide: "cybergrid:quick-launcher:hide",
+  appUpdateAvailable: "cybergrid:update:available",
+  appUpdateDownloaded: "cybergrid:update:downloaded",
+  appUpdateInstall: "cybergrid:update:install",
 } as const;
 
 export interface SshConnectionConfig {
@@ -708,6 +711,10 @@ export interface DisasterRecoveryExportResult {
   assetCount: number;
 }
 
+export interface AppUpdateEvent {
+  version: string;
+}
+
 export type DiagnosticKind = "ping" | "traceroute" | "dns" | "port";
 
 export interface DiagnosticResult {
@@ -849,5 +856,8 @@ export interface CyberGridApi {
     launchProfileFromQuickLauncher(profileId: string): Promise<void>;
     showMainWindow(): Promise<void>;
     hideQuickLauncher(): void;
+    installUpdate(): Promise<void>;
+    onUpdateAvailable(listener: (event: AppUpdateEvent) => void): Unsubscribe;
+    onUpdateDownloaded(listener: (event: AppUpdateEvent) => void): Unsubscribe;
   };
 }

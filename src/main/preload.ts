@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
 import type {
   AssetInput,
   AppPreferences,
+  AppUpdateEvent,
   ConfigBackupInput,
   CyberGridApi,
   DiscoveryCompleteEvent,
@@ -134,6 +135,9 @@ const IPC_CHANNELS: typeof import("../shared/ipc").IPC_CHANNELS = {
   quickLauncherLaunchProfile: "cybergrid:quick-launcher:launch-profile",
   quickLauncherShowMain: "cybergrid:quick-launcher:show-main",
   quickLauncherHide: "cybergrid:quick-launcher:hide",
+  appUpdateAvailable: "cybergrid:update:available",
+  appUpdateDownloaded: "cybergrid:update:downloaded",
+  appUpdateInstall: "cybergrid:update:install",
 };
 
 const api: CyberGridApi = {
@@ -349,6 +353,17 @@ const api: CyberGridApi = {
       ipcRenderer.invoke(IPC_CHANNELS.quickLauncherLaunchProfile, profileId),
     showMainWindow: () => ipcRenderer.invoke(IPC_CHANNELS.quickLauncherShowMain),
     hideQuickLauncher: () => ipcRenderer.send(IPC_CHANNELS.quickLauncherHide),
+    installUpdate: () => ipcRenderer.invoke(IPC_CHANNELS.appUpdateInstall),
+    onUpdateAvailable: (listener) => {
+      const handler = (_event: IpcRendererEvent, payload: AppUpdateEvent) => listener(payload);
+      ipcRenderer.on(IPC_CHANNELS.appUpdateAvailable, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.appUpdateAvailable, handler);
+    },
+    onUpdateDownloaded: (listener) => {
+      const handler = (_event: IpcRendererEvent, payload: AppUpdateEvent) => listener(payload);
+      ipcRenderer.on(IPC_CHANNELS.appUpdateDownloaded, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.appUpdateDownloaded, handler);
+    },
     onVaultLocked: (listener) => {
       const handler = (_event: IpcRendererEvent, reason: string) => listener(reason);
       ipcRenderer.on(IPC_CHANNELS.vaultLocked, handler);

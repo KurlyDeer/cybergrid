@@ -36,7 +36,7 @@ CyberGrid does not transmit vault data to a hosted CyberGrid service. Connection
 | Team and migration | mRemoteNG XML, PuTTY Registry, CSV, and AES-256-GCM `.cgvault` import/export with `${TOKEN}` substitution for personal credentials |
 | Enterprise integration | Pre/post-connect tasks, VPN/script orchestration, AD/LDAP inventory sync, VMware inventory pull, and Hyper-V inventory support |
 | Recovery and audit | Per-session raw/plain-text transcripts, automatic saved-workspace restore, and a password-encrypted offline disaster-recovery HTML runbook |
-| Desktop productivity | System tray favorites, minimize-to-tray, 2×2 terminal layout, `Ctrl+K` command palette, `Alt+Space` global launcher, and offline F1 Help Center |
+| Desktop productivity | System tray favorites, minimize-to-tray, 2×2 terminal layout, `Ctrl+K` command palette, `Alt+Space` global launcher, offline F1 Help Center, and packaged-app update notifications |
 
 ## Install CyberGrid on Windows
 
@@ -48,6 +48,8 @@ CyberGrid v1.0.0 produces two x64 Windows packages in `dist/`:
 Download the preferred package from the repository's [Releases page](https://github.com/KurlyDeer/cybergrid/releases). For the installer, run the setup executable and follow the wizard. For the portable build, place the executable in a user-writable tools directory and launch it directly.
 
 The first launch creates local application data under Electron's per-user `userData` location. On Windows this is normally `%APPDATA%\CyberGrid`. No vault or database is written to the installation directory.
+
+Installed builds check the repository's published release metadata after startup without delaying the initial window. When a newer release is available, CyberGrid downloads it in the background and presents an in-app restart prompt after checksum verification completes.
 
 ### First launch
 
@@ -92,6 +94,12 @@ npm run dist:win
 ```
 
 Bundled application assets are written to `build/`. Installer and portable artifacts are written only to `dist/`. Both directories are intentionally ignored by Git.
+
+## Release Automation
+
+The Windows workflow in `.github/workflows/build.yml` runs on pushes to `main` and version tags matching `v*.*.*`. It installs the lockfile with Node.js 20, rebuilds native Electron modules during `npm ci`, compiles the application, and publishes the NSIS and portable artifacts through Electron Builder using GitHub's scoped Actions token.
+
+Local `npx electron-builder --win` builds never publish unless a publish mode and release token are supplied explicitly.
 
 ## Architecture
 

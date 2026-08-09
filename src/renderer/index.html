@@ -2003,6 +2003,15 @@
       .dr-export-card { display: grid; gap: 12px; margin-top: 20px; padding: 14px; border: 1px solid var(--border); border-radius: 9px; background: color-mix(in srgb, var(--panel-raised) 70%, transparent); }
       .dr-export-card h4 { margin: 0; font-size: 12px; }
       .dr-export-card p, .dr-export-status { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
+      .update-toast-region { position: fixed; z-index: 1800; top: 14px; right: 14px; display: grid; width: min(390px, calc(100vw - 28px)); gap: 10px; pointer-events: none; }
+      .update-toast { pointer-events: auto; overflow: hidden; border: 1px solid color-mix(in srgb, var(--accent) 58%, var(--border)); border-radius: 11px; background: color-mix(in srgb, var(--panel-raised) 94%, #000); box-shadow: 0 18px 54px rgba(0, 0, 0, .46); animation: update-toast-in 180ms ease-out; }
+      .update-toast-content { display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 11px; padding: 14px; }
+      .update-toast-mark { display: grid; width: 34px; height: 34px; place-items: center; border: 1px solid var(--accent); border-radius: 8px; background: var(--accent-soft); color: var(--accent); font-size: 10px; font-weight: 900; }
+      .update-toast-copy { min-width: 0; }
+      .update-toast-copy strong { display: block; margin-bottom: 4px; font-size: 12px; }
+      .update-toast-copy p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
+      .update-toast-actions { display: flex; justify-content: flex-end; gap: 8px; padding: 0 14px 14px; }
+      @keyframes update-toast-in { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: translateY(0); } }
       @media (max-width: 1040px) {
         .category-picker { grid-template-columns: repeat(2, minmax(0, 1fr)); }
         .session-toggles { grid-template-columns: 1fr; }
@@ -2182,6 +2191,7 @@
     </main>
 
     <div class="server-context-menu" id="server-context-menu" role="menu" hidden></div>
+    <section class="update-toast-region" id="update-toast-region" aria-label="Application update notifications" aria-live="polite"></section>
 
     <div class="vault-overlay" id="vault-overlay">
       <section class="vault-card" aria-labelledby="vault-title">

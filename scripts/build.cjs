@@ -27,6 +27,7 @@ async function bundleApplication() {
       entryPoints: [join(sourceRoot, "main", "main.ts")],
       external: [
         "electron",
+        "electron-updater",
         "ssh2",
         "serialport",
         "@serialport/bindings-cpp",
