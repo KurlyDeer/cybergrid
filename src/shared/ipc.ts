@@ -22,6 +22,9 @@ export const IPC_CHANNELS = {
   vaultListProfiles: "cybergrid:vault:list-profiles",
   vaultSaveProfile: "cybergrid:vault:save-profile",
   vaultDeleteProfile: "cybergrid:vault:delete-profile",
+  vaultUpdateProfileNotes: "cybergrid:vault:update-profile-notes",
+  vaultAddConfigBackup: "cybergrid:vault:add-config-backup",
+  vaultDeleteConfigBackup: "cybergrid:vault:delete-config-backup",
   vaultListAssets: "cybergrid:vault:list-assets",
   vaultSaveAsset: "cybergrid:vault:save-asset",
   vaultDeleteAsset: "cybergrid:vault:delete-asset",
@@ -176,7 +179,30 @@ export type ConnectionProtocol =
 export type ServerAuthType = "none" | "password" | "privateKey";
 export type SerialParity = "none" | "even" | "odd" | "mark" | "space";
 
+export type ConnectionCategory = "server" | "network" | "web" | "desktop";
+
+export interface TerminalAppearanceOverrides {
+  theme?: TerminalThemeName;
+  fontFamily?: string;
+  fontSize?: number;
+  lineHeight?: number;
+  background?: string;
+  foreground?: string;
+  cursor?: string;
+}
+
+export interface ConfigBackupInput {
+  name: string;
+  content: string;
+}
+
+export interface ConfigBackupRecord extends ConfigBackupInput {
+  id: string;
+  createdAt: string;
+}
+
 export interface ServerProfileInput {
+  category?: ConnectionCategory;
   protocol: ConnectionProtocol;
   name: string;
   host: string;
@@ -197,6 +223,17 @@ export interface ServerProfileInput {
   domain?: string;
   readyTimeoutSeconds?: number;
   keepaliveSeconds?: number;
+  keepAliveEnabled?: boolean;
+  persistUntilAppCloses?: boolean;
+  autoReconnect?: boolean;
+  jumpHost?: string;
+  proxyOverride?: string;
+  icon?: DeviceIcon;
+  applicationBadge?: string;
+  indicatorColor?: string;
+  terminalOverrides?: TerminalAppearanceOverrides;
+  notes?: string;
+  configBackups?: ConfigBackupRecord[];
   preConnectTaskIds?: string[];
   postConnectTaskIds?: string[];
   totpSecret?: string;
@@ -226,6 +263,18 @@ export interface ServerProfileSummary {
   domain?: string;
   readyTimeoutSeconds?: number;
   keepaliveSeconds?: number;
+  keepAliveEnabled: boolean;
+  persistUntilAppCloses: boolean;
+  autoReconnect: boolean;
+  category: ConnectionCategory;
+  jumpHost?: string;
+  proxyOverride?: string;
+  icon: DeviceIcon;
+  applicationBadge?: string;
+  indicatorColor?: string;
+  terminalOverrides?: TerminalAppearanceOverrides;
+  notes: string;
+  configBackups: ConfigBackupRecord[];
   preConnectTaskIds: string[];
   postConnectTaskIds: string[];
   hasTotp: boolean;
@@ -363,6 +412,13 @@ export interface FolderDefaultsInput {
   port?: number;
   readyTimeoutSeconds?: number;
   keepaliveSeconds?: number;
+  keepAliveEnabled?: boolean;
+  persistUntilAppCloses?: boolean;
+  autoReconnect?: boolean;
+  icon?: DeviceIcon;
+  applicationBadge?: string;
+  indicatorColor?: string;
+  terminalOverrides?: TerminalAppearanceOverrides;
 }
 
 export interface FolderDefaultsSummary {
@@ -376,6 +432,13 @@ export interface FolderDefaultsSummary {
   port?: number;
   readyTimeoutSeconds?: number;
   keepaliveSeconds?: number;
+  keepAliveEnabled?: boolean;
+  persistUntilAppCloses?: boolean;
+  autoReconnect?: boolean;
+  icon?: DeviceIcon;
+  applicationBadge?: string;
+  indicatorColor?: string;
+  terminalOverrides?: TerminalAppearanceOverrides;
   updatedAt: string;
 }
 
@@ -464,7 +527,14 @@ export interface ScreenshotResult {
   path: string | null;
 }
 
-export type ProfileConnectionResult = { context: SessionVariableContext } & (
+export interface SessionPolicy {
+  keepAliveEnabled: boolean;
+  persistUntilAppCloses: boolean;
+  autoReconnect: boolean;
+  terminalAppearance?: TerminalAppearanceOverrides;
+}
+
+export type ProfileConnectionResult = { context: SessionVariableContext; policy: SessionPolicy } & (
   | { protocol: "ssh"; sessionId: string }
   | { protocol: "rdp"; sessionId: string }
   | { protocol: "telnet" | "raw"; sessionId: string }
@@ -491,9 +561,17 @@ export type DeviceOsFamily = "Windows" | "Linux" | "Network appliance" | "Printe
 export type DeviceIcon =
   | "windows"
   | "linux"
+  | "ubuntu"
+  | "redhat"
+  | "macos"
+  | "bare-metal"
   | "cisco"
   | "fortinet"
   | "vmware"
+  | "hyperv"
+  | "router"
+  | "database"
+  | "web-server"
   | "printer"
   | "network"
   | "server"
@@ -584,8 +662,11 @@ export type ProxyMode = "system" | "direct" | "manual";
 
 export interface AppPreferences {
   minimizeToTray: boolean;
+  startMinimized: boolean;
+  launchAtLogin: boolean;
   masterPasswordEnabled: boolean;
   autoLockMinutes: number;
+  clipboardClearSeconds: number;
   theme: TerminalThemeName;
   fontFamily: string;
   fontSize: number;
@@ -597,6 +678,13 @@ export interface AppPreferences {
   proxyMode: ProxyMode;
   proxyUrl: string;
   proxyBypassRules: string;
+  healthCheckIntervalSeconds: number;
+  externalToolPaths: {
+    wireshark: string;
+    winscp: string;
+    nmap: string;
+    powershell: string;
+  };
 }
 
 export type DiagnosticKind = "ping" | "traceroute" | "dns" | "port";
@@ -674,6 +762,9 @@ export interface CyberGridApi {
     listProfiles(): Promise<ServerProfileSummary[]>;
     saveProfile(profile: ServerProfileInput): Promise<ServerProfileSummary>;
     deleteProfile(profileId: string): Promise<void>;
+    updateProfileNotes(profileId: string, notes: string): Promise<ServerProfileSummary>;
+    addConfigBackup(profileId: string, input: ConfigBackupInput): Promise<ServerProfileSummary>;
+    deleteConfigBackup(profileId: string, backupId: string): Promise<ServerProfileSummary>;
     listAssets(): Promise<AssetRecord[]>;
     saveAsset(asset: AssetInput): Promise<AssetRecord>;
     deleteAsset(assetId: string): Promise<void>;

@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
 import type {
   AssetInput,
   AppPreferences,
+  ConfigBackupInput,
   CyberGridApi,
   DiscoveryCompleteEvent,
   DiscoveryProgressEvent,
@@ -62,6 +63,9 @@ const IPC_CHANNELS: typeof import("../shared/ipc").IPC_CHANNELS = {
   vaultListProfiles: "cybergrid:vault:list-profiles",
   vaultSaveProfile: "cybergrid:vault:save-profile",
   vaultDeleteProfile: "cybergrid:vault:delete-profile",
+  vaultUpdateProfileNotes: "cybergrid:vault:update-profile-notes",
+  vaultAddConfigBackup: "cybergrid:vault:add-config-backup",
+  vaultDeleteConfigBackup: "cybergrid:vault:delete-config-backup",
   vaultListAssets: "cybergrid:vault:list-assets",
   vaultSaveAsset: "cybergrid:vault:save-asset",
   vaultDeleteAsset: "cybergrid:vault:delete-asset",
@@ -241,6 +245,12 @@ const api: CyberGridApi = {
       ipcRenderer.invoke(IPC_CHANNELS.vaultSaveProfile, profile),
     deleteProfile: (profileId) =>
       ipcRenderer.invoke(IPC_CHANNELS.vaultDeleteProfile, profileId),
+    updateProfileNotes: (profileId, notes) =>
+      ipcRenderer.invoke(IPC_CHANNELS.vaultUpdateProfileNotes, profileId, notes),
+    addConfigBackup: (profileId, input: ConfigBackupInput) =>
+      ipcRenderer.invoke(IPC_CHANNELS.vaultAddConfigBackup, profileId, input),
+    deleteConfigBackup: (profileId, backupId) =>
+      ipcRenderer.invoke(IPC_CHANNELS.vaultDeleteConfigBackup, profileId, backupId),
     listAssets: () => ipcRenderer.invoke(IPC_CHANNELS.vaultListAssets),
     saveAsset: (asset: AssetInput) =>
       ipcRenderer.invoke(IPC_CHANNELS.vaultSaveAsset, asset),

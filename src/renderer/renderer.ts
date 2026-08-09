@@ -8,6 +8,8 @@ type ConnectionProtocol = import("../shared/ipc").ConnectionProtocol;
 type AssetInput = import("../shared/ipc").AssetInput;
 type AssetRecord = import("../shared/ipc").AssetRecord;
 type AppPreferences = import("../shared/ipc").AppPreferences;
+type ConfigBackupInput = import("../shared/ipc").ConfigBackupInput;
+type ConnectionCategory = import("../shared/ipc").ConnectionCategory;
 type DeviceIcon = import("../shared/ipc").DeviceIcon;
 type DiscoveredDevice = import("../shared/ipc").DiscoveredDevice;
 type DiscoveryCompleteEvent = import("../shared/ipc").DiscoveryCompleteEvent;
@@ -36,6 +38,7 @@ type ServerAuthType = import("../shared/ipc").ServerAuthType;
 type ServerProfileInput = import("../shared/ipc").ServerProfileInput;
 type ServerProfileSummary = import("../shared/ipc").ServerProfileSummary;
 type SessionVariableContext = import("../shared/ipc").SessionVariableContext;
+type SessionPolicy = import("../shared/ipc").SessionPolicy;
 type SnippetInput = import("../shared/ipc").SnippetInput;
 type SnippetLanguage = import("../shared/ipc").SnippetLanguage;
 type SnippetRecord = import("../shared/ipc").SnippetRecord;
@@ -49,6 +52,7 @@ type SshStatusEvent = import("../shared/ipc").SshStatusEvent;
 type StreamConnectionConfig = import("../shared/ipc").StreamConnectionConfig;
 type StreamDataEvent = import("../shared/ipc").StreamDataEvent;
 type StreamStatusEvent = import("../shared/ipc").StreamStatusEvent;
+type TerminalAppearanceOverrides = import("../shared/ipc").TerminalAppearanceOverrides;
 type VncConnectionConfig = import("../shared/ipc").VncConnectionConfig;
 type VncConnectionResult = import("../shared/ipc").VncConnectionResult;
 type VncStatusEvent = import("../shared/ipc").VncStatusEvent;
@@ -100,12 +104,17 @@ interface WorkspaceTab {
   sftp?: SftpDirectoryListing;
   duplicate?: () => Promise<void>;
   postConnectStarted?: boolean;
+  policy?: SessionPolicy;
+  reconnectTimer?: number;
 }
 
 const DEFAULT_SETTINGS: AppPreferences = {
   minimizeToTray: true,
+  startMinimized: false,
+  launchAtLogin: false,
   masterPasswordEnabled: false,
   autoLockMinutes: 15,
+  clipboardClearSeconds: 30,
   theme: "dark",
   fontFamily: "Cascadia Mono, JetBrains Mono, Consolas, monospace",
   fontSize: 14,
@@ -117,6 +126,8 @@ const DEFAULT_SETTINGS: AppPreferences = {
   proxyMode: "system",
   proxyUrl: "",
   proxyBypassRules: "<local>",
+  healthCheckIntervalSeconds: 30,
+  externalToolPaths: { wireshark: "", winscp: "", nmap: "", powershell: "powershell.exe" },
 };
 const SETTINGS_KEY = "cybergrid:terminal-settings:v1";
 
@@ -154,6 +165,9 @@ let tabSequence = 0;
 let vaultMode: "create" | "unlock" = "unlock";
 let sftpDrawerOpen = false;
 let snippetsDrawerOpen = false;
+let selectedProfileId: string | null = null;
+let activeOperationsPanel: "commands" | "notes" | "backups" = "commands";
+let connectionCategory: ConnectionCategory = "server";
 let broadcastMode = false;
 let layoutMode: "single" | "grid" = "single";
 let recentTerminalTabIds: string[] = [];
@@ -224,6 +238,18 @@ const snippetTagsInput = elementById<HTMLInputElement>("snippet-tags");
 const snippetBodyInput = elementById<HTMLTextAreaElement>("snippet-body");
 const snippetCancelButton = elementById<HTMLButtonElement>("snippet-cancel-button");
 const snippetFormError = elementById<HTMLDivElement>("snippet-form-error");
+const operationsTabButtons = [...document.querySelectorAll<HTMLButtonElement>("[data-operations-tab]")];
+const operationsPanels = [...document.querySelectorAll<HTMLElement>("[data-operations-panel]")];
+const notesNodeContext = elementById<HTMLDivElement>("notes-node-context");
+const profileNotesForm = elementById<HTMLFormElement>("profile-notes-form");
+const profileNotesInput = elementById<HTMLTextAreaElement>("profile-notes");
+const profileNotesStatus = elementById<HTMLDivElement>("profile-notes-status");
+const backupsNodeContext = elementById<HTMLDivElement>("backups-node-context");
+const configBackupForm = elementById<HTMLFormElement>("config-backup-form");
+const configBackupNameInput = elementById<HTMLInputElement>("config-backup-name");
+const configBackupContentInput = elementById<HTMLTextAreaElement>("config-backup-content");
+const configBackupStatus = elementById<HTMLDivElement>("config-backup-status");
+const configBackupList = elementById<HTMLDivElement>("config-backup-list");
 
 const broadcastTargetsModal = elementById<HTMLDialogElement>("broadcast-targets-modal");
 const broadcastTargetList = elementById<HTMLDivElement>("broadcast-target-list");
@@ -259,6 +285,22 @@ const serverInheritFolderInput = elementById<HTMLInputElement>("server-inherit-f
 const serverDomainInput = elementById<HTMLInputElement>("server-domain");
 const serverTimeoutInput = elementById<HTMLInputElement>("server-timeout");
 const serverKeepaliveInput = elementById<HTMLInputElement>("server-keepalive");
+const serverKeepaliveEnabledInput = elementById<HTMLInputElement>("server-keepalive-enabled");
+const serverPersistInput = elementById<HTMLInputElement>("server-persist");
+const serverAutoReconnectInput = elementById<HTMLInputElement>("server-auto-reconnect");
+const serverJumpHostInput = elementById<HTMLInputElement>("server-jump-host");
+const serverProxyOverrideInput = elementById<HTMLInputElement>("server-proxy-override");
+const serverIconInput = elementById<HTMLSelectElement>("server-icon");
+const serverApplicationBadgeInput = elementById<HTMLInputElement>("server-application-badge");
+const serverIndicatorColorInput = elementById<HTMLInputElement>("server-indicator-color");
+const serverTerminalThemeInput = elementById<HTMLSelectElement>("server-terminal-theme");
+const serverTerminalFontInput = elementById<HTMLInputElement>("server-terminal-font");
+const serverTerminalSizeInput = elementById<HTMLInputElement>("server-terminal-size");
+const serverTerminalLineHeightInput = elementById<HTMLInputElement>("server-terminal-line-height");
+const serverTerminalBackgroundInput = elementById<HTMLInputElement>("server-terminal-background");
+const serverTerminalForegroundInput = elementById<HTMLInputElement>("server-terminal-foreground");
+const serverTerminalCursorInput = elementById<HTMLInputElement>("server-terminal-cursor");
+const categoryButtons = [...serverModal.querySelectorAll<HTMLButtonElement>("[data-connection-category]")];
 const serverPreTasksInput = elementById<HTMLSelectElement>("server-pre-tasks");
 const serverPostTasksInput = elementById<HTMLSelectElement>("server-post-tasks");
 const serverTotpSecretInput = elementById<HTMLInputElement>("server-totp-secret");
@@ -297,6 +339,15 @@ const folderDefaultsPassphraseField = elementById<HTMLDivElement>("folder-defaul
 const folderDefaultsPassphraseInput = elementById<HTMLInputElement>("folder-defaults-passphrase");
 const folderDefaultsTimeoutInput = elementById<HTMLInputElement>("folder-defaults-timeout");
 const folderDefaultsKeepaliveInput = elementById<HTMLInputElement>("folder-defaults-keepalive");
+const folderDefaultsKeepaliveEnabledInput = elementById<HTMLInputElement>("folder-defaults-keepalive-enabled");
+const folderDefaultsAutoReconnectInput = elementById<HTMLInputElement>("folder-defaults-auto-reconnect");
+const folderDefaultsIconInput = elementById<HTMLSelectElement>("folder-defaults-icon");
+const folderDefaultsBadgeInput = elementById<HTMLInputElement>("folder-defaults-badge");
+const folderDefaultsColorInput = elementById<HTMLInputElement>("folder-defaults-color");
+const folderDefaultsTerminalThemeInput = elementById<HTMLSelectElement>("folder-defaults-terminal-theme");
+const folderDefaultsTerminalFontInput = elementById<HTMLInputElement>("folder-defaults-terminal-font");
+const folderDefaultsTerminalSizeInput = elementById<HTMLInputElement>("folder-defaults-terminal-size");
+const folderDefaultsLineHeightInput = elementById<HTMLInputElement>("folder-defaults-line-height");
 const folderDefaultsError = elementById<HTMLDivElement>("folder-defaults-error");
 const folderDefaultsDeleteButton = elementById<HTMLButtonElement>("folder-defaults-delete");
 const folderDefaultsCancelButton = elementById<HTMLButtonElement>("folder-defaults-cancel");
@@ -374,11 +425,14 @@ const cancelAssetButton = elementById<HTMLButtonElement>("cancel-asset-button");
 const settingsModal = elementById<HTMLDialogElement>("settings-modal");
 const settingsForm = elementById<HTMLFormElement>("settings-form");
 const minimizeToTrayInput = elementById<HTMLInputElement>("minimize-to-tray");
+const startMinimizedInput = elementById<HTMLInputElement>("start-minimized");
+const launchAtLoginInput = elementById<HTMLInputElement>("launch-at-login");
 const masterPasswordEnabledInput = elementById<HTMLInputElement>("enable-master-password");
 const newMasterPasswordFields = elementById<HTMLDivElement>("new-master-password-fields");
 const newMasterPasswordInput = elementById<HTMLInputElement>("new-master-password");
 const newMasterPasswordConfirmInput = elementById<HTMLInputElement>("new-master-password-confirm");
 const autoLockInput = elementById<HTMLSelectElement>("auto-lock-minutes");
+const clipboardClearInput = elementById<HTMLSelectElement>("clipboard-clear-seconds");
 const themeInput = elementById<HTMLSelectElement>("theme-mode");
 const fontFamilyInput = elementById<HTMLInputElement>("terminal-font-family");
 const fontSizeInput = elementById<HTMLInputElement>("terminal-font-size");
@@ -392,6 +446,11 @@ const proxyModeInput = elementById<HTMLSelectElement>("proxy-mode");
 const proxyUrlInput = elementById<HTMLInputElement>("proxy-url");
 const proxyBypassInput = elementById<HTMLInputElement>("proxy-bypass-rules");
 const proxyManualFields = elementById<HTMLDivElement>("proxy-manual-fields");
+const healthCheckIntervalInput = elementById<HTMLInputElement>("health-check-interval");
+const toolWiresharkPathInput = elementById<HTMLInputElement>("tool-wireshark-path");
+const toolWinscpPathInput = elementById<HTMLInputElement>("tool-winscp-path");
+const toolNmapPathInput = elementById<HTMLInputElement>("tool-nmap-path");
+const toolPowershellPathInput = elementById<HTMLInputElement>("tool-powershell-path");
 const settingsError = elementById<HTMLDivElement>("settings-error");
 const resetSettingsButton = elementById<HTMLButtonElement>("reset-settings-button");
 const cancelSettingsButton = elementById<HTMLButtonElement>("cancel-settings-button");
@@ -501,6 +560,31 @@ function terminalTheme(settings: AppPreferences): ITheme {
   };
 }
 
+function terminalSettingsWithOverrides(overrides?: TerminalAppearanceOverrides): AppPreferences {
+  if (!overrides) return currentSettings;
+  return {
+    ...currentSettings,
+    theme: overrides.theme ?? currentSettings.theme,
+    fontFamily: overrides.fontFamily ?? currentSettings.fontFamily,
+    fontSize: overrides.fontSize ?? currentSettings.fontSize,
+    background: overrides.background ?? currentSettings.background,
+    foreground: overrides.foreground ?? currentSettings.foreground,
+    cursor: overrides.cursor ?? currentSettings.cursor,
+    externalToolPaths: { ...currentSettings.externalToolPaths },
+  };
+}
+
+function applyTerminalAppearance(tab: WorkspaceTab, overrides?: TerminalAppearanceOverrides): void {
+  if (!tab.terminal) return;
+  const settings = terminalSettingsWithOverrides(overrides);
+  tab.terminal.options.fontFamily = settings.fontFamily;
+  tab.terminal.options.fontSize = settings.fontSize;
+  tab.terminal.options.lineHeight = overrides?.lineHeight ?? 1.18;
+  tab.terminal.options.cursorBlink = settings.cursorBlink;
+  tab.terminal.options.theme = terminalTheme(settings);
+  tab.fitAddon?.fit();
+}
+
 function applySettings(settings: AppPreferences): void {
   currentSettings = settings;
   document.documentElement.dataset.theme = settings.theme;
@@ -509,13 +593,7 @@ function applySettings(settings: AppPreferences): void {
     settings.theme === "custom" ? settings.accent : DEFAULT_SETTINGS.accent,
   );
   for (const tab of tabs.values()) {
-    if (tab.terminal) {
-      tab.terminal.options.fontFamily = settings.fontFamily;
-      tab.terminal.options.fontSize = settings.fontSize;
-      tab.terminal.options.cursorBlink = settings.cursorBlink;
-      tab.terminal.options.theme = terminalTheme(settings);
-      tab.fitAddon?.fit();
-    }
+    applyTerminalAppearance(tab, tab.policy?.terminalAppearance);
   }
 }
 
@@ -702,19 +780,21 @@ function createTerminalTab(
   label: string,
   kind: "ssh" | "telnet" | "raw" | "serial" | "welcome" = "ssh",
   context?: Partial<SessionVariableContext>,
+  appearance?: TerminalAppearanceOverrides,
 ): WorkspaceTab {
   const requestedLayout = layoutMode;
   const tab = createWorkspaceTab(kind, label, context);
   tab.paneElement.classList.add("terminal-pane");
+  const terminalSettings = terminalSettingsWithOverrides(appearance);
   const terminal = new Terminal({
-    cursorBlink: currentSettings.cursorBlink,
+    cursorBlink: terminalSettings.cursorBlink,
     cursorStyle: "bar",
-    fontFamily: currentSettings.fontFamily,
-    fontSize: currentSettings.fontSize,
-    lineHeight: 1.18,
+    fontFamily: terminalSettings.fontFamily,
+    fontSize: terminalSettings.fontSize,
+    lineHeight: appearance?.lineHeight ?? 1.18,
     scrollback: 10_000,
     allowTransparency: true,
-    theme: terminalTheme(currentSettings),
+    theme: terminalTheme(terminalSettings),
   });
   const fitAddon = new FitAddon();
   terminal.loadAddon(fitAddon);
@@ -900,6 +980,7 @@ async function closeTab(id: string): Promise<void> {
   if (!tab) return;
   const tabOrder = [...tabs.keys()];
   const closedIndex = tabOrder.indexOf(id);
+  if (tab.reconnectTimer !== undefined) window.clearTimeout(tab.reconnectTimer);
   tabs.delete(id);
   recentTerminalTabIds = recentTerminalTabIds.filter((tabId) => tabId !== id);
   if (tab.sessionId) {
@@ -971,6 +1052,20 @@ function updateTabStatus(tab: WorkspaceTab, status: WorkspaceStatus, message?: s
       connectionState.textContent = `Post-connect task failed: ${errorMessage(error)}`;
     });
   }
+  if (status === "disconnected" && tab.policy?.autoReconnect) scheduleAutoReconnect(tab);
+}
+
+function scheduleAutoReconnect(tab: WorkspaceTab): void {
+  if (tab.reconnectTimer !== undefined || !tab.duplicate || !tabs.has(tab.id)) return;
+  tab.terminal?.writeln("\r\n\x1b[33mNetwork drop detected. Reconnecting in 2 seconds...\x1b[0m");
+  tab.reconnectTimer = window.setTimeout(() => {
+    tab.reconnectTimer = undefined;
+    if (!tabs.has(tab.id) || !tab.duplicate) return;
+    const reconnect = tab.duplicate;
+    void closeTab(tab.id).then(reconnect).catch((error: unknown) => {
+      connectionState.textContent = `Reconnect failed: ${errorMessage(error)}`;
+    });
+  }, 2_000);
 }
 
 function updateSshTabStatus(tab: WorkspaceTab, event: SshStatusEvent): void {
@@ -1150,7 +1245,7 @@ function createTabForProfile(profile: ServerProfileSummary): WorkspaceTab {
   else tab = createTerminalTab(profile.name, profile.protocol, {
     displayName: profile.name, host: profile.host, ip: profile.host, username: profile.username,
     group: profile.group, port: profile.port, profileId: profile.id,
-  });
+  }, profile.terminalOverrides);
   tab.context = tabContext(profile.name, {
     displayName: profile.name, host: profile.host, ip: profile.host, username: profile.username,
     group: profile.group, port: profile.port, profileId: profile.id,
@@ -1161,6 +1256,8 @@ function createTabForProfile(profile: ServerProfileSummary): WorkspaceTab {
 
 async function attachProfileResult(tab: WorkspaceTab, result: ProfileConnectionResult): Promise<void> {
   tab.context = result.context;
+  tab.policy = result.policy;
+  applyTerminalAppearance(tab, result.policy.terminalAppearance);
   if (result.protocol === "ssh") attachSshSession(tab, result.sessionId);
   else if (result.protocol === "rdp") attachRdpSession(tab, result.sessionId);
   else if (result.protocol === "telnet" || result.protocol === "raw") attachStreamSession(tab, result.sessionId);
@@ -1289,7 +1386,7 @@ function parseQuickConnect(value: string): QuickConnection {
   return { protocol, config: { protocol, host, port: Number(url.port || 23) } };
 }
 
-function createTextElement(tag: "span" | "div", className: string, text: string): HTMLElement {
+function createTextElement(tag: "span" | "div" | "strong", className: string, text: string): HTMLElement {
   const element = document.createElement(tag);
   element.className = className;
   element.textContent = text;
@@ -1299,9 +1396,17 @@ function createTextElement(tag: "span" | "div", className: string, text: string)
 const DEVICE_ICON_LABELS: Record<DeviceIcon, string> = {
   windows: "WIN",
   linux: "LNX",
+  ubuntu: "UBU",
+  redhat: "RHL",
+  macos: "MAC",
+  "bare-metal": "HW",
   cisco: "CIS",
   fortinet: "FNT",
   vmware: "VMW",
+  hyperv: "HYP",
+  router: "RTR",
+  database: "DB",
+  "web-server": "WEB",
   printer: "PRN",
   network: "NET",
   server: "SRV",
@@ -1559,6 +1664,15 @@ function openFolderDefaultsModal(path: string): void {
   folderDefaultsPassphraseInput.placeholder = existing?.hasPassphrase ? "Stored passphrase (leave blank to keep)" : "";
   folderDefaultsTimeoutInput.value = existing?.readyTimeoutSeconds ? String(existing.readyTimeoutSeconds) : "";
   folderDefaultsKeepaliveInput.value = existing?.keepaliveSeconds ? String(existing.keepaliveSeconds) : "";
+  folderDefaultsKeepaliveEnabledInput.checked = existing?.keepAliveEnabled !== false;
+  folderDefaultsAutoReconnectInput.checked = existing?.autoReconnect === true;
+  folderDefaultsIconInput.value = existing?.icon ?? "";
+  folderDefaultsBadgeInput.value = existing?.applicationBadge ?? "";
+  folderDefaultsColorInput.value = existing?.indicatorColor ?? currentSettings.accent;
+  folderDefaultsTerminalThemeInput.value = existing?.terminalOverrides?.theme ?? "";
+  folderDefaultsTerminalFontInput.value = existing?.terminalOverrides?.fontFamily ?? "";
+  folderDefaultsTerminalSizeInput.value = existing?.terminalOverrides?.fontSize ? String(existing.terminalOverrides.fontSize) : "";
+  folderDefaultsLineHeightInput.value = existing?.terminalOverrides?.lineHeight ? String(existing.terminalOverrides.lineHeight) : "";
   folderDefaultsDeleteButton.disabled = !existing;
   updateFolderDefaultsFields();
   if (!folderDefaultsModal.open) folderDefaultsModal.showModal();
@@ -1592,9 +1706,11 @@ async function refreshVaultContent(): Promise<void> {
   externalTools = tools;
   connectionTasks = tasks;
   syncSources = sources;
+  if (selectedProfileId && !savedProfiles.some((profile) => profile.id === selectedProfileId)) selectedProfileId = null;
   renderProfiles();
   renderAssets();
   renderSnippets();
+  renderNodeWorkspace();
   renderEnterpriseData();
   await configureHealthMonitor();
 }
@@ -1806,6 +1922,14 @@ async function copyProfileTotp(profileId: string): Promise<void> {
     const result = await window.cybergrid.vault.generateTotp(profileId);
     await navigator.clipboard.writeText(result.code);
     connectionState.textContent = `TOTP copied (${result.remainingSeconds}s remaining)`;
+    if (currentSettings.clipboardClearSeconds > 0) {
+      window.setTimeout(() => {
+        void navigator.clipboard.readText().then((value) => {
+          if (value === result.code) return navigator.clipboard.writeText("");
+          return undefined;
+        }).catch(() => undefined);
+      }, currentSettings.clipboardClearSeconds * 1_000);
+    }
   } catch (error) {
     window.alert(errorMessage(error));
   }
@@ -1928,6 +2052,8 @@ function openServerContextMenu(event: MouseEvent, profile: ServerProfileSummary)
       .then(refreshProfiles)
       .catch((error: unknown) => window.alert(errorMessage(error)));
   });
+  addAction("Notes & Docs", () => { closeServerContextMenu(); openNodeWorkspace(profile, "notes"); });
+  addAction("Config Backups", () => { closeServerContextMenu(); openNodeWorkspace(profile, "backups"); }, profile.category !== "network");
   if (profile.hasTotp) addAction("Copy current TOTP", () => void copyProfileTotp(profile.id));
   for (const tool of externalTools) {
     addAction(`Tool: ${tool.name}`, () => void runExternalToolForProfile(tool, profile.id));
@@ -1971,7 +2097,7 @@ function diagnosticElement(profileId: string): HTMLElement | undefined {
   return panel;
 }
 
-function renderProfiles(): void {
+function renderProfilesLegacy(): void {
   profileTree.replaceChildren();
   groupOptions.replaceChildren();
 
@@ -2094,6 +2220,137 @@ function renderProfiles(): void {
   }
 }
 
+interface ProfileFolderNode {
+  name: string;
+  path: string;
+  profiles: ServerProfileSummary[];
+  children: Map<string, ProfileFolderNode>;
+}
+
+function renderProfiles(): void {
+  profileTree.replaceChildren();
+  groupOptions.replaceChildren();
+  if (savedProfiles.length === 0) {
+    profileTree.append(createTextElement("div", "sidebar-empty", "No saved connections yet. Add one or import an existing connection tree."));
+    return;
+  }
+  const root: ProfileFolderNode = { name: "", path: "", profiles: [], children: new Map() };
+  const knownPaths = new Set<string>();
+  for (const profile of savedProfiles) {
+    const parts = (profile.group || "Ungrouped").split(/[/>]/).map((part) => part.trim()).filter(Boolean);
+    let node = root;
+    for (const part of parts.length > 0 ? parts : ["Ungrouped"]) {
+      const path = node.path ? `${node.path}/${part}` : part;
+      let child = node.children.get(part);
+      if (!child) {
+        child = { name: part, path, profiles: [], children: new Map() };
+        node.children.set(part, child);
+      }
+      node = child;
+      knownPaths.add(path);
+    }
+    node.profiles.push(profile);
+  }
+  for (const path of [...knownPaths].sort((left, right) => left.localeCompare(right))) {
+    const option = document.createElement("option");
+    option.value = path;
+    groupOptions.append(option);
+  }
+  const count = (node: ProfileFolderNode): number => node.profiles.length +
+    [...node.children.values()].reduce((total, child) => total + count(child), 0);
+
+  const renderProfile = (profile: ServerProfileSummary, list: HTMLElement): void => {
+    const row = document.createElement("div");
+    row.className = "server-row";
+    const button = document.createElement("button");
+    button.className = "server-item";
+    button.classList.toggle("selected", selectedProfileId === profile.id);
+    button.type = "button";
+    button.title = `Select for notes; double-click to connect${profile.inheritFolderDefaults ? " · inherited defaults" : ""}`;
+    button.style.setProperty("--node-color", profile.indicatorColor ?? "var(--accent)");
+    const endpoint = profile.protocol === "serial"
+      ? `${profile.host} / ${profile.baudRate ?? 9_600} baud`
+      : `${profile.protocol.toUpperCase()}  ${profile.username ? `${profile.username}@` : ""}${profile.host}:${profile.port}`;
+    const meta = createTextElement("span", "server-meta", "");
+    meta.append(
+      createTextElement("span", "server-name", `${profile.favorite ? "★ " : ""}${profile.name}${profile.managedBySyncId ? " ↻" : ""}`),
+      createTextElement("span", "server-host", `${endpoint}${profile.tags.length > 0 ? ` · ${profile.tags.join(", ")}` : ""}`),
+    );
+    const health = createTextElement("span", "server-dot", "");
+    health.dataset.healthId = profile.id;
+    applyHealthStatus(health, healthStatuses.get(profile.id));
+    button.append(health, createTextElement("span", "node-icon", DEVICE_ICON_LABELS[profile.icon]), meta);
+    if (profile.applicationBadge) button.append(createTextElement("span", "node-badge", profile.applicationBadge));
+    button.addEventListener("click", () => {
+      selectedProfileId = profile.id;
+      populateQuickConnect(profile);
+      renderProfiles();
+      if (snippetsDrawerOpen) renderNodeWorkspace();
+    });
+    button.addEventListener("dblclick", () => void connectSavedProfile(profile));
+    button.addEventListener("contextmenu", (event) => openServerContextMenu(event, profile));
+    const remove = document.createElement("button");
+    remove.className = "server-delete";
+    remove.type = "button";
+    remove.title = `Delete ${profile.name}`;
+    remove.setAttribute("aria-label", `Delete ${profile.name}`);
+    remove.textContent = "\u00d7";
+    remove.addEventListener("click", async () => {
+      if (!window.confirm(`Delete the saved server "${profile.name}"?`)) return;
+      try {
+        await window.cybergrid.vault.deleteProfile(profile.id);
+        if (selectedProfileId === profile.id) selectedProfileId = null;
+        await refreshProfiles();
+        renderNodeWorkspace();
+      } catch (error) { window.alert(errorMessage(error)); }
+    });
+    row.append(button, remove);
+    list.append(row);
+    const diagnostic = diagnosticElement(profile.id);
+    if (diagnostic) list.append(diagnostic);
+  };
+
+  const renderFolder = (node: ProfileFolderNode, parent: HTMLElement): void => {
+    const section = document.createElement("section");
+    section.className = "server-group";
+    section.classList.toggle("collapsed", collapsedGroups.has(node.path));
+    const defaults = folderDefaults.find((item) => item.path === node.path);
+    const folder = document.createElement("button");
+    folder.className = "folder-header";
+    folder.type = "button";
+    folder.style.setProperty("--node-color", defaults?.indicatorColor ?? "var(--accent)");
+    folder.setAttribute("aria-expanded", String(!collapsedGroups.has(node.path)));
+    folder.append(
+      createTextElement("span", "folder-chevron", collapsedGroups.has(node.path) ? ">" : "v"),
+      createTextElement("span", "folder-name", `${defaults?.icon ? `${DEVICE_ICON_LABELS[defaults.icon]} · ` : ""}${node.name}`),
+      createTextElement("span", "folder-count", String(count(node))),
+    );
+    folder.addEventListener("click", () => {
+      if (collapsedGroups.has(node.path)) collapsedGroups.delete(node.path); else collapsedGroups.add(node.path);
+      renderProfiles();
+    });
+    folder.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      serverContextMenu.replaceChildren();
+      appendContextAction("Edit inherited properties...", () => { closeServerContextMenu(); openFolderDefaultsModal(node.path); });
+      appendContextAction("Clear inherited properties", () => {
+        closeServerContextMenu();
+        void window.cybergrid.vault.deleteFolderDefaults(node.path).then(refreshEnterpriseData)
+          .catch((error: unknown) => window.alert(errorMessage(error)));
+      }, !defaults);
+      positionContextMenu(event.clientX, event.clientY, 90);
+    });
+    const list = document.createElement("div");
+    list.className = "server-list";
+    for (const profile of [...node.profiles].sort((left, right) => left.name.localeCompare(right.name))) renderProfile(profile, list);
+    for (const child of [...node.children.values()].sort((left, right) => left.name.localeCompare(right.name))) renderFolder(child, list);
+    section.append(folder, list);
+    parent.append(section);
+  };
+  for (const node of [...root.children.values()].sort((left, right) => left.name.localeCompare(right.name))) renderFolder(node, profileTree);
+}
+
 async function refreshProfiles(): Promise<void> {
   savedProfiles = await window.cybergrid.vault.listProfiles();
   renderProfiles();
@@ -2136,8 +2393,93 @@ function setSnippetsDrawerOpen(open: boolean): void {
   contentArea.classList.toggle("snippets-open", open);
   snippetsDrawer.hidden = !open;
   toggleSnippetsButton.classList.toggle("active", open);
-  if (open) renderSnippets();
+  if (open) {
+    renderSnippets();
+    renderNodeWorkspace();
+  }
   requestAnimationFrame(() => tabs.get(activeTabId ?? "")?.fitAddon?.fit());
+}
+
+function selectedProfile(): ServerProfileSummary | undefined {
+  return savedProfiles.find((profile) => profile.id === selectedProfileId);
+}
+
+function selectOperationsPanel(panel: "commands" | "notes" | "backups"): void {
+  activeOperationsPanel = panel;
+  for (const button of operationsTabButtons) {
+    button.classList.toggle("active", button.dataset.operationsTab === panel);
+  }
+  for (const section of operationsPanels) {
+    section.hidden = section.dataset.operationsPanel !== panel;
+  }
+  renderNodeWorkspace();
+}
+
+function openNodeWorkspace(profile: ServerProfileSummary, panel: "notes" | "backups" = "notes"): void {
+  selectedProfileId = profile.id;
+  setSnippetsDrawerOpen(true);
+  selectOperationsPanel(panel);
+}
+
+function replaceSavedProfile(profile: ServerProfileSummary): void {
+  savedProfiles = savedProfiles.map((candidate) => candidate.id === profile.id ? profile : candidate);
+  renderProfiles();
+  renderNodeWorkspace();
+}
+
+function renderNodeWorkspace(): void {
+  const profile = selectedProfile();
+  const hasProfile = Boolean(profile);
+  profileNotesInput.disabled = !hasProfile;
+  configBackupNameInput.disabled = !profile || profile.category !== "network";
+  configBackupContentInput.disabled = !profile || profile.category !== "network";
+  profileNotesInput.value = profile?.notes ?? "";
+  notesNodeContext.innerHTML = "";
+  backupsNodeContext.innerHTML = "";
+  if (!profile) {
+    notesNodeContext.textContent = "Select a server node to edit encrypted documentation.";
+    backupsNodeContext.textContent = "Select a network device to manage configuration snapshots.";
+    configBackupList.replaceChildren(createTextElement("div", "operations-empty", "No node selected."));
+    return;
+  }
+  notesNodeContext.append("Encrypted notes for ", createTextElement("strong", "", profile.name));
+  backupsNodeContext.append(
+    profile.category === "network" ? "Configuration history for " : "Configuration snapshots are available for network devices. Selected: ",
+    createTextElement("strong", "", profile.name),
+  );
+  configBackupList.replaceChildren();
+  if (profile.category !== "network") {
+    configBackupList.append(createTextElement("div", "operations-empty", "Set the connection category to Network Device to enable show-run snapshots."));
+    return;
+  }
+  if (profile.configBackups.length === 0) {
+    configBackupList.append(createTextElement("div", "operations-empty", "No saved configuration snapshots."));
+    return;
+  }
+  for (const backup of profile.configBackups) {
+    const card = document.createElement("article");
+    card.className = "backup-card";
+    const header = document.createElement("header");
+    const title = document.createElement("strong");
+    title.textContent = backup.name;
+    const date = createTextElement("span", "server-host", new Date(backup.createdAt).toLocaleString());
+    const remove = document.createElement("button");
+    remove.className = "server-delete";
+    remove.type = "button";
+    remove.title = "Delete snapshot";
+    remove.textContent = "\u00d7";
+    remove.addEventListener("click", () => {
+      if (!window.confirm(`Delete configuration snapshot "${backup.name}"?`)) return;
+      void window.cybergrid.vault.deleteConfigBackup(profile.id, backup.id)
+        .then(replaceSavedProfile)
+        .catch((error: unknown) => { configBackupStatus.textContent = errorMessage(error); });
+    });
+    const body = document.createElement("pre");
+    body.textContent = backup.content;
+    header.append(title, date, remove);
+    card.append(header, body);
+    configBackupList.append(card);
+  }
 }
 
 function editableSnippet(snippet?: SnippetRecord): void {
@@ -2466,11 +2808,13 @@ function applyLockedRendererState(reason?: string): void {
   externalTools = [];
   connectionTasks = [];
   syncSources = [];
+  selectedProfileId = null;
   healthStatuses.clear();
   diagnosticResults.clear();
   renderProfiles();
   renderAssets();
   renderSnippets();
+  renderNodeWorkspace();
   renderWorkspaceLayout();
   updateBroadcastControls();
   setVaultPrompt(true);
@@ -2502,6 +2846,37 @@ const DEFAULT_PROTOCOL_PORTS: Record<Exclude<ConnectionProtocol, "serial">, numb
   https: 443,
 };
 
+const CATEGORY_PROTOCOLS: Record<ConnectionCategory, ConnectionProtocol[]> = {
+  server: ["rdp", "ssh"],
+  network: ["ssh", "telnet", "raw", "serial"],
+  web: ["https", "http"],
+  desktop: ["vnc", "rdp"],
+};
+
+const CATEGORY_DEFAULT_PROTOCOL: Record<ConnectionCategory, ConnectionProtocol> = {
+  server: "rdp",
+  network: "ssh",
+  web: "https",
+  desktop: "vnc",
+};
+
+function selectConnectionCategory(category: ConnectionCategory, resetProtocol = true): void {
+  connectionCategory = category;
+  for (const button of categoryButtons) {
+    button.classList.toggle("active", button.dataset.connectionCategory === category);
+    button.setAttribute("aria-pressed", String(button.dataset.connectionCategory === category));
+  }
+  const allowed = new Set(CATEGORY_PROTOCOLS[category]);
+  for (const option of serverProtocolInput.options) {
+    option.hidden = !allowed.has(option.value as ConnectionProtocol);
+    option.disabled = !allowed.has(option.value as ConnectionProtocol);
+  }
+  if (resetProtocol || !allowed.has(serverProtocolInput.value as ConnectionProtocol)) {
+    serverProtocolInput.value = CATEGORY_DEFAULT_PROTOCOL[category];
+  }
+  updateProfileFields(true);
+}
+
 function updateProfileFields(resetDefaults = false): void {
   const protocol = serverProtocolInput.value as ConnectionProtocol;
   const serial = protocol === "serial";
@@ -2517,6 +2892,7 @@ function updateProfileFields(resetDefaults = false): void {
   serverSerialSection.hidden = !serial;
   serverBaudRateInput.required = serial;
   serverUsernameField.hidden = !usesUsername;
+  serverDomainInput.closest<HTMLElement>(".field")?.toggleAttribute("hidden", protocol !== "rdp");
   serverUsernameInput.required = usesUsername && !serverInheritFolderInput.checked;
   serverAuthField.hidden = !usesAuthentication;
   privateKeyOption?.toggleAttribute("disabled", protocol !== "ssh");
@@ -2536,6 +2912,7 @@ function updateProfileFields(resetDefaults = false): void {
   serverKeySection.hidden = !usesPrivateKey;
   serverPasswordInput.required = usesPassword;
   serverKeyPathInput.required = usesPrivateKey;
+  serverKeepaliveInput.disabled = !serverKeepaliveEnabledInput.checked || protocol !== "ssh";
 }
 
 function openServerModal(): void {
@@ -2543,9 +2920,11 @@ function openServerModal(): void {
   serverProtocolInput.value = "ssh";
   serverBaudRateInput.value = "9600";
   serverInheritFolderInput.checked = true;
+  serverKeepaliveEnabledInput.checked = true;
+  serverIndicatorColorInput.value = currentSettings.accent;
   renderTaskOptions();
   serverFormError.textContent = "";
-  updateProfileFields(true);
+  selectConnectionCategory("server");
   if (!serverModal.open) {
     serverModal.showModal();
   }
@@ -2577,8 +2956,11 @@ function selectSettingsPanel(panel: string): void {
 
 function populateSettingsForm(settings: AppPreferences): void {
   minimizeToTrayInput.checked = settings.minimizeToTray;
+  startMinimizedInput.checked = settings.startMinimized;
+  launchAtLoginInput.checked = settings.launchAtLogin;
   masterPasswordEnabledInput.checked = settings.masterPasswordEnabled;
   autoLockInput.value = String(settings.autoLockMinutes);
+  clipboardClearInput.value = String(settings.clipboardClearSeconds);
   themeInput.value = settings.theme;
   fontFamilyInput.value = settings.fontFamily;
   fontSizeInput.value = String(settings.fontSize);
@@ -2590,6 +2972,11 @@ function populateSettingsForm(settings: AppPreferences): void {
   proxyModeInput.value = settings.proxyMode;
   proxyUrlInput.value = settings.proxyUrl;
   proxyBypassInput.value = settings.proxyBypassRules;
+  healthCheckIntervalInput.value = String(settings.healthCheckIntervalSeconds);
+  toolWiresharkPathInput.value = settings.externalToolPaths.wireshark;
+  toolWinscpPathInput.value = settings.externalToolPaths.winscp;
+  toolNmapPathInput.value = settings.externalToolPaths.nmap;
+  toolPowershellPathInput.value = settings.externalToolPaths.powershell;
   customPaletteFields.hidden = settings.theme !== "custom";
   settingsError.textContent = "";
   newMasterPasswordInput.value = "";
@@ -2671,6 +3058,41 @@ toggleSftpButton.addEventListener("click", () => setSftpDrawerOpen(!sftpDrawerOp
 sftpCloseButton.addEventListener("click", () => setSftpDrawerOpen(false));
 toggleSnippetsButton.addEventListener("click", () => setSnippetsDrawerOpen(!snippetsDrawerOpen));
 snippetsCloseButton.addEventListener("click", () => setSnippetsDrawerOpen(false));
+for (const button of operationsTabButtons) {
+  button.addEventListener("click", () => {
+    const panel = button.dataset.operationsTab;
+    if (panel === "commands" || panel === "notes" || panel === "backups") selectOperationsPanel(panel);
+  });
+}
+profileNotesForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const profile = selectedProfile();
+  if (!profile) return;
+  profileNotesStatus.textContent = "Saving...";
+  try {
+    replaceSavedProfile(await window.cybergrid.vault.updateProfileNotes(profile.id, profileNotesInput.value));
+    profileNotesStatus.textContent = "Notes saved in the encrypted vault.";
+  } catch (error) {
+    profileNotesStatus.textContent = errorMessage(error);
+  }
+});
+configBackupForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const profile = selectedProfile();
+  if (!profile || profile.category !== "network") return;
+  const input: ConfigBackupInput = {
+    name: configBackupNameInput.value.trim() || `Snapshot ${new Date().toLocaleString()}`,
+    content: configBackupContentInput.value,
+  };
+  configBackupStatus.textContent = "Saving...";
+  try {
+    replaceSavedProfile(await window.cybergrid.vault.addConfigBackup(profile.id, input));
+    configBackupForm.reset();
+    configBackupStatus.textContent = "Configuration snapshot encrypted and saved.";
+  } catch (error) {
+    configBackupStatus.textContent = errorMessage(error);
+  }
+});
 snippetSearchInput.addEventListener("input", renderSnippets);
 addSnippetButton.addEventListener("click", () => editableSnippet());
 snippetCancelButton.addEventListener("click", hideSnippetForm);
@@ -2864,6 +3286,17 @@ folderDefaultsForm.addEventListener("submit", async (event) => {
     port: folderDefaultsPortInput.value ? Number(folderDefaultsPortInput.value) : undefined,
     readyTimeoutSeconds: folderDefaultsTimeoutInput.value ? Number(folderDefaultsTimeoutInput.value) : undefined,
     keepaliveSeconds: folderDefaultsKeepaliveInput.value ? Number(folderDefaultsKeepaliveInput.value) : undefined,
+    keepAliveEnabled: folderDefaultsKeepaliveEnabledInput.checked,
+    autoReconnect: folderDefaultsAutoReconnectInput.checked,
+    icon: (folderDefaultsIconInput.value || undefined) as DeviceIcon | undefined,
+    applicationBadge: folderDefaultsBadgeInput.value.trim() || undefined,
+    indicatorColor: folderDefaultsColorInput.value,
+    terminalOverrides: {
+      theme: (folderDefaultsTerminalThemeInput.value || undefined) as TerminalAppearanceOverrides["theme"],
+      fontFamily: folderDefaultsTerminalFontInput.value.trim() || undefined,
+      fontSize: folderDefaultsTerminalSizeInput.value ? Number(folderDefaultsTerminalSizeInput.value) : undefined,
+      lineHeight: folderDefaultsLineHeightInput.value ? Number(folderDefaultsLineHeightInput.value) : undefined,
+    },
   };
   try {
     await window.cybergrid.vault.saveFolderDefaults(input);
@@ -3061,6 +3494,15 @@ lockButton.addEventListener("click", async () => {
 });
 
 serverProtocolInput.addEventListener("change", () => updateProfileFields(true));
+for (const button of categoryButtons) {
+  button.addEventListener("click", () => {
+    const category = button.dataset.connectionCategory;
+    if (category === "server" || category === "network" || category === "web" || category === "desktop") {
+      selectConnectionCategory(category);
+    }
+  });
+}
+serverKeepaliveEnabledInput.addEventListener("change", () => updateProfileFields(false));
 serverInheritFolderInput.addEventListener("change", () => updateProfileFields(false));
 authTypeInput.addEventListener("change", () => updateProfileFields(false));
 cancelServerButton.addEventListener("click", () => serverModal.close());
@@ -3080,7 +3522,17 @@ serverForm.addEventListener("submit", async (event) => {
   serverFormError.textContent = "";
   const protocol = serverProtocolInput.value as ConnectionProtocol;
   const authType = authTypeInput.value as ServerAuthType;
+  const terminalOverrides: TerminalAppearanceOverrides = {
+    theme: (serverTerminalThemeInput.value || undefined) as TerminalAppearanceOverrides["theme"],
+    fontFamily: serverTerminalFontInput.value.trim() || undefined,
+    fontSize: serverTerminalSizeInput.value ? Number(serverTerminalSizeInput.value) : undefined,
+    lineHeight: serverTerminalLineHeightInput.value ? Number(serverTerminalLineHeightInput.value) : undefined,
+    background: serverTerminalThemeInput.value === "custom" ? serverTerminalBackgroundInput.value : undefined,
+    foreground: serverTerminalThemeInput.value === "custom" ? serverTerminalForegroundInput.value : undefined,
+    cursor: serverTerminalThemeInput.value === "custom" ? serverTerminalCursorInput.value : undefined,
+  };
   const profile: ServerProfileInput = {
+    category: connectionCategory,
     protocol,
     name: serverNameInput.value.trim(),
     host: serverHostInput.value.trim(),
@@ -3101,6 +3553,16 @@ serverForm.addEventListener("submit", async (event) => {
     domain: serverDomainInput.value.trim() || undefined,
     readyTimeoutSeconds: serverTimeoutInput.value ? Number(serverTimeoutInput.value) : undefined,
     keepaliveSeconds: serverKeepaliveInput.value ? Number(serverKeepaliveInput.value) : undefined,
+    keepAliveEnabled: serverKeepaliveEnabledInput.checked,
+    persistUntilAppCloses: serverPersistInput.checked,
+    autoReconnect: serverAutoReconnectInput.checked,
+    jumpHost: serverJumpHostInput.value.trim() || undefined,
+    proxyOverride: serverProxyOverrideInput.value.trim() || undefined,
+    icon: (serverIconInput.value || undefined) as DeviceIcon | undefined,
+    applicationBadge: serverApplicationBadgeInput.value.trim() || undefined,
+    indicatorColor: serverIndicatorColorInput.value,
+    terminalOverrides: Object.values(terminalOverrides).some((value) => value !== undefined)
+      ? terminalOverrides : undefined,
     preConnectTaskIds: [...serverPreTasksInput.selectedOptions].map((option) => option.value),
     postConnectTaskIds: [...serverPostTasksInput.selectedOptions].map((option) => option.value),
     totpSecret: serverTotpSecretInput.value || undefined,
@@ -3157,8 +3619,11 @@ settingsForm.addEventListener("submit", async (event) => {
   }
   const settings: AppPreferences = {
     minimizeToTray: minimizeToTrayInput.checked,
+    startMinimized: startMinimizedInput.checked,
+    launchAtLogin: launchAtLoginInput.checked,
     masterPasswordEnabled: masterPasswordEnabledInput.checked,
     autoLockMinutes: masterPasswordEnabledInput.checked ? Number(autoLockInput.value) : 0,
+    clipboardClearSeconds: Number(clipboardClearInput.value),
     theme: themeInput.value as AppPreferences["theme"],
     fontFamily: fontFamilyInput.value.trim() || DEFAULT_SETTINGS.fontFamily,
     fontSize: Math.min(28, Math.max(10, Math.round(Number(fontSizeInput.value)))),
@@ -3170,6 +3635,13 @@ settingsForm.addEventListener("submit", async (event) => {
     proxyMode: proxyModeInput.value as AppPreferences["proxyMode"],
     proxyUrl: proxyUrlInput.value.trim(),
     proxyBypassRules: proxyBypassInput.value.trim(),
+    healthCheckIntervalSeconds: Math.min(600, Math.max(10, Math.round(Number(healthCheckIntervalInput.value)))),
+    externalToolPaths: {
+      wireshark: toolWiresharkPathInput.value.trim(),
+      winscp: toolWinscpPathInput.value.trim(),
+      nmap: toolNmapPathInput.value.trim(),
+      powershell: toolPowershellPathInput.value.trim() || "powershell.exe",
+    },
   };
   try {
     currentSettings = await window.cybergrid.preferences.update(
@@ -3179,6 +3651,7 @@ settingsForm.addEventListener("submit", async (event) => {
     newMasterPasswordInput.value = "";
     newMasterPasswordConfirmInput.value = "";
     applySettings(currentSettings);
+    await configureHealthMonitor();
     settingsModal.close();
   } catch (error) {
     settingsError.textContent = errorMessage(error);

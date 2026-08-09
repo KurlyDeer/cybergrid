@@ -12,6 +12,9 @@ import type {
   AssetInput,
   AssetMetadata,
   AssetRecord,
+  ConfigBackupInput,
+  ConfigBackupRecord,
+  ConnectionCategory,
   ConnectionProtocol,
   DeviceIcon,
   DeviceOsFamily,
@@ -32,6 +35,7 @@ import type {
   SnippetInput,
   SnippetLanguage,
   SnippetRecord,
+  TerminalAppearanceOverrides,
   VaultStatus,
 } from "../shared/ipc";
 
@@ -223,6 +227,15 @@ function parseProfile(value: unknown): DecryptedServerProfile {
     requireString(tag, `profile.tags[${index}]`),
   );
   if (tags.length > 20) throw new Error("Vault profile contains too many tags.");
+  if (value.configBackups !== undefined && !Array.isArray(value.configBackups)) {
+    throw new Error("Vault profile configuration backups are invalid.");
+  }
+  const configBackups = (value.configBackups ?? []).map((backup, index) =>
+    parseConfigBackup(backup, `profile.configBackups[${index}]`),
+  );
+  if (configBackups.length > 100) throw new Error("Vault profile contains too many configuration snapshots.");
+  const notes = optionalString(value.notes, "profile.notes") ?? "";
+  if (notes.length > 262_144) throw new Error("Vault profile notes are too large.");
   const profile: DecryptedServerProfile = {
     id: requireString(value.id, "profile.id"),
     name: requireString(value.name, "profile.name"),
@@ -232,12 +245,24 @@ function parseProfile(value: unknown): DecryptedServerProfile {
     group: requireString(value.group, "profile.group"),
     authType,
     protocol,
+    category: parseConnectionCategory(value.category),
     tags,
     favorite: value.favorite === true,
     inheritFolderDefaults: value.inheritFolderDefaults !== false,
     domain: optionalString(value.domain, "profile.domain"),
     readyTimeoutSeconds: optionalPositiveInteger(value.readyTimeoutSeconds, "profile.readyTimeoutSeconds"),
     keepaliveSeconds: optionalPositiveInteger(value.keepaliveSeconds, "profile.keepaliveSeconds"),
+    keepAliveEnabled: value.keepAliveEnabled === undefined ? undefined : value.keepAliveEnabled !== false,
+    persistUntilAppCloses: value.persistUntilAppCloses === undefined ? undefined : value.persistUntilAppCloses === true,
+    autoReconnect: value.autoReconnect === undefined ? undefined : value.autoReconnect === true,
+    jumpHost: optionalString(value.jumpHost, "profile.jumpHost"),
+    proxyOverride: optionalString(value.proxyOverride, "profile.proxyOverride"),
+    icon: value.icon === undefined ? undefined : parseDeviceIcon(value.icon, "profile.icon"),
+    applicationBadge: optionalString(value.applicationBadge, "profile.applicationBadge"),
+    indicatorColor: optionalColor(value.indicatorColor, "profile.indicatorColor"),
+    terminalOverrides: parseTerminalOverrides(value.terminalOverrides, "profile.terminalOverrides"),
+    notes,
+    configBackups,
     preConnectTaskIds: parseStringArray(value.preConnectTaskIds, "profile.preConnectTaskIds", 50),
     postConnectTaskIds: parseStringArray(value.postConnectTaskIds, "profile.postConnectTaskIds", 50),
     totpSecret: optionalString(value.totpSecret, "profile.totpSecret"),
@@ -291,6 +316,53 @@ function optionalPositiveInteger(value: unknown, field: string): number | undefi
   return parsed;
 }
 
+function parseConnectionCategory(value: unknown): ConnectionCategory {
+  return value === "network" || value === "web" || value === "desktop" ? value : "server";
+}
+
+function optionalColor(value: unknown, field: string): string | undefined {
+  if (value === undefined || value === "") return undefined;
+  const color = requireString(value, field).toLowerCase();
+  if (!/^#[0-9a-f]{6}$/.test(color)) throw new Error(`Vault field ${field} is invalid.`);
+  return color;
+}
+
+function parseTerminalOverrides(value: unknown, field: string): TerminalAppearanceOverrides | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) throw new Error(`Vault field ${field} is invalid.`);
+  const theme = value.theme === "dark" || value.theme === "monochrome" || value.theme === "custom"
+    ? value.theme : undefined;
+  const fontSize = value.fontSize === undefined ? undefined : Number(value.fontSize);
+  const lineHeight = value.lineHeight === undefined ? undefined : Number(value.lineHeight);
+  if (fontSize !== undefined && (!Number.isInteger(fontSize) || fontSize < 10 || fontSize > 28)) {
+    throw new Error(`Vault field ${field}.fontSize is invalid.`);
+  }
+  if (lineHeight !== undefined && (!Number.isFinite(lineHeight) || lineHeight < 1 || lineHeight > 2)) {
+    throw new Error(`Vault field ${field}.lineHeight is invalid.`);
+  }
+  return {
+    theme,
+    fontFamily: optionalString(value.fontFamily, `${field}.fontFamily`),
+    fontSize,
+    lineHeight,
+    background: optionalColor(value.background, `${field}.background`),
+    foreground: optionalColor(value.foreground, `${field}.foreground`),
+    cursor: optionalColor(value.cursor, `${field}.cursor`),
+  };
+}
+
+function parseConfigBackup(value: unknown, field: string): ConfigBackupRecord {
+  if (!isRecord(value)) throw new Error(`Vault field ${field} is invalid.`);
+  const content = requireString(value.content, `${field}.content`);
+  if (content.length > 1_048_576) throw new Error("Configuration snapshots are limited to 1 MB each.");
+  return {
+    id: requireString(value.id, `${field}.id`),
+    name: requireString(value.name, `${field}.name`),
+    content,
+    createdAt: requireString(value.createdAt, `${field}.createdAt`),
+  };
+}
+
 function parseStringArray(value: unknown, field: string, maximum: number): string[] {
   if (value === undefined) return [];
   if (!Array.isArray(value) || value.length > maximum) throw new Error(`Vault field ${field} is invalid.`);
@@ -301,9 +373,17 @@ function parseDeviceIcon(value: unknown, field: string): DeviceIcon {
   if (
     value === "windows" ||
     value === "linux" ||
+    value === "ubuntu" ||
+    value === "redhat" ||
+    value === "macos" ||
+    value === "bare-metal" ||
     value === "cisco" ||
     value === "fortinet" ||
     value === "vmware" ||
+    value === "hyperv" ||
+    value === "router" ||
+    value === "database" ||
+    value === "web-server" ||
     value === "printer" ||
     value === "network" ||
     value === "server" ||
@@ -432,6 +512,13 @@ function parseFolderDefaults(value: unknown): StoredFolderDefaults {
     port: optionalPositiveInteger(value.port, "folderDefaults.port"),
     readyTimeoutSeconds: optionalPositiveInteger(value.readyTimeoutSeconds, "folderDefaults.readyTimeoutSeconds"),
     keepaliveSeconds: optionalPositiveInteger(value.keepaliveSeconds, "folderDefaults.keepaliveSeconds"),
+    keepAliveEnabled: value.keepAliveEnabled === undefined ? undefined : value.keepAliveEnabled === true,
+    persistUntilAppCloses: value.persistUntilAppCloses === undefined ? undefined : value.persistUntilAppCloses === true,
+    autoReconnect: value.autoReconnect === undefined ? undefined : value.autoReconnect === true,
+    icon: value.icon === undefined ? undefined : parseDeviceIcon(value.icon, "folderDefaults.icon"),
+    applicationBadge: optionalString(value.applicationBadge, "folderDefaults.applicationBadge"),
+    indicatorColor: optionalColor(value.indicatorColor, "folderDefaults.indicatorColor"),
+    terminalOverrides: parseTerminalOverrides(value.terminalOverrides, "folderDefaults.terminalOverrides"),
     updatedAt: requireString(value.updatedAt, "folderDefaults.updatedAt"),
   };
 }
@@ -564,6 +651,24 @@ async function deriveKey(masterPassword: string, kdf: VaultKdfConfig): Promise<B
   });
 }
 
+function defaultProfileIcon(profile: Pick<ServerProfileInput, "protocol" | "category">): DeviceIcon {
+  if (profile.category === "network") return "network";
+  if (profile.category === "web") return "web-server";
+  if (profile.category === "desktop") return profile.protocol === "vnc" ? "vmware" : "windows";
+  if (profile.protocol === "rdp") return "windows";
+  if (profile.protocol === "ssh") return "linux";
+  if (profile.protocol === "http" || profile.protocol === "https") return "web-server";
+  return "server";
+}
+
+function cloneTerminalOverrides(value?: TerminalAppearanceOverrides): TerminalAppearanceOverrides | undefined {
+  return value ? { ...value } : undefined;
+}
+
+function cloneConfigBackups(backups?: ConfigBackupRecord[]): ConfigBackupRecord[] {
+  return (backups ?? []).map((backup) => ({ ...backup }));
+}
+
 function summarizeProfile(profile: DecryptedServerProfile): ServerProfileSummary {
   return {
     id: profile.id,
@@ -574,6 +679,7 @@ function summarizeProfile(profile: DecryptedServerProfile): ServerProfileSummary
     group: profile.group,
     authType: profile.authType,
     protocol: profile.protocol,
+    category: profile.category ?? "server",
     baudRate: profile.baudRate,
     dataBits: profile.dataBits,
     stopBits: profile.stopBits,
@@ -584,6 +690,17 @@ function summarizeProfile(profile: DecryptedServerProfile): ServerProfileSummary
     domain: profile.domain,
     readyTimeoutSeconds: profile.readyTimeoutSeconds,
     keepaliveSeconds: profile.keepaliveSeconds,
+    keepAliveEnabled: profile.keepAliveEnabled !== false,
+    persistUntilAppCloses: profile.persistUntilAppCloses === true,
+    autoReconnect: profile.autoReconnect === true,
+    jumpHost: profile.jumpHost,
+    proxyOverride: profile.proxyOverride,
+    icon: profile.icon ?? defaultProfileIcon(profile),
+    applicationBadge: profile.applicationBadge,
+    indicatorColor: profile.indicatorColor,
+    terminalOverrides: cloneTerminalOverrides(profile.terminalOverrides),
+    notes: profile.notes ?? "",
+    configBackups: cloneConfigBackups(profile.configBackups),
     preConnectTaskIds: [...(profile.preConnectTaskIds ?? [])],
     postConnectTaskIds: [...(profile.postConnectTaskIds ?? [])],
     hasTotp: Boolean(profile.totpSecret),
@@ -603,6 +720,13 @@ function summarizeFolderDefaults(value: StoredFolderDefaults): FolderDefaultsSum
     port: value.port,
     readyTimeoutSeconds: value.readyTimeoutSeconds,
     keepaliveSeconds: value.keepaliveSeconds,
+    keepAliveEnabled: value.keepAliveEnabled,
+    persistUntilAppCloses: value.persistUntilAppCloses,
+    autoReconnect: value.autoReconnect,
+    icon: value.icon,
+    applicationBadge: value.applicationBadge,
+    indicatorColor: value.indicatorColor,
+    terminalOverrides: cloneTerminalOverrides(value.terminalOverrides),
     updatedAt: value.updatedAt,
   };
 }
@@ -734,7 +858,7 @@ export class VaultController {
 
   listProfiles(): ServerProfileSummary[] {
     return this.requirePayload()
-      .profiles.map(summarizeProfile)
+      .profiles.map((profile) => summarizeProfile(this.getConnectionProfile(profile.id)))
       .sort((left, right) =>
         left.group.localeCompare(right.group) || left.name.localeCompare(right.name),
       );
@@ -782,6 +906,7 @@ export class VaultController {
   exportProfiles(): ServerProfileInput[] {
     return this.requirePayload().profiles.map((profile) => ({
       protocol: profile.protocol,
+      category: profile.category,
       name: profile.name,
       host: profile.host,
       port: profile.port,
@@ -801,6 +926,17 @@ export class VaultController {
       domain: profile.domain,
       readyTimeoutSeconds: profile.readyTimeoutSeconds,
       keepaliveSeconds: profile.keepaliveSeconds,
+      keepAliveEnabled: profile.keepAliveEnabled,
+      persistUntilAppCloses: profile.persistUntilAppCloses,
+      autoReconnect: profile.autoReconnect,
+      jumpHost: profile.jumpHost,
+      proxyOverride: profile.proxyOverride,
+      icon: profile.icon,
+      applicationBadge: profile.applicationBadge,
+      indicatorColor: profile.indicatorColor,
+      terminalOverrides: cloneTerminalOverrides(profile.terminalOverrides),
+      notes: profile.notes,
+      configBackups: cloneConfigBackups(profile.configBackups),
       preConnectTaskIds: [...(profile.preConnectTaskIds ?? [])],
       postConnectTaskIds: [...(profile.postConnectTaskIds ?? [])],
       totpSecret: profile.totpSecret,
@@ -846,6 +982,64 @@ export class VaultController {
       }
       throw error;
     }
+  }
+
+  async updateProfileNotes(profileId: string, notes: string): Promise<ServerProfileSummary> {
+    const profile = this.requirePayload().profiles.find((candidate) => candidate.id === profileId);
+    if (!profile) throw new Error("Server profile was not found.");
+    const previousNotes = profile.notes;
+    const previousUpdatedAt = profile.updatedAt;
+    profile.notes = notes;
+    profile.updatedAt = new Date().toISOString();
+    try {
+      await this.persist();
+    } catch (error) {
+      profile.notes = previousNotes;
+      profile.updatedAt = previousUpdatedAt;
+      throw error;
+    }
+    return summarizeProfile(profile);
+  }
+
+  async addConfigBackup(profileId: string, input: ConfigBackupInput): Promise<ServerProfileSummary> {
+    const profile = this.requirePayload().profiles.find((candidate) => candidate.id === profileId);
+    if (!profile) throw new Error("Server profile was not found.");
+    const previous = cloneConfigBackups(profile.configBackups);
+    const previousUpdatedAt = profile.updatedAt;
+    const backups = profile.configBackups ?? [];
+    if (backups.length >= 100) throw new Error("A connection may store at most 100 configuration snapshots.");
+    backups.unshift({ ...input, id: randomUUID(), createdAt: new Date().toISOString() });
+    profile.configBackups = backups;
+    profile.updatedAt = new Date().toISOString();
+    try {
+      await this.persist();
+    } catch (error) {
+      profile.configBackups = previous;
+      profile.updatedAt = previousUpdatedAt;
+      throw error;
+    }
+    return summarizeProfile(profile);
+  }
+
+  async deleteConfigBackup(profileId: string, backupId: string): Promise<ServerProfileSummary> {
+    const profile = this.requirePayload().profiles.find((candidate) => candidate.id === profileId);
+    if (!profile) throw new Error("Server profile was not found.");
+    const previous = cloneConfigBackups(profile.configBackups);
+    const previousUpdatedAt = profile.updatedAt;
+    const backups = profile.configBackups ?? [];
+    const index = backups.findIndex((backup) => backup.id === backupId);
+    if (index < 0) throw new Error("Configuration snapshot was not found.");
+    backups.splice(index, 1);
+    profile.configBackups = backups;
+    profile.updatedAt = new Date().toISOString();
+    try {
+      await this.persist();
+    } catch (error) {
+      profile.configBackups = previous;
+      profile.updatedAt = previousUpdatedAt;
+      throw error;
+    }
+    return summarizeProfile(profile);
   }
 
   listAssets(): AssetRecord[] {
@@ -1189,6 +1383,8 @@ export class VaultController {
       tags: [...(profile.tags ?? [])],
       preConnectTaskIds: [...(profile.preConnectTaskIds ?? [])],
       postConnectTaskIds: [...(profile.postConnectTaskIds ?? [])],
+      terminalOverrides: cloneTerminalOverrides(profile.terminalOverrides),
+      configBackups: cloneConfigBackups(profile.configBackups),
     };
     if (profile.inheritFolderDefaults !== false) {
       const parts = profile.group.split("/").map((part) => part.trim()).filter(Boolean);
@@ -1199,6 +1395,13 @@ export class VaultController {
           for (const [key, value] of Object.entries(item)) {
             if (value !== undefined && key !== "path" && key !== "updatedAt") {
               if (key === "authType" && value === "none" && merged.authType && merged.authType !== "none") continue;
+              if (key === "terminalOverrides") {
+                merged.terminalOverrides = {
+                  ...(merged.terminalOverrides ?? {}),
+                  ...(value as TerminalAppearanceOverrides),
+                };
+                continue;
+              }
               (merged as Record<string, unknown>)[key] = value;
             }
           }
@@ -1215,6 +1418,16 @@ export class VaultController {
       if (inherited.port && resolved.protocol !== "serial") resolved.port = inherited.port;
       resolved.readyTimeoutSeconds ??= inherited.readyTimeoutSeconds;
       resolved.keepaliveSeconds ??= inherited.keepaliveSeconds;
+      resolved.keepAliveEnabled ??= inherited.keepAliveEnabled;
+      resolved.persistUntilAppCloses ??= inherited.persistUntilAppCloses;
+      resolved.autoReconnect ??= inherited.autoReconnect;
+      resolved.icon ??= inherited.icon;
+      resolved.applicationBadge ??= inherited.applicationBadge;
+      resolved.indicatorColor ??= inherited.indicatorColor;
+      resolved.terminalOverrides = {
+        ...(inherited.terminalOverrides ?? {}),
+        ...(resolved.terminalOverrides ?? {}),
+      };
     }
     if (resolved.domain && resolved.username && !/[\\@]/.test(resolved.username)) {
       resolved.username = `${resolved.domain}\\${resolved.username}`;

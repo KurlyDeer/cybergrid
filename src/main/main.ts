@@ -22,6 +22,8 @@ import {
   type AdministrationProtocol,
   type AssetInput,
   type AssetMetadata,
+  type ConfigBackupInput,
+  type ConnectionCategory,
   type ConnectionProtocol,
   type ConnectionTaskInput,
   type DeviceIcon,
@@ -45,6 +47,7 @@ import {
   type SshResizeRequest,
   type SshWriteRequest,
   type StreamConnectionConfig,
+  type TerminalAppearanceOverrides,
   type VncConnectionConfig,
   type WebBounds,
   type WebConnectionConfig,
@@ -479,7 +482,10 @@ function normalizeProfileInput(value: unknown): ServerProfileInput {
     http: 80, https: 443, serial: 0,
   };
   const port = protocol === "serial" ? 0 : readPort(value.port, defaultPorts[protocol]);
+  const category: ConnectionCategory = value.category === "network" || value.category === "web" || value.category === "desktop"
+    ? value.category : "server";
   const profile: ServerProfileInput = {
+    category,
     protocol,
     name: readString(value.name, "Display name", { required: true, maxLength: 100 }) as string,
     host,
@@ -488,7 +494,8 @@ function normalizeProfileInput(value: unknown): ServerProfileInput {
       maxLength: 256,
       singleLine: true,
     }) ?? "",
-    group: readString(value.group, "Folder", { maxLength: 100 }) ?? "Ungrouped",
+    group: value.group === undefined || value.group === ""
+      ? "Ungrouped" : normalizeFolderPath(value.group),
     authType,
     tags: readTags(value.tags, "Profile tags"),
     favorite: value.favorite === true,
@@ -496,6 +503,16 @@ function normalizeProfileInput(value: unknown): ServerProfileInput {
     domain: readString(value.domain, "Domain", { maxLength: 256, singleLine: true }),
     readyTimeoutSeconds: readOptionalInteger(value.readyTimeoutSeconds, "Connection timeout", 1, 300),
     keepaliveSeconds: readOptionalInteger(value.keepaliveSeconds, "Keepalive interval", 1, 300),
+    keepAliveEnabled: value.keepAliveEnabled !== false,
+    persistUntilAppCloses: value.persistUntilAppCloses === true,
+    autoReconnect: value.autoReconnect === true,
+    jumpHost: readString(value.jumpHost, "Jump host", { maxLength: 253, singleLine: true }),
+    proxyOverride: readString(value.proxyOverride, "Connection proxy", { maxLength: 2_048, singleLine: true }),
+    icon: readDeviceIcon(value.icon, false),
+    applicationBadge: readString(value.applicationBadge, "Application badge", { maxLength: 4, singleLine: true }),
+    indicatorColor: value.indicatorColor === undefined || value.indicatorColor === ""
+      ? undefined : readHexColor(value.indicatorColor, "Indicator color"),
+    terminalOverrides: normalizeTerminalOverrides(value.terminalOverrides),
     preConnectTaskIds: readUuidArray(value.preConnectTaskIds, "pre-connect task ID"),
     postConnectTaskIds: readUuidArray(value.postConnectTaskIds, "post-connect task ID"),
   };
@@ -546,7 +563,7 @@ function normalizeProfileInput(value: unknown): ServerProfileInput {
 
 function normalizeFolderPath(value: unknown): string {
   const path = (readString(value, "Folder path", { required: true, maxLength: 100, singleLine: true }) as string)
-    .replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+    .replace(/\\/g, "/").replace(/\s*>\s*/g, "/").replace(/^\/+|\/+$/g, "");
   const parts = path.split("/").map((part) => part.trim());
   if (parts.some((part) => !part || part === "." || part === "..")) throw new Error("Folder path contains an invalid segment.");
   return parts.join("/");
@@ -563,6 +580,14 @@ function normalizeFolderDefaults(value: unknown): FolderDefaultsInput {
     port: readOptionalInteger(value.port, "Default port", 1, 65_535),
     readyTimeoutSeconds: readOptionalInteger(value.readyTimeoutSeconds, "Connection timeout", 1, 300),
     keepaliveSeconds: readOptionalInteger(value.keepaliveSeconds, "Keepalive interval", 1, 300),
+    keepAliveEnabled: value.keepAliveEnabled === undefined ? undefined : value.keepAliveEnabled === true,
+    persistUntilAppCloses: value.persistUntilAppCloses === undefined ? undefined : value.persistUntilAppCloses === true,
+    autoReconnect: value.autoReconnect === undefined ? undefined : value.autoReconnect === true,
+    icon: readDeviceIcon(value.icon, false),
+    applicationBadge: readString(value.applicationBadge, "Application badge", { maxLength: 4, singleLine: true }),
+    indicatorColor: value.indicatorColor === undefined || value.indicatorColor === ""
+      ? undefined : readHexColor(value.indicatorColor, "Indicator color"),
+    terminalOverrides: normalizeTerminalOverrides(value.terminalOverrides),
   };
   if (authType === "password") {
     result.password = readString(value.password, "Default password", { maxLength: 4_096, trim: false });
@@ -677,9 +702,17 @@ function readDeviceIcon(value: unknown, required: boolean): DeviceIcon | undefin
   if (
     value === "windows" ||
     value === "linux" ||
+    value === "ubuntu" ||
+    value === "redhat" ||
+    value === "macos" ||
+    value === "bare-metal" ||
     value === "cisco" ||
     value === "fortinet" ||
     value === "vmware" ||
+    value === "hyperv" ||
+    value === "router" ||
+    value === "database" ||
+    value === "web-server" ||
     value === "printer" ||
     value === "network" ||
     value === "server" ||
@@ -984,15 +1017,67 @@ function readHexColor(value: unknown, field: string): string {
   return value.toLowerCase();
 }
 
+function normalizeTerminalOverrides(value: unknown): TerminalAppearanceOverrides | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!isRecord(value)) throw new Error("Invalid terminal appearance override.");
+  const result: TerminalAppearanceOverrides = {};
+  if (value.theme === "dark" || value.theme === "monochrome" || value.theme === "custom") {
+    result.theme = value.theme;
+  }
+  result.fontFamily = readString(value.fontFamily, "Override font family", {
+    maxLength: 200,
+    singleLine: true,
+  });
+  result.fontSize = readOptionalInteger(value.fontSize, "Override font size", 10, 28);
+  if (value.lineHeight !== undefined && value.lineHeight !== "") {
+    const lineHeight = Number(value.lineHeight);
+    if (!Number.isFinite(lineHeight) || lineHeight < 1 || lineHeight > 2) {
+      throw new Error("Terminal line height must be between 1.0 and 2.0.");
+    }
+    result.lineHeight = Math.round(lineHeight * 100) / 100;
+  }
+  if (value.background !== undefined && value.background !== "") result.background = readHexColor(value.background, "Override background");
+  if (value.foreground !== undefined && value.foreground !== "") result.foreground = readHexColor(value.foreground, "Override foreground");
+  if (value.cursor !== undefined && value.cursor !== "") result.cursor = readHexColor(value.cursor, "Override cursor");
+  return Object.values(result).some((item) => item !== undefined) ? result : undefined;
+}
+
+function normalizeProfileNotes(value: unknown): string {
+  if (typeof value !== "string" || value.length > 262_144 || value.includes("\0")) {
+    throw new Error("Profile notes must be text smaller than 256 KB.");
+  }
+  return value;
+}
+
+function normalizeConfigBackupInput(value: unknown): ConfigBackupInput {
+  if (!isRecord(value)) throw new Error("Invalid configuration snapshot.");
+  const content = typeof value.content === "string" ? value.content : "";
+  if (!content || content.length > 1_048_576 || content.includes("\0")) {
+    throw new Error("Configuration snapshot content must be between 1 byte and 1 MB.");
+  }
+  return {
+    name: readString(value.name, "Snapshot name", { required: true, maxLength: 100, singleLine: true }) as string,
+    content,
+  };
+}
+
 function normalizePreferences(value: unknown): AppPreferences {
   if (!isRecord(value)) throw new Error("Invalid application preferences.");
   const autoLockMinutes = Number(value.autoLockMinutes);
   const fontSize = Number(value.fontSize);
+  const clipboardClearSeconds = Number(value.clipboardClearSeconds);
+  const healthCheckIntervalSeconds = Number(value.healthCheckIntervalSeconds);
   if (!Number.isInteger(autoLockMinutes) || autoLockMinutes < 0 || autoLockMinutes > 480) {
     throw new Error("Auto-lock must be between 0 and 480 minutes.");
   }
   if (!Number.isInteger(fontSize) || fontSize < 10 || fontSize > 28) {
     throw new Error("Terminal font size must be between 10 and 28 pixels.");
+  }
+  if (!Number.isInteger(clipboardClearSeconds) || clipboardClearSeconds < 0 || clipboardClearSeconds > 300) {
+    throw new Error("Clipboard clearing must be between 0 and 300 seconds.");
+  }
+  if (!Number.isInteger(healthCheckIntervalSeconds) || healthCheckIntervalSeconds < 10 || healthCheckIntervalSeconds > 600) {
+    throw new Error("Ping interval must be between 10 and 600 seconds.");
   }
   const theme = value.theme;
   if (theme !== "dark" && theme !== "monochrome" && theme !== "custom") {
@@ -1021,10 +1106,14 @@ function normalizePreferences(value: unknown): AppPreferences {
     }
   }
   const masterPasswordEnabled = value.masterPasswordEnabled === true;
+  const toolPaths = isRecord(value.externalToolPaths) ? value.externalToolPaths : {};
   return {
     minimizeToTray: value.minimizeToTray === true,
+    startMinimized: value.startMinimized === true,
+    launchAtLogin: value.launchAtLogin === true,
     masterPasswordEnabled,
     autoLockMinutes: masterPasswordEnabled ? autoLockMinutes : 0,
+    clipboardClearSeconds,
     theme,
     fontFamily: readString(value.fontFamily, "Terminal font family", {
       required: true,
@@ -1043,6 +1132,13 @@ function normalizePreferences(value: unknown): AppPreferences {
       maxLength: 2_048,
       singleLine: true,
     }) ?? "",
+    healthCheckIntervalSeconds,
+    externalToolPaths: {
+      wireshark: readString(toolPaths.wireshark, "Wireshark path", { maxLength: 2_048, singleLine: true }) ?? "",
+      winscp: readString(toolPaths.winscp, "WinSCP path", { maxLength: 2_048, singleLine: true }) ?? "",
+      nmap: readString(toolPaths.nmap, "Nmap path", { maxLength: 2_048, singleLine: true }) ?? "",
+      powershell: readString(toolPaths.powershell, "PowerShell path", { maxLength: 2_048, singleLine: true }) ?? "powershell.exe",
+    },
   };
 }
 
@@ -1277,7 +1373,7 @@ async function connectionConfigForProfile(profileId: string): Promise<SshConnect
     port: profile.port,
     username: resolveEnvironmentTokens(profile.username, "Username") ?? "",
     readyTimeout: (profile.readyTimeoutSeconds ?? 15) * 1_000,
-    keepaliveInterval: (profile.keepaliveSeconds ?? 10) * 1_000,
+    keepaliveInterval: profile.keepAliveEnabled === false ? 0 : (profile.keepaliveSeconds ?? 10) * 1_000,
     totpCode: profile.totpSecret ? generateTotp(profile.totpSecret, {
       digits: profile.totpDigits,
       period: profile.totpPeriod,
@@ -1328,11 +1424,16 @@ async function connectProfile(profileId: string, sender: WebContents): Promise<P
     requireVault().getConnectionTasks(profile.preConnectTaskIds ?? []),
     context,
   );
-  const finish = async (result: ProfileConnectionResult): Promise<ProfileConnectionResult> => result;
+  const policy = {
+    keepAliveEnabled: profile.keepAliveEnabled !== false,
+    persistUntilAppCloses: profile.persistUntilAppCloses === true,
+    autoReconnect: profile.autoReconnect === true,
+    terminalAppearance: profile.terminalOverrides,
+  };
   switch (profile.protocol) {
     case "ssh": {
       const ssh = await getSshController();
-      return finish({
+      return {
         protocol: "ssh",
         sessionId: await ssh.connect(
           await connectionConfigForProfile(profileId),
@@ -1340,13 +1441,14 @@ async function connectProfile(profileId: string, sender: WebContents): Promise<P
           auditContext("ssh", profile.name, `${host}:${profile.port}`, username, profile.group),
         ),
         context,
-      });
+        policy,
+      };
     }
     case "rdp":
-      return finish({ protocol: "rdp", sessionId: await requireRdp().connect({ host, port: profile.port, username }, sender), context });
+      return { protocol: "rdp", sessionId: await requireRdp().connect({ host, port: profile.port, username }, sender), context, policy };
     case "telnet":
     case "raw":
-      return finish({
+      return {
         protocol: profile.protocol,
         sessionId: streamController.connect(
           { protocol: profile.protocol, host, port: profile.port },
@@ -1354,10 +1456,11 @@ async function connectProfile(profileId: string, sender: WebContents): Promise<P
           auditContext(profile.protocol, profile.name, `${host}:${profile.port}`, username, profile.group),
         ),
         context,
-      });
+        policy,
+      };
     case "serial": {
       const serial = await getSerialController();
-      return finish({
+      return {
         protocol: "serial",
         sessionId: await serial.connect(
           {
@@ -1371,7 +1474,8 @@ async function connectProfile(profileId: string, sender: WebContents): Promise<P
           auditContext("serial", profile.name, host, username, profile.group),
         ),
         context,
-      });
+        policy,
+      };
     }
     case "vnc": {
       const result = await (await getVncController()).connect({
@@ -1379,7 +1483,7 @@ async function connectProfile(profileId: string, sender: WebContents): Promise<P
         port: profile.port,
         password: resolveEnvironmentTokens(profile.password, "VNC password"),
       }, sender);
-      return finish({ protocol: "vnc", ...result, context });
+      return { protocol: "vnc", ...result, context, policy };
     }
     case "http":
     case "https": {
@@ -1387,7 +1491,7 @@ async function connectProfile(profileId: string, sender: WebContents): Promise<P
       const normalizedHost = host.replace(/^https?:\/\//i, "").replace(/\/$/, "");
       const port = profile.port === defaultPort ? "" : `:${profile.port}`;
       const sessionId = await requireWeb().connect({ url: `${profile.protocol}://${normalizedHost}${port}/` }, sender);
-      return finish({ protocol: profile.protocol, sessionId, context });
+      return { protocol: profile.protocol, sessionId, context, policy };
     }
   }
 }
@@ -1631,6 +1735,30 @@ function registerIpcHandlers(): void {
     await refreshTrayMenu();
   });
 
+  ipcMain.handle(IPC_CHANNELS.vaultUpdateProfileNotes, async (event, profileId: unknown, notes: unknown) => {
+    assertTrustedSender(event);
+    return requireVault().updateProfileNotes(
+      readUuid(profileId, "server profile ID"),
+      normalizeProfileNotes(notes),
+    );
+  });
+
+  ipcMain.handle(IPC_CHANNELS.vaultAddConfigBackup, async (event, profileId: unknown, input: unknown) => {
+    assertTrustedSender(event);
+    return requireVault().addConfigBackup(
+      readUuid(profileId, "server profile ID"),
+      normalizeConfigBackupInput(input),
+    );
+  });
+
+  ipcMain.handle(IPC_CHANNELS.vaultDeleteConfigBackup, async (event, profileId: unknown, backupId: unknown) => {
+    assertTrustedSender(event);
+    return requireVault().deleteConfigBackup(
+      readUuid(profileId, "server profile ID"),
+      readUuid(backupId, "configuration snapshot ID"),
+    );
+  });
+
   ipcMain.handle(IPC_CHANNELS.vaultListAssets, (event) => {
     assertTrustedSender(event);
     return requireVault().listAssets();
@@ -1800,6 +1928,7 @@ function registerIpcHandlers(): void {
     await applyProxyPreferences(normalized);
     await changeMasterPasswordMode(normalized.masterPasswordEnabled, newMasterPassword);
     const saved = await requirePreferences().save(normalized);
+    app.setLoginItemSettings({ openAtLogin: saved.launchAtLogin });
     resetAutoLockTimer();
     return saved;
   });
@@ -1860,7 +1989,11 @@ function registerIpcHandlers(): void {
         protocol: profile.protocol,
       };
     });
-    healthController.setTargets(normalized, event.sender);
+    healthController.setTargets(
+      normalized,
+      event.sender,
+      requirePreferences().get().healthCheckIntervalSeconds,
+    );
   });
 
   ipcMain.handle(IPC_CHANNELS.healthRefresh, async (event) => {
@@ -2011,6 +2144,10 @@ async function initializeBackgroundServices(): Promise<void> {
   await preferences.load().catch((error: unknown) => {
     console.warn("CyberGrid preferences could not be loaded; using defaults:", error);
   });
+  app.setLoginItemSettings({ openAtLogin: preferences.get().launchAtLogin });
+  if (preferences.get().startMinimized && mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.hide();
+  }
   await applyProxyPreferences(preferences.get()).catch((error: unknown) => {
     console.warn("CyberGrid proxy settings could not be applied:", error);
   });

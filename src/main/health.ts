@@ -5,7 +5,6 @@ import type { WebContents } from "electron";
 import { IPC_CHANNELS, type HealthStatusEvent, type HealthTarget } from "../shared/ipc";
 
 const execFileAsync = promisify(execFile);
-const SWEEP_INTERVAL_MS = 30_000;
 const CONCURRENCY = 8;
 
 export class HealthController {
@@ -14,13 +13,14 @@ export class HealthController {
   private interval?: NodeJS.Timeout;
   private sweeping = false;
 
-  setTargets(targets: HealthTarget[], sender: WebContents): void {
+  setTargets(targets: HealthTarget[], sender: WebContents, intervalSeconds = 30): void {
     this.targets = targets;
     this.sender = sender;
     if (this.interval) {
       clearInterval(this.interval);
     }
-    this.interval = setInterval(() => void this.sweep(), SWEEP_INTERVAL_MS);
+    const intervalMs = Math.min(600, Math.max(10, intervalSeconds)) * 1_000;
+    this.interval = setInterval(() => void this.sweep(), intervalMs);
     void this.sweep();
   }
 

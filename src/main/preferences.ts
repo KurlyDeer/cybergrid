@@ -12,8 +12,11 @@ interface PreferencesFile {
 
 export const DEFAULT_APP_PREFERENCES: AppPreferences = {
   minimizeToTray: true,
+  startMinimized: false,
+  launchAtLogin: false,
   masterPasswordEnabled: false,
   autoLockMinutes: 15,
+  clipboardClearSeconds: 30,
   theme: "dark",
   fontFamily: "Cascadia Mono, JetBrains Mono, Consolas, monospace",
   fontSize: 14,
@@ -25,10 +28,17 @@ export const DEFAULT_APP_PREFERENCES: AppPreferences = {
   proxyMode: "system",
   proxyUrl: "",
   proxyBypassRules: "<local>",
+  healthCheckIntervalSeconds: 30,
+  externalToolPaths: {
+    wireshark: "",
+    winscp: "",
+    nmap: "",
+    powershell: "powershell.exe",
+  },
 };
 
 function clonePreferences(preferences: AppPreferences): AppPreferences {
-  return { ...preferences };
+  return { ...preferences, externalToolPaths: { ...preferences.externalToolPaths } };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -55,6 +65,8 @@ function parseStoredPreferences(value: unknown): AppPreferences {
     minimizeToTray: typeof preferences.minimizeToTray === "boolean"
       ? preferences.minimizeToTray
       : DEFAULT_APP_PREFERENCES.minimizeToTray,
+    startMinimized: preferences.startMinimized === true,
+    launchAtLogin: preferences.launchAtLogin === true,
     masterPasswordEnabled: typeof preferences.masterPasswordEnabled === "boolean"
       ? preferences.masterPasswordEnabled
       : true,
@@ -62,6 +74,10 @@ function parseStoredPreferences(value: unknown): AppPreferences {
       Number(preferences.autoLockMinutes) >= 0 && Number(preferences.autoLockMinutes) <= 480
       ? Number(preferences.autoLockMinutes)
       : DEFAULT_APP_PREFERENCES.autoLockMinutes,
+    clipboardClearSeconds: Number.isInteger(preferences.clipboardClearSeconds) &&
+      Number(preferences.clipboardClearSeconds) >= 0 && Number(preferences.clipboardClearSeconds) <= 300
+      ? Number(preferences.clipboardClearSeconds)
+      : DEFAULT_APP_PREFERENCES.clipboardClearSeconds,
     theme: preferences.theme === "monochrome" || preferences.theme === "custom"
       ? preferences.theme
       : "dark",
@@ -90,6 +106,20 @@ function parseStoredPreferences(value: unknown): AppPreferences {
       DEFAULT_APP_PREFERENCES.proxyBypassRules,
       2_048,
     ),
+    healthCheckIntervalSeconds: Number.isInteger(preferences.healthCheckIntervalSeconds) &&
+      Number(preferences.healthCheckIntervalSeconds) >= 10 && Number(preferences.healthCheckIntervalSeconds) <= 600
+      ? Number(preferences.healthCheckIntervalSeconds)
+      : DEFAULT_APP_PREFERENCES.healthCheckIntervalSeconds,
+    externalToolPaths: isRecord(preferences.externalToolPaths) ? {
+      wireshark: storedString(preferences.externalToolPaths.wireshark, "", 2_048),
+      winscp: storedString(preferences.externalToolPaths.winscp, "", 2_048),
+      nmap: storedString(preferences.externalToolPaths.nmap, "", 2_048),
+      powershell: storedString(
+        preferences.externalToolPaths.powershell,
+        DEFAULT_APP_PREFERENCES.externalToolPaths.powershell,
+        2_048,
+      ),
+    } : { ...DEFAULT_APP_PREFERENCES.externalToolPaths },
   };
 }
 

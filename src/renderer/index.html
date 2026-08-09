@@ -1910,6 +1910,67 @@
       .enterprise-record > span { flex: 1; min-width: 0; }
       .task-select { min-height: 92px; }
       .folder-inheritance-note { color: var(--muted); font-size: 12px; }
+
+      /* Command-center density and browser-native tree virtualization. */
+      .app-shell { grid-template-columns: 248px minmax(0, 1fr); }
+      .server-group,
+      .server-row { content-visibility: auto; contain-intrinsic-size: 38px; }
+      .server-list .server-group { margin: 0 0 0 12px; border-left: 1px solid color-mix(in srgb, var(--border) 72%, transparent); }
+      .server-list .server-group > .folder-header { padding-left: 10px; }
+      .node-icon {
+        display: grid;
+        width: 27px;
+        height: 25px;
+        flex: 0 0 auto;
+        place-items: center;
+        border: 1px solid color-mix(in srgb, var(--node-color, var(--accent)) 45%, var(--border));
+        border-radius: 6px;
+        background: color-mix(in srgb, var(--node-color, var(--accent)) 12%, transparent);
+        color: var(--node-color, var(--accent));
+        font-family: ui-monospace, monospace;
+        font-size: 8px;
+        font-weight: 900;
+      }
+      .node-badge { margin-left: auto; padding: 1px 5px; border-radius: 999px; background: var(--node-color, var(--accent)); color: #07110e; font-size: 8px; font-weight: 900; }
+      .server-item.selected { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); background: var(--accent-soft); }
+      .connection-dialog { width: min(840px, calc(100vw - 32px)); }
+      .category-picker { display: grid; grid-column: 1 / -1; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+      .category-card { min-height: 72px; padding: 10px; border: 1px solid var(--border); border-radius: 9px; background: var(--panel-raised); color: var(--muted); cursor: pointer; text-align: left; }
+      .category-card strong { display: block; margin-bottom: 4px; color: var(--text); font-size: 12px; }
+      .category-card span { font-size: 10px; line-height: 1.35; }
+      .category-card.active { border-color: var(--accent); background: var(--accent-soft); color: var(--text); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent); }
+      .connection-section-title { grid-column: 1 / -1; margin: 8px 0 -2px; color: var(--muted); font-size: 10px; font-weight: 900; letter-spacing: .12em; text-transform: uppercase; }
+      .advanced-settings { grid-column: 1 / -1; border: 1px solid var(--border); border-radius: 9px; background: color-mix(in srgb, var(--panel-raised) 50%, transparent); }
+      .advanced-settings > summary { padding: 12px 14px; color: var(--accent); cursor: pointer; font-size: 11px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
+      .advanced-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding: 2px 14px 14px; }
+      .subsection-label { grid-column: 1 / -1; padding-top: 10px; border-top: 1px solid var(--border); color: var(--muted); font-size: 10px; font-weight: 850; letter-spacing: .08em; text-transform: uppercase; }
+      .session-toggles { display: grid; grid-column: 1 / -1; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+      .compact-check { min-height: 38px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 7px; background: rgba(0,0,0,.12); }
+      .snippets-inner.operations-inner { display: flex; flex-direction: column; }
+      .drawer-tabs { display: grid; grid-template-columns: repeat(3, 1fr); border-bottom: 1px solid var(--border); }
+      .drawer-tabs button { min-height: 34px; border: 0; border-right: 1px solid var(--border); background: transparent; color: var(--muted); cursor: pointer; font-size: 10px; font-weight: 800; text-transform: uppercase; }
+      .drawer-tabs button.active { background: var(--accent-soft); color: var(--accent); }
+      .operations-panel { display: flex; min-height: 0; flex: 1; flex-direction: column; overflow: hidden; }
+      .operations-panel-scroll { min-height: 0; flex: 1; overflow: auto; padding: 12px; }
+      .node-context { padding: 10px 12px; border-bottom: 1px solid var(--border); color: var(--muted); font-size: 11px; }
+      .node-context strong { color: var(--text); }
+      .notes-editor,
+      .backup-editor { display: grid; gap: 9px; }
+      .notes-editor textarea,
+      .backup-editor textarea { width: 100%; min-height: 220px; padding: 10px; resize: vertical; border: 1px solid var(--border); border-radius: 7px; background: #09111a; color: var(--text); font-family: ui-monospace, monospace; line-height: 1.5; }
+      .backup-editor textarea { min-height: 150px; }
+      .operations-actions { display: flex; justify-content: flex-end; gap: 8px; }
+      .backup-list { display: grid; gap: 8px; margin-top: 12px; }
+      .backup-card { border: 1px solid var(--border); border-radius: 8px; background: rgba(0,0,0,.14); }
+      .backup-card header { display: flex; align-items: center; gap: 8px; padding: 8px 10px; }
+      .backup-card header strong { flex: 1; min-width: 0; }
+      .backup-card pre { max-height: 220px; margin: 0; overflow: auto; padding: 10px; border-top: 1px solid var(--border); color: #b9c9da; font-size: 10px; white-space: pre-wrap; }
+      .operations-empty { margin: auto; padding: 24px; color: var(--muted); font-size: 12px; line-height: 1.55; text-align: center; }
+      .icon-picker-note { color: var(--muted); font-size: 10px; line-height: 1.45; }
+      @media (max-width: 1040px) {
+        .category-picker { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .session-toggles { grid-template-columns: 1fr; }
+      }
     </style>
   </head>
   <body>
@@ -1982,7 +2043,7 @@
             <button class="toolbar-button" id="layout-button" type="button" aria-pressed="false" disabled>Grid 2x2</button>
             <button class="toolbar-button" id="broadcast-toggle-button" type="button" aria-pressed="false" disabled>Broadcast Off</button>
             <button class="toolbar-button" id="broadcast-targets-button" type="button" disabled>Targets (0/0)</button>
-            <button class="toolbar-button" id="toggle-snippets-button" type="button">Snippets</button>
+            <button class="toolbar-button" id="toggle-snippets-button" type="button">Operations</button>
             <button class="toolbar-button" id="toggle-sftp-button" type="button" disabled>Files</button>
             <button class="toolbar-button" id="external-tools-button" type="button">External Tools</button>
             <button class="toolbar-button" id="enterprise-button" type="button">Enterprise</button>
@@ -2023,33 +2084,59 @@
             </div>
           </aside>
 
-          <aside class="snippets-drawer" id="snippets-drawer" aria-label="Command snippet library" hidden>
-            <div class="snippets-inner">
+          <aside class="snippets-drawer" id="snippets-drawer" aria-label="Commands, notes, and configuration backups" hidden>
+            <div class="snippets-inner operations-inner">
               <header class="snippets-header">
-                <h2>Script Snippets</h2>
-                <button class="icon-button" id="snippets-close-button" type="button" aria-label="Close snippet library">&times;</button>
+                <h2>Node Workspace</h2>
+                <button class="icon-button" id="snippets-close-button" type="button" aria-label="Close operations drawer">&times;</button>
               </header>
-              <div class="snippets-toolbar">
-                <input id="snippet-search" type="search" placeholder="Filter name, tag, or command" aria-label="Filter command snippets" autocomplete="off" />
-                <button class="primary-button compact-button" id="add-snippet-button" type="button">New</button>
-              </div>
-              <form class="snippet-form" id="snippet-form" hidden>
-                <h3 id="snippet-form-title">New snippet</h3>
-                <input id="snippet-id" type="hidden" />
-                <div class="snippet-form-grid">
-                  <input id="snippet-name" required maxlength="100" placeholder="Snippet name" aria-label="Snippet name" autocomplete="off" />
-                  <select id="snippet-language" aria-label="Snippet language"><option value="bash">Bash</option><option value="powershell">PowerShell</option><option value="cisco">Cisco CLI</option></select>
+              <nav class="drawer-tabs" aria-label="Node workspace sections">
+                <button class="active" type="button" data-operations-tab="commands">Commands</button>
+                <button type="button" data-operations-tab="notes">Notes &amp; Docs</button>
+                <button type="button" data-operations-tab="backups">Config Backups</button>
+              </nav>
+              <section class="operations-panel" data-operations-panel="commands">
+                <div class="snippets-toolbar">
+                  <input id="snippet-search" type="search" placeholder="Filter name, tag, or command" aria-label="Filter command snippets" autocomplete="off" />
+                  <button class="primary-button compact-button" id="add-snippet-button" type="button">New</button>
                 </div>
-                <input id="snippet-tags" maxlength="680" placeholder="Tags, comma separated" aria-label="Snippet tags" autocomplete="off" />
-                <textarea id="snippet-body" required maxlength="65536" placeholder="Command body. Tokens: ${HOST}, ${USERNAME}, ${IP}" aria-label="Snippet command body" spellcheck="false"></textarea>
-                <div class="form-error" id="snippet-form-error" role="alert"></div>
-                <div class="snippet-form-actions">
-                  <button class="secondary-button compact-button" id="snippet-cancel-button" type="button">Cancel</button>
-                  <button class="primary-button compact-button" type="submit">Save</button>
+                <form class="snippet-form" id="snippet-form" hidden>
+                  <h3 id="snippet-form-title">New snippet</h3>
+                  <input id="snippet-id" type="hidden" />
+                  <div class="snippet-form-grid">
+                    <input id="snippet-name" required maxlength="100" placeholder="Snippet name" aria-label="Snippet name" autocomplete="off" />
+                    <select id="snippet-language" aria-label="Snippet language"><option value="bash">Bash</option><option value="powershell">PowerShell</option><option value="cisco">Cisco CLI</option></select>
+                  </div>
+                  <input id="snippet-tags" maxlength="680" placeholder="Tags, comma separated" aria-label="Snippet tags" autocomplete="off" />
+                  <textarea id="snippet-body" required maxlength="65536" placeholder="Command body. Tokens: ${HOST}, ${USERNAME}, ${IP}" aria-label="Snippet command body" spellcheck="false"></textarea>
+                  <div class="form-error" id="snippet-form-error" role="alert"></div>
+                  <div class="snippet-form-actions"><button class="secondary-button compact-button" id="snippet-cancel-button" type="button">Cancel</button><button class="primary-button compact-button" type="submit">Save</button></div>
+                </form>
+                <div class="snippet-list" id="snippet-list"></div>
+                <footer class="snippet-footer" id="snippet-status" role="status">Tokens resolve separately for each target session.</footer>
+              </section>
+              <section class="operations-panel" data-operations-panel="notes" hidden>
+                <div class="node-context" id="notes-node-context">Select a server node to edit encrypted documentation.</div>
+                <div class="operations-panel-scroll">
+                  <form class="notes-editor" id="profile-notes-form">
+                    <textarea id="profile-notes" maxlength="262144" placeholder="# Operations notes&#10;&#10;- IP allocation&#10;- Escalation contacts&#10;- Maintenance procedure" spellcheck="true"></textarea>
+                    <div class="operations-actions"><button class="primary-button compact-button" type="submit">Save encrypted notes</button></div>
+                    <div class="form-error" id="profile-notes-status" role="status"></div>
+                  </form>
                 </div>
-              </form>
-              <div class="snippet-list" id="snippet-list"></div>
-              <footer class="snippet-footer" id="snippet-status" role="status">Tokens resolve separately for each target session.</footer>
+              </section>
+              <section class="operations-panel" data-operations-panel="backups" hidden>
+                <div class="node-context" id="backups-node-context">Select a network device to manage configuration snapshots.</div>
+                <div class="operations-panel-scroll">
+                  <form class="backup-editor" id="config-backup-form">
+                    <div class="field"><label for="config-backup-name">Snapshot label</label><input id="config-backup-name" maxlength="100" placeholder="Before core upgrade" /></div>
+                    <textarea id="config-backup-content" maxlength="1048576" placeholder="Paste show run / exported device configuration" spellcheck="false"></textarea>
+                    <div class="operations-actions"><button class="primary-button compact-button" type="submit">Store snapshot</button></div>
+                    <div class="form-error" id="config-backup-status" role="status"></div>
+                  </form>
+                  <div class="backup-list" id="config-backup-list"></div>
+                </div>
+              </section>
             </div>
           </aside>
         </div>
@@ -2079,24 +2166,27 @@
       </section>
     </div>
 
-    <dialog id="server-modal" aria-labelledby="server-modal-title">
+    <dialog class="connection-dialog" id="server-modal" aria-labelledby="server-modal-title">
       <form id="server-form">
         <header class="modal-header">
           <h2 id="server-modal-title">Add Connection</h2>
-          <p>Credentials and team token templates are encrypted before the profile is persisted.</p>
+          <p>Choose the workload type, enter the endpoint, and connect. Everything else is optional.</p>
         </header>
         <div class="modal-body">
-          <div class="field"><label for="server-name">Display name</label><input id="server-name" required maxlength="100" autocomplete="off" /></div>
-          <div class="field"><label for="server-group">Folder</label><input id="server-group" list="group-options" maxlength="100" placeholder="Production" autocomplete="off" /><datalist id="group-options"></datalist></div>
-          <div class="field full-width"><label for="server-tags">Search tags</label><input id="server-tags" maxlength="680" placeholder="database, production, east-coast" autocomplete="off" /></div>
-          <div class="checkbox-field full-width"><input id="server-favorite" type="checkbox" /><label class="checkbox-label" for="server-favorite">Favorite in system tray</label></div>
-          <div class="checkbox-field full-width"><input id="server-inherit-folder" type="checkbox" checked /><label class="checkbox-label" for="server-inherit-folder">Inherit credentials and connection properties from parent folders</label></div>
+          <div class="category-picker" role="group" aria-label="Connection category">
+            <button class="category-card active" type="button" data-connection-category="server"><strong>+ Server / Computer</strong><span>RDP or SSH administration</span></button>
+            <button class="category-card" type="button" data-connection-category="network"><strong>+ Network Device</strong><span>SSH, Telnet, RAW, or Serial</span></button>
+            <button class="category-card" type="button" data-connection-category="web"><strong>+ Web Console</strong><span>HTTPS for iDRAC, iLO, and firewalls</span></button>
+            <button class="category-card" type="button" data-connection-category="desktop"><strong>+ Desktop / VM</strong><span>VNC, Hyper-V, or VMware console</span></button>
+          </div>
+          <div class="connection-section-title">Essentials</div>
+          <div class="field"><label for="server-name">Connection name</label><input id="server-name" required maxlength="100" placeholder="ERP-PROD-01" autocomplete="off" /></div>
+          <div class="field"><label for="server-group">Stack / location</label><input id="server-group" list="group-options" maxlength="100" placeholder="Charlotte DC / ERP Stack" autocomplete="off" /><datalist id="group-options"></datalist></div>
+          <div class="field"><label for="server-host" id="server-host-label">Hostname or IP</label><input id="server-host" required maxlength="2048" placeholder="server.example.net" autocomplete="off" /></div>
           <div class="field"><label for="server-protocol">Protocol</label><select id="server-protocol"><option value="ssh">SSH</option><option value="rdp">Windows RDP</option><option value="telnet">Telnet</option><option value="raw">RAW TCP</option><option value="vnc">VNC Desktop</option><option value="https">HTTPS Web</option><option value="http">HTTP Web</option><option value="serial">Serial / COM</option></select></div>
-          <div class="field"><label for="server-host" id="server-host-label">Hostname or IP</label><input id="server-host" required maxlength="2048" autocomplete="off" /></div>
-          <div class="field"><label for="server-port">Port</label><input id="server-port" type="number" min="1" max="65535" value="22" required /></div>
           <div class="field" id="server-username-field"><label for="server-username">Username</label><input id="server-username" maxlength="256" autocomplete="username" /></div>
-          <div class="field" id="server-domain-field"><label for="server-domain">Domain override</label><input id="server-domain" maxlength="256" placeholder="CORP" autocomplete="off" /></div>
-          <div class="field" id="server-auth-field"><label for="auth-type">Authentication</label><select id="auth-type"><option value="none">None / interactive</option><option value="password">Password</option><option value="privateKey">SSH private key</option></select></div>
+          <div class="field" id="server-domain-field"><label for="server-domain">Domain</label><input id="server-domain" maxlength="256" placeholder="CORP" autocomplete="off" /></div>
+          <div class="field" id="server-auth-field"><label for="auth-type">Credentials</label><select id="auth-type"><option value="none">Interactive / inherited</option><option value="password">Password</option><option value="privateKey">SSH private key</option></select></div>
           <div class="auth-section" id="server-serial-section" hidden>
             <div class="field"><label for="server-baud-rate">Baud rate</label><input id="server-baud-rate" type="number" min="50" max="4000000" value="9600" /></div>
             <div class="field"><label for="server-data-bits">Data bits</label><select id="server-data-bits"><option>8</option><option>7</option><option>6</option><option>5</option></select></div>
@@ -2110,14 +2200,44 @@
             <div class="field full-width"><label for="server-key-path">Private key path</label><div class="path-picker"><input id="server-key-path" maxlength="2048" autocomplete="off" /><button class="secondary-button" id="browse-key-button" type="button">Browse</button></div></div>
             <div class="field full-width"><label for="server-passphrase">Key passphrase (optional)</label><input id="server-passphrase" type="password" maxlength="4096" autocomplete="new-password" /></div>
           </div>
-          <div class="field"><label for="server-timeout">Connection timeout (seconds)</label><input id="server-timeout" type="number" min="1" max="300" placeholder="Inherited / 15" /></div>
-          <div class="field"><label for="server-keepalive">Keepalive interval (seconds)</label><input id="server-keepalive" type="number" min="1" max="300" placeholder="Inherited / 10" /></div>
-          <div class="field"><label for="server-pre-tasks">Pre-connect tasks</label><select class="task-select" id="server-pre-tasks" multiple></select></div>
-          <div class="field"><label for="server-post-tasks">Post-connect tasks</label><select class="task-select" id="server-post-tasks" multiple></select></div>
-          <div class="field full-width"><label for="server-totp-secret">TOTP secret or otpauth URI</label><input id="server-totp-secret" type="password" maxlength="2048" autocomplete="new-password" placeholder="Optional; encrypted in the vault" /></div>
-          <div class="field"><label for="server-totp-digits">TOTP digits</label><select id="server-totp-digits"><option value="6">6 digits</option><option value="8">8 digits</option></select></div>
-          <div class="field"><label for="server-totp-algorithm">TOTP algorithm</label><select id="server-totp-algorithm"><option value="sha1">SHA-1</option><option value="sha256">SHA-256</option><option value="sha512">SHA-512</option></select></div>
-          <div class="token-help">Team profiles may reference personal environment variables in host, username, password, key path, and passphrase fields, for example <code>${DOMAIN}\\operator</code> and <code>${USER_SECRET}</code>. Tokens resolve only in the main process when connecting.</div>
+          <details class="advanced-settings">
+            <summary>Advanced Settings</summary>
+            <div class="advanced-grid">
+              <div class="field"><label for="server-port">Port override</label><input id="server-port" type="number" min="1" max="65535" value="22" required /></div>
+              <div class="field"><label for="server-timeout">Connection timeout (seconds)</label><input id="server-timeout" type="number" min="1" max="300" placeholder="Inherited / 15" /></div>
+              <div class="field"><label for="server-jump-host">Jump host / bastion</label><input id="server-jump-host" maxlength="253" placeholder="bastion.example.net" /></div>
+              <div class="field"><label for="server-proxy-override">Proxy override</label><input id="server-proxy-override" maxlength="2048" placeholder="socks5://proxy.example.net:1080" /></div>
+              <div class="session-toggles">
+                <div class="checkbox-field compact-check"><input id="server-keepalive-enabled" type="checkbox" checked /><label class="checkbox-label" for="server-keepalive-enabled">SSH keep-alive</label></div>
+                <div class="checkbox-field compact-check"><input id="server-persist" type="checkbox" /><label class="checkbox-label" for="server-persist">Keep until app closes</label></div>
+                <div class="checkbox-field compact-check"><input id="server-auto-reconnect" type="checkbox" /><label class="checkbox-label" for="server-auto-reconnect">Auto-reconnect on drop</label></div>
+              </div>
+              <div class="field"><label for="server-keepalive">Keepalive interval (seconds)</label><input id="server-keepalive" type="number" min="1" max="300" placeholder="Inherited / 10" /></div>
+              <div class="field"><label for="server-tags">Search tags</label><input id="server-tags" maxlength="680" placeholder="database, production, east-coast" /></div>
+              <div class="checkbox-field"><input id="server-favorite" type="checkbox" /><label class="checkbox-label" for="server-favorite">Favorite in system tray</label></div>
+              <div class="checkbox-field"><input id="server-inherit-folder" type="checkbox" checked /><label class="checkbox-label" for="server-inherit-folder">Inherit parent folder defaults</label></div>
+              <div class="subsection-label">Node identity</div>
+              <div class="field"><label for="server-icon">Icon</label><select id="server-icon"><option value="">Automatic</option><option value="windows">Windows Server</option><option value="ubuntu">Ubuntu / Debian</option><option value="redhat">Red Hat / CentOS</option><option value="macos">macOS</option><option value="bare-metal">Bare Metal</option><option value="vmware">VMware</option><option value="hyperv">Hyper-V</option><option value="cisco">Cisco Switch</option><option value="fortinet">Fortinet Firewall</option><option value="router">Router</option><option value="database">Database</option><option value="web-server">Web Server</option><option value="printer">Printer</option><option value="server">Generic Server</option></select></div>
+              <div class="field"><label for="server-application-badge">Application badge</label><input id="server-application-badge" maxlength="4" placeholder="ERP" /></div>
+              <div class="field color-field"><label for="server-indicator-color">Indicator color</label><input id="server-indicator-color" type="color" value="#23d5ab" /></div>
+              <div class="icon-picker-note">Badges are short operational labels; colors provide a fast environment or application cue in dense trees.</div>
+              <div class="subsection-label">Terminal override</div>
+              <div class="field"><label for="server-terminal-theme">Color scheme</label><select id="server-terminal-theme"><option value="">Use group / global</option><option value="dark">CyberGrid Dark</option><option value="monochrome">Monochrome</option><option value="custom">Custom colors</option></select></div>
+              <div class="field"><label for="server-terminal-font">Font family</label><input id="server-terminal-font" maxlength="200" placeholder="Use group / global" /></div>
+              <div class="field"><label for="server-terminal-size">Font size</label><input id="server-terminal-size" type="number" min="10" max="28" placeholder="Global" /></div>
+              <div class="field"><label for="server-terminal-line-height">Line height</label><input id="server-terminal-line-height" type="number" min="1" max="2" step="0.05" placeholder="1.18" /></div>
+              <div class="field color-field"><label for="server-terminal-background">Background</label><input id="server-terminal-background" type="color" value="#080d14" /></div>
+              <div class="field color-field"><label for="server-terminal-foreground">Foreground</label><input id="server-terminal-foreground" type="color" value="#d7e2ef" /></div>
+              <div class="field color-field"><label for="server-terminal-cursor">Cursor</label><input id="server-terminal-cursor" type="color" value="#23d5ab" /></div>
+              <div class="subsection-label">Automation &amp; 2FA</div>
+              <div class="field"><label for="server-pre-tasks">Pre-connect scripts / VPN</label><select class="task-select" id="server-pre-tasks" multiple></select></div>
+              <div class="field"><label for="server-post-tasks">Post-connect tasks</label><select class="task-select" id="server-post-tasks" multiple></select></div>
+              <div class="field full-width"><label for="server-totp-secret">TOTP secret or otpauth URI</label><input id="server-totp-secret" type="password" maxlength="2048" autocomplete="new-password" placeholder="Optional; encrypted in the vault" /></div>
+              <div class="field"><label for="server-totp-digits">TOTP digits</label><select id="server-totp-digits"><option value="6">6 digits</option><option value="8">8 digits</option></select></div>
+              <div class="field"><label for="server-totp-algorithm">TOTP algorithm</label><select id="server-totp-algorithm"><option value="sha1">SHA-1</option><option value="sha256">SHA-256</option><option value="sha512">SHA-512</option></select></div>
+              <div class="token-help">Team profiles may use <code>${DOMAIN}</code>, <code>${USER_SECRET}</code>, and other personal environment tokens. Values resolve only in the main process.</div>
+            </div>
+          </details>
           <div class="form-error" id="server-form-error" role="alert"></div>
         </div>
         <footer class="modal-actions">
@@ -2141,6 +2261,15 @@
           <div class="field full-width" id="folder-defaults-passphrase-field" hidden><label for="folder-defaults-passphrase">Key passphrase</label><input id="folder-defaults-passphrase" type="password" maxlength="4096" autocomplete="new-password" /></div>
           <div class="field"><label for="folder-defaults-timeout">Connection timeout</label><input id="folder-defaults-timeout" type="number" min="1" max="300" placeholder="15 seconds" /></div>
           <div class="field"><label for="folder-defaults-keepalive">Keepalive interval</label><input id="folder-defaults-keepalive" type="number" min="1" max="300" placeholder="10 seconds" /></div>
+          <div class="checkbox-field"><input id="folder-defaults-keepalive-enabled" type="checkbox" checked /><label class="checkbox-label" for="folder-defaults-keepalive-enabled">Enable SSH keep-alive</label></div>
+          <div class="checkbox-field"><input id="folder-defaults-auto-reconnect" type="checkbox" /><label class="checkbox-label" for="folder-defaults-auto-reconnect">Auto-reconnect child sessions</label></div>
+          <div class="field"><label for="folder-defaults-icon">Folder / child icon</label><select id="folder-defaults-icon"><option value="">No override</option><option value="windows">Windows Server</option><option value="ubuntu">Ubuntu / Debian</option><option value="redhat">Red Hat / CentOS</option><option value="macos">macOS</option><option value="bare-metal">Bare Metal</option><option value="vmware">VMware</option><option value="hyperv">Hyper-V</option><option value="cisco">Cisco Switch</option><option value="fortinet">Fortinet Firewall</option><option value="router">Router</option><option value="database">Database</option><option value="web-server">Web Server</option><option value="server">Generic Server</option></select></div>
+          <div class="field"><label for="folder-defaults-badge">Application badge</label><input id="folder-defaults-badge" maxlength="4" placeholder="ERP" /></div>
+          <div class="field color-field"><label for="folder-defaults-color">Indicator color</label><input id="folder-defaults-color" type="color" value="#23d5ab" /></div>
+          <div class="field"><label for="folder-defaults-terminal-theme">Terminal scheme</label><select id="folder-defaults-terminal-theme"><option value="">Global default</option><option value="dark">CyberGrid Dark</option><option value="monochrome">Monochrome</option><option value="custom">Custom colors</option></select></div>
+          <div class="field"><label for="folder-defaults-terminal-font">Terminal font</label><input id="folder-defaults-terminal-font" maxlength="200" placeholder="Global default" /></div>
+          <div class="field"><label for="folder-defaults-terminal-size">Terminal font size</label><input id="folder-defaults-terminal-size" type="number" min="10" max="28" /></div>
+          <div class="field"><label for="folder-defaults-line-height">Terminal line height</label><input id="folder-defaults-line-height" type="number" min="1" max="2" step="0.05" /></div>
           <div class="folder-inheritance-note full-width">Passwords, key paths, passphrases, and domain settings are stored only inside the encrypted vault.</div>
           <div class="form-error" id="folder-defaults-error" role="alert"></div>
         </div>
@@ -2286,7 +2415,7 @@
         <div class="modal-body">
           <div class="fingerprint-summary" id="asset-fingerprint"></div>
           <div class="field"><label for="asset-name">Display name</label><input id="asset-name" required maxlength="100" autocomplete="off" /></div>
-          <div class="field"><label for="asset-icon">Icon override</label><select id="asset-icon"><option value="">Automatic</option><option value="windows">Windows Server</option><option value="linux">Linux</option><option value="cisco">Cisco</option><option value="fortinet">Fortinet</option><option value="vmware">VMware</option><option value="printer">Printer</option><option value="network">Network appliance</option><option value="server">Generic server</option><option value="unknown">Unknown device</option></select></div>
+          <div class="field"><label for="asset-icon">Icon override</label><select id="asset-icon"><option value="">Automatic</option><option value="windows">Windows Server</option><option value="linux">Linux</option><option value="ubuntu">Ubuntu / Debian</option><option value="redhat">Red Hat / CentOS</option><option value="macos">macOS</option><option value="bare-metal">Bare Metal</option><option value="cisco">Cisco</option><option value="fortinet">Fortinet</option><option value="vmware">VMware</option><option value="hyperv">Hyper-V</option><option value="router">Router</option><option value="database">Database</option><option value="web-server">Web Server</option><option value="printer">Printer</option><option value="network">Network appliance</option><option value="server">Generic server</option><option value="unknown">Unknown device</option></select></div>
           <div class="field"><label for="asset-serial">Serial number</label><input id="asset-serial" maxlength="128" autocomplete="off" /></div>
           <div class="field"><label for="asset-tag">Asset tag</label><input id="asset-tag" maxlength="128" autocomplete="off" /></div>
           <div class="field"><label for="asset-rack">Rack position</label><input id="asset-rack" maxlength="128" placeholder="Rack 04 / U18" autocomplete="off" /></div>
@@ -2319,8 +2448,11 @@
           <div class="settings-panels">
             <section class="settings-panel" data-settings-panel="general">
               <h3>General</h3>
-              <p>Control how CyberGrid behaves when the application window is minimized or closed.</p>
+              <p>Control startup, tray behavior, and the desktop process model.</p>
               <div class="checkbox-field"><input id="minimize-to-tray" type="checkbox" /><label class="checkbox-label" for="minimize-to-tray">Minimize and close to system tray</label></div>
+              <div class="checkbox-field"><input id="start-minimized" type="checkbox" /><label class="checkbox-label" for="start-minimized">Start minimized to the system tray</label></div>
+              <div class="checkbox-field"><input id="launch-at-login" type="checkbox" /><label class="checkbox-label" for="launch-at-login">Launch CyberGrid when I sign in</label></div>
+              <div class="checkbox-field"><input id="single-instance" type="checkbox" checked disabled /><label class="checkbox-label" for="single-instance">Enforce a single application instance</label></div>
             </section>
             <section class="settings-panel" data-settings-panel="terminal" hidden>
               <h3>Terminal Theme &amp; Fonts</h3>
@@ -2350,6 +2482,7 @@
               <h3>Security Auto-Lock</h3>
               <p>Disconnect active sessions and clear decrypted credentials after application inactivity. Auto-lock requires Master Password.</p>
               <div class="field"><label for="auto-lock-minutes">Inactivity timeout</label><select id="auto-lock-minutes"><option value="0">Never</option><option value="1">1 minute</option><option value="5">5 minutes</option><option value="15">15 minutes</option><option value="30">30 minutes</option><option value="60">1 hour</option><option value="120">2 hours</option><option value="480">8 hours</option></select></div>
+              <div class="field"><label for="clipboard-clear-seconds">Clear copied secrets after</label><select id="clipboard-clear-seconds"><option value="0">Never</option><option value="15">15 seconds</option><option value="30">30 seconds</option><option value="60">1 minute</option><option value="120">2 minutes</option><option value="300">5 minutes</option></select></div>
             </section>
             <section class="settings-panel" data-settings-panel="network" hidden>
               <h3>Network Proxy</h3>
@@ -2359,6 +2492,15 @@
                 <div class="field full-width"><label for="proxy-url">Proxy URL</label><input id="proxy-url" maxlength="2048" placeholder="http://proxy.example.com:8080" spellcheck="false" autocomplete="off" /></div>
                 <div class="field full-width"><label for="proxy-bypass-rules">Bypass rules</label><input id="proxy-bypass-rules" maxlength="2048" placeholder="&lt;local&gt;, *.internal.example.com" spellcheck="false" autocomplete="off" /></div>
               </div>
+              <h3>Health Monitoring &amp; External Tools</h3>
+              <div class="settings-grid">
+                <div class="field"><label for="health-check-interval">Ping interval (seconds)</label><input id="health-check-interval" type="number" min="10" max="600" /></div>
+                <div class="field"><label for="tool-powershell-path">PowerShell</label><input id="tool-powershell-path" maxlength="2048" placeholder="powershell.exe" /></div>
+                <div class="field full-width"><label for="tool-wireshark-path">Wireshark executable</label><input id="tool-wireshark-path" maxlength="2048" /></div>
+                <div class="field full-width"><label for="tool-winscp-path">WinSCP executable</label><input id="tool-winscp-path" maxlength="2048" /></div>
+                <div class="field full-width"><label for="tool-nmap-path">Nmap executable</label><input id="tool-nmap-path" maxlength="2048" /></div>
+              </div>
+              <div class="folder-inheritance-note">These mappings provide a single source of truth for tool paths. Configure tokenized arguments in Enterprise Integrations.</div>
             </section>
             <div class="form-error" id="settings-error" role="alert"></div>
           </div>
