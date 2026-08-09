@@ -39,6 +39,7 @@ import type {
 // Sandboxed Electron preloads cannot require arbitrary local modules at runtime.
 // Keep channel names self-contained here while sharing their TypeScript contract.
 const IPC_CHANNELS: typeof import("../shared/ipc").IPC_CHANNELS = {
+  appReady: "cybergrid:app:ready",
   sshConnect: "cybergrid:ssh:connect",
   sshConnectProfile: "cybergrid:ssh:connect-profile",
   sshDisconnect: "cybergrid:ssh:disconnect",
@@ -321,6 +322,7 @@ const api: CyberGridApi = {
       ipcRenderer.invoke(IPC_CHANNELS.migrationExport, request),
   },
   system: {
+    whenReady: () => ipcRenderer.invoke(IPC_CHANNELS.appReady),
     selectPrivateKey: () => ipcRenderer.invoke(IPC_CHANNELS.selectPrivateKey),
     captureScreenshot: (request: ScreenshotRequest) => ipcRenderer.invoke(IPC_CHANNELS.sessionCaptureScreenshot, request),
     onVaultLocked: (listener) => {

@@ -50,21 +50,21 @@ import {
   type WebConnectionConfig,
 } from "../shared/ipc";
 import { AuditController, type AuditSessionContext } from "./audit";
-import { AutoUnlockController } from "./auto-unlock";
+import type { AutoUnlockController } from "./auto-unlock";
 import { runDiagnostic } from "./diagnostics";
 import { launchExternalTool, runConnectionTasks } from "./enterprise";
 import { HealthController } from "./health";
 import { discoverInventory } from "./inventory-sync";
-import { MigrationController } from "./migration";
-import { DEFAULT_APP_PREFERENCES, PreferencesController } from "./preferences";
+import type { MigrationController } from "./migration";
+import type { PreferencesController } from "./preferences";
 import { RdpController } from "./rdp";
-import { ScannerController } from "./scanner";
-import { SerialController } from "./serial";
-import { SshController } from "./ssh";
+import type { ScannerController } from "./scanner";
+import type { SerialController } from "./serial";
+import type { SshController } from "./ssh";
 import { StreamController } from "./stream";
 import { generateTotp, validateTotpSecret } from "./totp";
-import { VaultController } from "./vault";
-import { VncController } from "./vnc";
+import type { VaultController } from "./vault";
+import type { VncController } from "./vnc";
 import { WebController } from "./web";
 
 let displayingFatalError = false;
@@ -91,25 +91,89 @@ function reportFatalError(source: string, reason: unknown): void {
 process.on("uncaughtException", (error) => reportFatalError("uncaught exception", error));
 process.on("unhandledRejection", (reason) => reportFatalError("unhandled promise rejection", reason));
 
+app.commandLine.appendSwitch("disable-gpu-process-crash-limit");
+
 const auditController = new AuditController();
-const sshController = new SshController(auditController);
-const scannerController = new ScannerController();
 const streamController = new StreamController(auditController);
-const serialController = new SerialController(auditController);
-const vncController = new VncController();
 const healthController = new HealthController();
+let scannerController: ScannerController | null = null;
+let scannerControllerPromise: Promise<ScannerController> | null = null;
+let vncController: VncController | null = null;
+let vncControllerPromise: Promise<VncController> | null = null;
+let sshController: SshController | null = null;
+let sshControllerPromise: Promise<SshController> | null = null;
+let serialController: SerialController | null = null;
+let serialControllerPromise: Promise<SerialController> | null = null;
 let rdpController: RdpController | null = null;
 let vaultController: VaultController | null = null;
 let webController: WebController | null = null;
 let migrationController: MigrationController | null = null;
+let migrationControllerPromise: Promise<MigrationController> | null = null;
 let preferencesController: PreferencesController | null = null;
 let autoUnlockController: AutoUnlockController | null = null;
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let autoLockTimer: NodeJS.Timeout | undefined;
 let isQuitting = false;
+let servicesReadyResolve!: () => void;
+let servicesReadyReject!: (reason: unknown) => void;
+const servicesReady = new Promise<void>((resolveReady, rejectReady) => {
+  servicesReadyResolve = resolveReady;
+  servicesReadyReject = rejectReady;
+});
+void servicesReady.catch(() => undefined);
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 app.setAppUserModelId("com.kurlydeer.cybergrid");
+
+async function getSshController(): Promise<SshController> {
+  if (sshController) return sshController;
+  sshControllerPromise ??= import("./ssh.js").then(({ SshController }) => {
+    const controller = new SshController(auditController);
+    sshController = controller;
+    return controller;
+  });
+  return sshControllerPromise;
+}
+
+async function getSerialController(): Promise<SerialController> {
+  if (serialController) return serialController;
+  serialControllerPromise ??= import("./serial.js").then(({ SerialController }) => {
+    const controller = new SerialController(auditController);
+    serialController = controller;
+    return controller;
+  });
+  return serialControllerPromise;
+}
+
+async function getScannerController(): Promise<ScannerController> {
+  if (scannerController) return scannerController;
+  scannerControllerPromise ??= import("./scanner.js").then(({ ScannerController }) => {
+    const controller = new ScannerController();
+    scannerController = controller;
+    return controller;
+  });
+  return scannerControllerPromise;
+}
+
+async function getVncController(): Promise<VncController> {
+  if (vncController) return vncController;
+  vncControllerPromise ??= import("./vnc.js").then(({ VncController }) => {
+    const controller = new VncController();
+    vncController = controller;
+    return controller;
+  });
+  return vncControllerPromise;
+}
+
+async function getMigrationController(): Promise<MigrationController> {
+  if (migrationController) return migrationController;
+  migrationControllerPromise ??= import("./migration.js").then(({ MigrationController }) => {
+    const controller = new MigrationController(() => mainWindow);
+    migrationController = controller;
+    return controller;
+  });
+  return migrationControllerPromise;
+}
 
 function applicationFile(...segments: string[]): string {
   const applicationRoot = app.isPackaged ? app.getAppPath() : resolve(__dirname, "..", "..");
@@ -125,6 +189,47 @@ function userDataFile(...segments: string[]): string {
   return target;
 }
 
+const rendererRestartHistory = new Map<number, number[]>();
+
+app.on("child-process-gone", (_event, details) => {
+  console.error("[CyberGrid child process terminated]", {
+    type: details.type,
+    reason: details.reason,
+    exitCode: details.exitCode,
+    serviceName: details.serviceName,
+    name: details.name,
+  });
+});
+
+app.on("render-process-gone", (_event, contents, details) => {
+  if (isQuitting || details.reason === "clean-exit") return;
+  const now = Date.now();
+  const recentRestarts = (rendererRestartHistory.get(contents.id) ?? [])
+    .filter((timestamp) => now - timestamp < 60_000);
+  if (recentRestarts.length >= 3) {
+    reportFatalError(
+      "renderer crash loop",
+      new Error(`Renderer ${contents.id} stopped repeatedly (${details.reason}, exit ${details.exitCode}).`),
+    );
+    return;
+  }
+  recentRestarts.push(now);
+  rendererRestartHistory.set(contents.id, recentRestarts);
+  const delay = 200 * recentRestarts.length;
+  console.error(
+    `[CyberGrid renderer ${contents.id} terminated: ${details.reason}; restarting in ${delay}ms]`,
+  );
+  const restartTimer = setTimeout(() => {
+    if (isQuitting || contents.isDestroyed()) return;
+    try {
+      contents.reload();
+    } catch (error) {
+      reportFatalError("renderer restart failure", error);
+    }
+  }, delay);
+  restartTimer.unref();
+});
+
 function createMainWindow(): BrowserWindow {
   const window = new BrowserWindow({
     width: 1440,
@@ -132,7 +237,7 @@ function createMainWindow(): BrowserWindow {
     minWidth: 980,
     minHeight: 640,
     show: false,
-    backgroundColor: "#080d14",
+    backgroundColor: "#1e1e1e",
     title: "CyberGrid",
     webPreferences: {
       preload: applicationFile("main", "preload.js"),
@@ -142,14 +247,22 @@ function createMainWindow(): BrowserWindow {
     },
   });
 
-  window.once("ready-to-show", () => window.show());
+  let revealed = false;
+  const revealWindow = (): void => {
+    if (revealed || window.isDestroyed()) return;
+    revealed = true;
+    window.show();
+    setImmediate(startBackgroundServices);
+  };
+  window.once("ready-to-show", revealWindow);
+  window.webContents.once("dom-ready", () => setImmediate(revealWindow));
   window.on("minimize", () => {
-    if (requirePreferences().get().minimizeToTray && !isQuitting) {
+    if (preferencesController?.get().minimizeToTray && !isQuitting) {
       setImmediate(() => window.hide());
     }
   });
   window.on("close", (event) => {
-    if (requirePreferences().get().minimizeToTray && !isQuitting) {
+    if (preferencesController?.get().minimizeToTray && !isQuitting) {
       event.preventDefault();
       window.hide();
     }
@@ -205,13 +318,6 @@ function requireWeb(): WebController {
     throw new Error("Embedded browser controller is not initialized.");
   }
   return webController;
-}
-
-function requireMigration(): MigrationController {
-  if (!migrationController) {
-    throw new Error("Migration controller is not initialized.");
-  }
-  return migrationController;
 }
 
 function requirePreferences(): PreferencesController {
@@ -1054,7 +1160,7 @@ async function unlockVault(masterPassword: unknown): Promise<void> {
 }
 
 function showMainWindow(): void {
-  if (!app.isReady() || !preferencesController || !vaultController) return;
+  if (!app.isReady()) return;
   if (!mainWindow) mainWindow = createMainWindow();
   if (mainWindow.isMinimized()) mainWindow.restore();
   mainWindow.show();
@@ -1146,12 +1252,12 @@ function resetAutoLockTimer(): void {
 function lockApplication(reason: string, notifyRenderer: boolean): void {
   if (autoLockTimer) clearTimeout(autoLockTimer);
   autoLockTimer = undefined;
-  scannerController.cancelAll();
+  scannerController?.cancelAll();
   healthController.stop();
-  sshController.disconnectAll(reason);
+  sshController?.disconnectAll(reason);
   streamController.disconnectAll();
-  serialController.disconnectAll();
-  vncController.disconnectAll();
+  serialController?.disconnectAll();
+  vncController?.disconnectAll();
   webController?.disconnectAll();
   rdpController?.disconnectAll();
   vaultController?.lock();
@@ -1224,16 +1330,18 @@ async function connectProfile(profileId: string, sender: WebContents): Promise<P
   );
   const finish = async (result: ProfileConnectionResult): Promise<ProfileConnectionResult> => result;
   switch (profile.protocol) {
-    case "ssh":
+    case "ssh": {
+      const ssh = await getSshController();
       return finish({
         protocol: "ssh",
-        sessionId: sshController.connect(
+        sessionId: await ssh.connect(
           await connectionConfigForProfile(profileId),
           sender,
           auditContext("ssh", profile.name, `${host}:${profile.port}`, username, profile.group),
         ),
         context,
       });
+    }
     case "rdp":
       return finish({ protocol: "rdp", sessionId: await requireRdp().connect({ host, port: profile.port, username }, sender), context });
     case "telnet":
@@ -1247,10 +1355,11 @@ async function connectProfile(profileId: string, sender: WebContents): Promise<P
         ),
         context,
       });
-    case "serial":
+    case "serial": {
+      const serial = await getSerialController();
       return finish({
         protocol: "serial",
-        sessionId: serialController.connect(
+        sessionId: await serial.connect(
           {
             path: host,
             baudRate: profile.baudRate ?? 9_600,
@@ -1263,8 +1372,9 @@ async function connectProfile(profileId: string, sender: WebContents): Promise<P
         ),
         context,
       });
+    }
     case "vnc": {
-      const result = await vncController.connect({
+      const result = await (await getVncController()).connect({
         host,
         port: profile.port,
         password: resolveEnvironmentTokens(profile.password, "VNC password"),
@@ -1283,10 +1393,10 @@ async function connectProfile(profileId: string, sender: WebContents): Promise<P
 }
 
 function registerIpcHandlers(): void {
-  ipcMain.handle(IPC_CHANNELS.sshConnect, (event, config: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.sshConnect, async (event, config: unknown) => {
     assertTrustedSender(event);
     const normalized = normalizeConnectionConfig(config);
-    return sshController.connect(
+    return (await getSshController()).connect(
       normalized,
       event.sender,
       auditContext("ssh", normalized.host, `${normalized.host}:${normalized.port}`, normalized.username),
@@ -1298,7 +1408,7 @@ function registerIpcHandlers(): void {
     const id = readUuid(profileId, "server profile ID");
     const profile = requireVault().getConnectionProfile(id);
     const config = await connectionConfigForProfile(id);
-    return sshController.connect(
+    return (await getSshController()).connect(
       config,
       event.sender,
       auditContext("ssh", profile.name, `${config.host}:${config.port}`, config.username, profile.group),
@@ -1326,14 +1436,14 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle(IPC_CHANNELS.sshDisconnect, (event, sessionId: unknown) => {
     assertTrustedSender(event);
-    sshController.disconnect(readUuid(sessionId, "SSH session ID"));
+    sshController?.disconnect(readUuid(sessionId, "SSH session ID"));
   });
 
   ipcMain.handle(
     IPC_CHANNELS.sftpList,
     async (event, sessionId: unknown, remotePath: unknown) => {
       assertTrustedSender(event);
-      return sshController.listDirectory(
+      return (await getSshController()).listDirectory(
         readUuid(sessionId, "SSH session ID"),
         readRemotePath(remotePath),
       );
@@ -1360,7 +1470,7 @@ function registerIpcHandlers(): void {
       const uploadedPaths: string[] = [];
       for (const localPath of selection.filePaths) {
         const remotePath = posix.join(directory, basename(localPath));
-        await sshController.uploadFile(id, localPath, remotePath);
+        await (await getSshController()).uploadFile(id, localPath, remotePath);
         uploadedPaths.push(remotePath);
       }
       return uploadedPaths;
@@ -1383,7 +1493,7 @@ function registerIpcHandlers(): void {
       if (selection.canceled || !selection.filePath) {
         return null;
       }
-      await sshController.downloadFile(id, sourcePath, selection.filePath);
+      await (await getSshController()).downloadFile(id, sourcePath, selection.filePath);
       return selection.filePath;
     },
   );
@@ -1420,13 +1530,13 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle(IPC_CHANNELS.serialList, async (event) => {
     assertTrustedSender(event);
-    return serialController.listPorts();
+    return (await getSerialController()).listPorts();
   });
 
-  ipcMain.handle(IPC_CHANNELS.serialConnect, (event, config: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.serialConnect, async (event, config: unknown) => {
     assertTrustedSender(event);
     const normalized = normalizeSerialConfig(config);
-    return serialController.connect(
+    return (await getSerialController()).connect(
       normalized,
       event.sender,
       auditContext("serial", normalized.path, normalized.path),
@@ -1435,17 +1545,17 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle(IPC_CHANNELS.serialDisconnect, (event, sessionId: unknown) => {
     assertTrustedSender(event);
-    serialController.disconnect(readUuid(sessionId, "serial session ID"));
+    serialController?.disconnect(readUuid(sessionId, "serial session ID"));
   });
 
   ipcMain.handle(IPC_CHANNELS.vncConnect, async (event, config: unknown) => {
     assertTrustedSender(event);
-    return vncController.connect(normalizeVncConfig(config), event.sender);
+    return (await getVncController()).connect(normalizeVncConfig(config), event.sender);
   });
 
   ipcMain.handle(IPC_CHANNELS.vncDisconnect, (event, sessionId: unknown) => {
     assertTrustedSender(event);
-    vncController.disconnect(readUuid(sessionId, "VNC session ID"));
+    vncController?.disconnect(readUuid(sessionId, "VNC session ID"));
   });
 
   ipcMain.handle(IPC_CHANNELS.webConnect, async (event, config: unknown) => {
@@ -1713,19 +1823,19 @@ function registerIpcHandlers(): void {
     );
   });
 
-  ipcMain.handle(IPC_CHANNELS.discoveryStart, (event, target: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.discoveryStart, async (event, target: unknown) => {
     assertTrustedSender(event);
     const normalizedTarget = readString(target, "Scan target", {
       required: true,
       maxLength: 64,
       singleLine: true,
     });
-    return scannerController.start(normalizedTarget as string, event.sender);
+    return (await getScannerController()).start(normalizedTarget as string, event.sender);
   });
 
   ipcMain.handle(IPC_CHANNELS.discoveryCancel, (event, scanId: unknown) => {
     assertTrustedSender(event);
-    scannerController.cancel(readUuid(scanId, "scan ID"));
+    scannerController?.cancel(readUuid(scanId, "scan ID"));
   });
 
   ipcMain.handle(IPC_CHANNELS.healthSetTargets, (event, targets: unknown) => {
@@ -1760,7 +1870,7 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle(IPC_CHANNELS.migrationImport, async (event, rawRequest: unknown) => {
     assertTrustedSender(event);
-    const parsed = await requireMigration().importConnections(normalizeMigrationRequest(rawRequest));
+    const parsed = await (await getMigrationController()).importConnections(normalizeMigrationRequest(rawRequest));
     if (!parsed) return null;
     const warnings = [...parsed.warnings];
     const profiles: ServerProfileInput[] = [];
@@ -1786,7 +1896,7 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle(IPC_CHANNELS.migrationExport, async (event, rawRequest: unknown) => {
     assertTrustedSender(event);
-    return requireMigration().exportConnections(
+    return (await getMigrationController()).exportConnections(
       normalizeMigrationRequest(rawRequest),
       requireVault().exportProfiles(),
       requireVault().listAssets(),
@@ -1821,7 +1931,7 @@ function registerIpcHandlers(): void {
         sessionId: readUuid(request.sessionId, "SSH session ID"),
         data: request.data,
       };
-      sshController.write(payload.sessionId, payload.data);
+      sshController?.write(payload.sessionId, payload.data);
     } catch (error) {
       console.warn("Rejected SSH write request:", error);
     }
@@ -1841,7 +1951,7 @@ function registerIpcHandlers(): void {
     if (!isTrustedSender(event)) return;
     try {
       if (!isRecord(request) || typeof request.data !== "string") throw new Error("Invalid serial write.");
-      serialController.write(readUuid(request.sessionId, "serial session ID"), request.data);
+      serialController?.write(readUuid(request.sessionId, "serial session ID"), request.data);
     } catch (error) {
       console.warn("Rejected serial write:", error);
     }
@@ -1871,10 +1981,67 @@ function registerIpcHandlers(): void {
       ) {
         throw new Error("Invalid terminal dimensions.");
       }
-      sshController.resize(payload.sessionId, payload.cols, payload.rows);
+      sshController?.resize(payload.sessionId, payload.cols, payload.rows);
     } catch (error) {
       console.warn("Rejected SSH resize request:", error);
     }
+  });
+}
+
+function registerBootstrapIpcHandler(): void {
+  ipcMain.handle(IPC_CHANNELS.appReady, async (event) => {
+    assertTrustedSender(event);
+    await servicesReady;
+  });
+}
+
+async function initializeBackgroundServices(): Promise<void> {
+  app.setAppLogsPath(userDataFile("logs", "application"));
+  auditController.configure(userDataFile("logs", "sessions"));
+
+  const [preferencesModule, vaultModule, autoUnlockModule] = await Promise.all([
+    import("./preferences.js"),
+    import("./vault.js"),
+    import("./auto-unlock.js"),
+  ]);
+  const preferences = new preferencesModule.PreferencesController(
+    userDataFile("cybergrid-preferences.json"),
+  );
+  preferencesController = preferences;
+  await preferences.load().catch((error: unknown) => {
+    console.warn("CyberGrid preferences could not be loaded; using defaults:", error);
+  });
+  await applyProxyPreferences(preferences.get()).catch((error: unknown) => {
+    console.warn("CyberGrid proxy settings could not be applied:", error);
+  });
+
+  vaultController = new vaultModule.VaultController(userDataFile("cybergrid-vault.json"));
+  autoUnlockController = new autoUnlockModule.AutoUnlockController(
+    userDataFile("security", "vault-auto-key.bin"),
+  );
+  await initializeVaultAccess();
+
+  rdpController = new RdpController(join(app.getPath("temp"), "CyberGrid", "rdp"));
+  webController = new WebController(() => mainWindow);
+  registerIpcHandlers();
+  try {
+    createSystemTray();
+  } catch (error) {
+    console.warn("CyberGrid system tray could not be created:", error);
+  }
+  resetAutoLockTimer();
+}
+
+let backgroundServicesStarted = false;
+
+function startBackgroundServices(): void {
+  if (backgroundServicesStarted || isQuitting) return;
+  backgroundServicesStarted = true;
+  void initializeBackgroundServices().then(() => {
+    servicesReadyResolve();
+  }).catch((error: unknown) => {
+    servicesReadyReject(error);
+    reportFatalError("startup failure", error);
   });
 }
 
@@ -1885,32 +2052,9 @@ if (!hasSingleInstanceLock) {
     showMainWindow();
   });
 
-  void app.whenReady().then(async () => {
-    app.setAppLogsPath(userDataFile("logs", "application"));
-    auditController.configure(userDataFile("logs", "sessions"));
-    preferencesController = new PreferencesController(
-      userDataFile("cybergrid-preferences.json"),
-    );
-    await preferencesController.load().catch((error: unknown) => {
-      console.warn("CyberGrid preferences could not be loaded; using defaults:", error);
-      return DEFAULT_APP_PREFERENCES;
-    });
-    await applyProxyPreferences(preferencesController.get()).catch((error: unknown) => {
-      console.warn("CyberGrid proxy settings could not be applied:", error);
-    });
-    vaultController = new VaultController(
-      userDataFile("cybergrid-vault.json"),
-    );
-    autoUnlockController = new AutoUnlockController(
-      userDataFile("security", "vault-auto-key.bin"),
-    );
-    await initializeVaultAccess();
-    rdpController = new RdpController(join(app.getPath("temp"), "CyberGrid", "rdp"));
-    webController = new WebController(() => mainWindow);
-    migrationController = new MigrationController(() => mainWindow);
-    registerIpcHandlers();
+  void app.whenReady().then(() => {
+    registerBootstrapIpcHandler();
     mainWindow = createMainWindow();
-    createSystemTray();
 
     app.on("activate", () => {
       if (BrowserWindow.getAllWindows().length === 0) {
@@ -1919,9 +2063,7 @@ if (!hasSingleInstanceLock) {
         showMainWindow();
       }
     });
-  }).catch((error: unknown) => {
-    reportFatalError("startup failure", error);
-  });
+  }).catch((error: unknown) => reportFatalError("window startup failure", error));
 }
 
 let flushingAuditLogs = false;

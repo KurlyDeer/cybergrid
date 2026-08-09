@@ -8,7 +8,7 @@
     />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>CyberGrid</title>
-    <link rel="stylesheet" href="../../node_modules/xterm/css/xterm.css" />
+    <link rel="stylesheet" href="./xterm.css" />
     <style>
       :root {
         color-scheme: dark;
@@ -54,6 +54,88 @@
         font-family:
           Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
           sans-serif;
+      }
+
+      .startup-skeleton {
+        position: fixed;
+        z-index: 2000;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        background: #1e1e1e;
+        color: #e5e7eb;
+        transition: opacity 160ms ease-out;
+      }
+
+      .startup-skeleton.startup-complete {
+        opacity: 0;
+        pointer-events: none;
+      }
+
+      .startup-skeleton-card {
+        display: grid;
+        width: min(360px, calc(100vw - 48px));
+        gap: 16px;
+      }
+
+      .startup-skeleton-brand {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        font-size: 15px;
+        font-weight: 750;
+        letter-spacing: 0.12em;
+      }
+
+      .startup-skeleton-logo {
+        display: grid;
+        width: 38px;
+        height: 38px;
+        place-items: center;
+        border-radius: 9px;
+        background: #23d5ab;
+        color: #102019;
+        font-size: 12px;
+      }
+
+      .startup-skeleton-lines {
+        display: grid;
+        gap: 9px;
+      }
+
+      .startup-skeleton-line {
+        height: 8px;
+        overflow: hidden;
+        border-radius: 999px;
+        background: #303030;
+      }
+
+      .startup-skeleton-line::after {
+        display: block;
+        width: 45%;
+        height: 100%;
+        background: linear-gradient(90deg, transparent, rgba(35, 213, 171, 0.45), transparent);
+        content: "";
+        animation: startup-shimmer 1.1s ease-in-out infinite;
+      }
+
+      .startup-skeleton-line.short {
+        width: 68%;
+      }
+
+      .startup-status {
+        min-height: 18px;
+        color: #9ca3af;
+        font-size: 12px;
+      }
+
+      .startup-failed .startup-status {
+        color: #ff8a97;
+      }
+
+      @keyframes startup-shimmer {
+        from { transform: translateX(-110%); }
+        to { transform: translateX(230%); }
       }
 
       button,
@@ -1831,6 +1913,17 @@
     </style>
   </head>
   <body>
+    <div class="startup-skeleton" id="startup-skeleton" role="status" aria-live="polite">
+      <section class="startup-skeleton-card" aria-label="CyberGrid is starting">
+        <div class="startup-skeleton-brand"><span class="startup-skeleton-logo">CG</span><span>CYBERGRID</span></div>
+        <div class="startup-skeleton-lines" aria-hidden="true">
+          <div class="startup-skeleton-line"></div>
+          <div class="startup-skeleton-line short"></div>
+          <div class="startup-skeleton-line"></div>
+        </div>
+        <div class="startup-status" id="startup-status">Loading interface…</div>
+      </section>
+    </div>
     <main class="app-shell" id="app-shell" inert>
       <aside class="sidebar" aria-label="Saved server profiles">
         <div class="brand">
@@ -2290,9 +2383,6 @@
       </div>
     </dialog>
 
-    <script src="../../node_modules/xterm/lib/xterm.js" defer></script>
-    <script src="../../node_modules/xterm-addon-fit/lib/xterm-addon-fit.js" defer></script>
-    <script type="module" src="./vnc-bootstrap.mjs"></script>
-    <script src="./renderer.js" defer></script>
+    <script src="./startup.js" defer></script>
   </body>
 </html>

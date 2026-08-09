@@ -1,0 +1,79 @@
+const { copyFile, mkdir } = require("node:fs/promises");
+const { join } = require("node:path");
+const { build } = require("esbuild");
+
+const projectRoot = join(__dirname, "..");
+const sourceRoot = join(projectRoot, "src");
+const outputRoot = join(projectRoot, "build");
+const rendererOutput = join(outputRoot, "renderer");
+
+const common = {
+  bundle: true,
+  charset: "utf8",
+  legalComments: "none",
+  minify: true,
+  sourcemap: false,
+  target: "es2022",
+  treeShaking: true,
+};
+
+async function bundleApplication() {
+  await mkdir(join(outputRoot, "main"), { recursive: true });
+  await mkdir(rendererOutput, { recursive: true });
+
+  await Promise.all([
+    build({
+      ...common,
+      entryPoints: [join(sourceRoot, "main", "main.ts")],
+      external: [
+        "electron",
+        "ssh2",
+        "serialport",
+        "@serialport/bindings-cpp",
+        "better-sqlite3",
+        "fast-xml-parser",
+        "mac-oui-lookup",
+        "ws",
+      ],
+      format: "cjs",
+      outfile: join(outputRoot, "main", "main.js"),
+      platform: "node",
+    }),
+    build({
+      ...common,
+      entryPoints: [join(sourceRoot, "main", "preload.ts")],
+      external: ["electron"],
+      format: "cjs",
+      outfile: join(outputRoot, "main", "preload.js"),
+      platform: "node",
+    }),
+    build({
+      ...common,
+      entryPoints: [join(sourceRoot, "renderer", "renderer.ts")],
+      format: "iife",
+      outfile: join(rendererOutput, "renderer.js"),
+      platform: "browser",
+    }),
+    build({
+      ...common,
+      entryPoints: [join(sourceRoot, "renderer", "vnc-bootstrap.mjs")],
+      format: "esm",
+      outfile: join(rendererOutput, "vnc-bootstrap.mjs"),
+      platform: "browser",
+    }),
+  ]);
+
+  await Promise.all([
+    copyFile(join(sourceRoot, "renderer", "index.html"), join(rendererOutput, "index.html")),
+    copyFile(join(sourceRoot, "renderer", "startup.js"), join(rendererOutput, "startup.js")),
+    copyFile(
+      join(projectRoot, "node_modules", "xterm", "css", "xterm.css"),
+      join(rendererOutput, "xterm.css"),
+    ),
+  ]);
+}
+
+bundleApplication().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});

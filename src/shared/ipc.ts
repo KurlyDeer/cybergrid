@@ -1,4 +1,5 @@
 export const IPC_CHANNELS = {
+  appReady: "cybergrid:app:ready",
   sshConnect: "cybergrid:ssh:connect",
   sshConnectProfile: "cybergrid:ssh:connect-profile",
   sshDisconnect: "cybergrid:ssh:disconnect",
@@ -725,6 +726,7 @@ export interface CyberGridApi {
     exportConnections(request: MigrationRequest): Promise<MigrationExportResult>;
   };
   system: {
+    whenReady(): Promise<void>;
     selectPrivateKey(): Promise<string | null>;
     onVaultLocked(listener: (reason: string) => void): Unsubscribe;
     onTrayQuickConnect(listener: (profileId: string) => void): Unsubscribe;

@@ -1,7 +1,8 @@
-type ITerminalOptions = import("xterm").ITerminalOptions;
-type ITheme = import("xterm").ITheme;
-type XtermTerminal = import("xterm").Terminal;
-type XtermFitAddon = import("xterm-addon-fit").FitAddon;
+import { Terminal, type ITerminalOptions, type ITheme } from "xterm";
+import { FitAddon } from "xterm-addon-fit";
+
+type XtermTerminal = Terminal;
+type XtermFitAddon = FitAddon;
 type CyberGridApi = import("../shared/ipc").CyberGridApi;
 type ConnectionProtocol = import("../shared/ipc").ConnectionProtocol;
 type AssetInput = import("../shared/ipc").AssetInput;
@@ -53,12 +54,11 @@ type VncConnectionResult = import("../shared/ipc").VncConnectionResult;
 type VncStatusEvent = import("../shared/ipc").VncStatusEvent;
 type WebStatusEvent = import("../shared/ipc").WebStatusEvent;
 
-declare const Terminal: new (options?: ITerminalOptions) => XtermTerminal;
-declare const FitAddon: { FitAddon: new () => XtermFitAddon };
-
-interface Window {
-  cybergrid: CyberGridApi;
-  NoVncRfb?: NoVncRfbConstructor;
+declare global {
+  interface Window {
+    cybergrid: CyberGridApi;
+    NoVncRfb?: NoVncRfbConstructor;
+  }
 }
 
 interface NoVncRfbInstance {
@@ -172,6 +172,8 @@ function elementById<T extends HTMLElement>(id: string): T {
 }
 
 const appShell = elementById<HTMLElement>("app-shell");
+const startupSkeleton = elementById<HTMLElement>("startup-skeleton");
+const startupStatus = elementById<HTMLElement>("startup-status");
 const quickConnectForm = elementById<HTMLFormElement>("quick-connect-form");
 const quickConnectInput = elementById<HTMLInputElement>("quick-connect-uri");
 const quickPasswordInput = elementById<HTMLInputElement>("quick-connect-password");
@@ -714,7 +716,7 @@ function createTerminalTab(
     allowTransparency: true,
     theme: terminalTheme(currentSettings),
   });
-  const fitAddon = new FitAddon.FitAddon();
+  const fitAddon = new FitAddon();
   terminal.loadAddon(fitAddon);
   terminal.open(tab.paneElement);
   tab.terminal = terminal;
@@ -1039,15 +1041,32 @@ function attachSerialSession(tab: WorkspaceTab, sessionId: string): void {
   updateBroadcastControls();
 }
 
-async function waitForNoVnc(): Promise<NoVncRfbConstructor> {
-  if (window.NoVncRfb) return window.NoVncRfb;
-  await new Promise<void>((resolve, reject) => {
-    const timeout = window.setTimeout(() => reject(new Error("noVNC failed to load.")), 5_000);
+let noVncLoadPromise: Promise<void> | undefined;
+
+function loadNoVnc(): Promise<void> {
+  if (window.NoVncRfb) return Promise.resolve();
+  if (noVncLoadPromise) return noVncLoadPromise;
+  noVncLoadPromise = new Promise<void>((resolve, reject) => {
+    const timeout = window.setTimeout(() => reject(new Error("noVNC failed to load.")), 8_000);
     window.addEventListener("cybergrid:novnc-ready", () => {
       window.clearTimeout(timeout);
       resolve();
     }, { once: true });
+    const script = document.createElement("script");
+    script.type = "module";
+    script.src = "./vnc-bootstrap.mjs";
+    script.addEventListener("error", () => {
+      window.clearTimeout(timeout);
+      reject(new Error("noVNC module could not be loaded."));
+    }, { once: true });
+    document.head.append(script);
   });
+  return noVncLoadPromise;
+}
+
+async function waitForNoVnc(): Promise<NoVncRfbConstructor> {
+  if (window.NoVncRfb) return window.NoVncRfb;
+  await loadNoVnc();
   if (!window.NoVncRfb) throw new Error("noVNC failed to initialize.");
   return window.NoVncRfb;
 }
@@ -3261,6 +3280,16 @@ const resizeObserver = new ResizeObserver(() => {
 resizeObserver.observe(terminalStack);
 
 async function initializeApplication(): Promise<void> {
+  startupStatus.textContent = "Starting secure background services…";
+  try {
+    await window.cybergrid.system.whenReady();
+  } catch (error) {
+    startupSkeleton.classList.add("startup-failed");
+    startupStatus.textContent = `Startup failed: ${errorMessage(error)}`;
+    return;
+  }
+
+  startupStatus.textContent = "Preparing your workspace…";
   try {
     let preferences = await window.cybergrid.preferences.get();
     if (localStorage.getItem(SETTINGS_KEY)) {
@@ -3292,6 +3321,10 @@ async function initializeApplication(): Promise<void> {
   updateSftpAvailability();
   updateLayoutControls();
   await initializeVault();
+  startupSkeleton.classList.add("startup-complete");
+  window.setTimeout(() => {
+    startupSkeleton.hidden = true;
+  }, 180);
 }
 
 void initializeApplication();

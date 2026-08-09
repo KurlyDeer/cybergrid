@@ -1,10 +1,4 @@
 import { randomUUID } from "node:crypto";
-import {
-  Client,
-  type ClientChannel,
-  type ConnectConfig,
-  type SFTPWrapper,
-} from "ssh2";
 import type { WebContents } from "electron";
 import { AuditController, type AuditSessionContext } from "./audit";
 import {
@@ -17,6 +11,11 @@ import {
   type SshStatusEvent,
 } from "../shared/ipc";
 
+type Client = import("ssh2").Client;
+type ClientChannel = import("ssh2").ClientChannel;
+type ConnectConfig = import("ssh2").ConnectConfig;
+type SFTPWrapper = import("ssh2").SFTPWrapper;
+
 interface SshSession {
   id: string;
   client: Client;
@@ -27,13 +26,25 @@ interface SshSession {
   closed: boolean;
 }
 
+let ssh2ModulePromise: Promise<typeof import("ssh2")> | undefined;
+
+function loadSsh2(): Promise<typeof import("ssh2")> {
+  ssh2ModulePromise ??= import("ssh2");
+  return ssh2ModulePromise;
+}
+
 export class SshController {
   private readonly sessions = new Map<string, SshSession>();
   private readonly observedSenders = new WeakSet<WebContents>();
 
   constructor(private readonly audit: AuditController) {}
 
-  connect(config: SshConnectionConfig, sender: WebContents, auditContext: AuditSessionContext): string {
+  async connect(
+    config: SshConnectionConfig,
+    sender: WebContents,
+    auditContext: AuditSessionContext,
+  ): Promise<string> {
+    const { Client } = await loadSsh2();
     const sessionId = randomUUID();
     const client = new Client();
     const session: SshSession = {

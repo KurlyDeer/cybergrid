@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import type { WebContents } from "electron";
-import { SerialPort } from "serialport";
 import { AuditController, type AuditSessionContext } from "./audit";
 import {
   IPC_CHANNELS,
@@ -10,10 +9,19 @@ import {
   type SerialStatusEvent,
 } from "../shared/ipc";
 
+type SerialPort = import("serialport").SerialPort;
+
 interface SerialSession {
   port: SerialPort;
   sender: WebContents;
   closed: boolean;
+}
+
+let serialPortModulePromise: Promise<typeof import("serialport")> | undefined;
+
+function loadSerialPort(): Promise<typeof import("serialport")> {
+  serialPortModulePromise ??= import("serialport");
+  return serialPortModulePromise;
 }
 
 export class SerialController {
@@ -22,6 +30,7 @@ export class SerialController {
   constructor(private readonly audit: AuditController) {}
 
   async listPorts(): Promise<SerialPortInfo[]> {
+    const { SerialPort } = await loadSerialPort();
     const ports = await SerialPort.list();
     return ports.map((port) => ({
       path: port.path,
@@ -32,7 +41,12 @@ export class SerialController {
     }));
   }
 
-  connect(config: SerialConnectionConfig, sender: WebContents, auditContext: AuditSessionContext): string {
+  async connect(
+    config: SerialConnectionConfig,
+    sender: WebContents,
+    auditContext: AuditSessionContext,
+  ): Promise<string> {
+    const { SerialPort } = await loadSerialPort();
     const sessionId = randomUUID();
     const port = new SerialPort({ ...config, autoOpen: false });
     const session: SerialSession = { port, sender, closed: false };
