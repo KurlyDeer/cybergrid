@@ -4,6 +4,7 @@ import type {
   AppMenuCommand,
   AppPreferences,
   AppUpdateEvent,
+  AppUpdateStatusEvent,
   ConfigBackupInput,
   CredentialProfileInput,
   CyberGridApi,
@@ -33,6 +34,7 @@ import type {
   StreamConnectionConfig,
   StreamDataEvent,
   StreamStatusEvent,
+  TrayStateSnapshot,
   VncConnectionConfig,
   VncStatusEvent,
   WebBounds,
@@ -144,7 +146,10 @@ const IPC_CHANNELS: typeof import("../shared/ipc").IPC_CHANNELS = {
   quickLauncherHide: "cybergrid:quick-launcher:hide",
   appUpdateAvailable: "cybergrid:update:available",
   appUpdateDownloaded: "cybergrid:update:downloaded",
+  appUpdateStatus: "cybergrid:update:status",
+  appUpdateDownload: "cybergrid:update:download",
   appUpdateInstall: "cybergrid:update:install",
+  trayStateUpdate: "cybergrid:tray:state-update",
   appMenuCommand: "cybergrid:app:menu-command",
 };
 
@@ -370,7 +375,9 @@ const api: CyberGridApi = {
       ipcRenderer.invoke(IPC_CHANNELS.quickLauncherLaunchProfile, profileId),
     showMainWindow: () => ipcRenderer.invoke(IPC_CHANNELS.quickLauncherShowMain),
     hideQuickLauncher: () => ipcRenderer.send(IPC_CHANNELS.quickLauncherHide),
+    downloadUpdate: () => ipcRenderer.invoke(IPC_CHANNELS.appUpdateDownload),
     installUpdate: () => ipcRenderer.invoke(IPC_CHANNELS.appUpdateInstall),
+    updateTrayState: (snapshot: TrayStateSnapshot) => ipcRenderer.send(IPC_CHANNELS.trayStateUpdate, snapshot),
     onUpdateAvailable: (listener) => {
       const handler = (_event: IpcRendererEvent, payload: AppUpdateEvent) => listener(payload);
       ipcRenderer.on(IPC_CHANNELS.appUpdateAvailable, handler);
@@ -380,6 +387,11 @@ const api: CyberGridApi = {
       const handler = (_event: IpcRendererEvent, payload: AppUpdateEvent) => listener(payload);
       ipcRenderer.on(IPC_CHANNELS.appUpdateDownloaded, handler);
       return () => ipcRenderer.removeListener(IPC_CHANNELS.appUpdateDownloaded, handler);
+    },
+    onUpdateStatus: (listener) => {
+      const handler = (_event: IpcRendererEvent, payload: AppUpdateStatusEvent) => listener(payload);
+      ipcRenderer.on(IPC_CHANNELS.appUpdateStatus, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.appUpdateStatus, handler);
     },
     onMenuCommand: (listener) => {
       const handler = (_event: IpcRendererEvent, command: AppMenuCommand) => listener(command);

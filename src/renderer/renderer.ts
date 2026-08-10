@@ -10,6 +10,7 @@ type AssetRecord = import("../shared/ipc").AssetRecord;
 type AppPreferences = import("../shared/ipc").AppPreferences;
 type AppMenuCommand = import("../shared/ipc").AppMenuCommand;
 type AppUpdateEvent = import("../shared/ipc").AppUpdateEvent;
+type AppUpdateStatusEvent = import("../shared/ipc").AppUpdateStatusEvent;
 type ConfigBackupInput = import("../shared/ipc").ConfigBackupInput;
 type ConnectionCategory = import("../shared/ipc").ConnectionCategory;
 type DeviceIcon = import("../shared/ipc").DeviceIcon;
@@ -732,7 +733,24 @@ function showUpdateToast(stage: "available" | "downloaded", event: AppUpdateEven
   dismiss.addEventListener("click", () => toast.remove());
   actions.append(dismiss);
 
-  if (stage === "downloaded") {
+  if (stage === "available") {
+    const download = document.createElement("button");
+    download.className = "primary-button";
+    download.type = "button";
+    download.textContent = "Download & Install";
+    download.addEventListener("click", async () => {
+      download.disabled = true;
+      download.textContent = "Starting...";
+      try {
+        await window.cybergrid.system.downloadUpdate();
+      } catch (error) {
+        message.textContent = errorMessage(error);
+        download.disabled = false;
+        download.textContent = "Download & Install";
+      }
+    });
+    actions.append(download);
+  } else {
     const restart = document.createElement("button");
     restart.className = "primary-button";
     restart.type = "button";
@@ -753,6 +771,48 @@ function showUpdateToast(stage: "available" | "downloaded", event: AppUpdateEven
 
   toast.append(content, actions);
   updateToastRegion.append(toast);
+}
+
+let updateStatusToastTimer: number | null = null;
+
+function showUpdateStatusToast(event: AppUpdateStatusEvent): void {
+  if (updateStatusToastTimer !== null) window.clearTimeout(updateStatusToastTimer);
+  updateStatusToastTimer = null;
+  updateToastRegion.replaceChildren();
+  const toast = document.createElement("article");
+  toast.className = "update-toast";
+  toast.setAttribute("role", event.stage === "error" ? "alert" : "status");
+  const content = document.createElement("div");
+  content.className = "update-toast-content";
+  const mark = createTextElement("span", "update-toast-mark", event.stage === "error" ? "!" : "UP");
+  const copy = document.createElement("div");
+  copy.className = "update-toast-copy";
+  const title = document.createElement("strong");
+  title.textContent = event.stage === "checking"
+    ? "Checking for updates"
+    : event.stage === "download-progress"
+      ? "Downloading update"
+      : "Update check failed";
+  const message = document.createElement("p");
+  message.textContent = event.message;
+  copy.append(title, message);
+  if (event.stage === "download-progress") {
+    const progress = document.createElement("progress");
+    progress.className = "update-download-progress";
+    progress.max = 100;
+    progress.value = event.percent ?? 0;
+    progress.setAttribute("aria-label", `Update download ${Math.round(event.percent ?? 0)} percent`);
+    copy.append(progress);
+  }
+  content.append(mark, copy);
+  toast.append(content);
+  updateToastRegion.append(toast);
+  if (event.stage !== "download-progress") {
+    updateStatusToastTimer = window.setTimeout(() => {
+      toast.remove();
+      updateStatusToastTimer = null;
+    }, event.stage === "error" ? 10_000 : 8_000);
+  }
 }
 
 function fuzzyFieldScore(needle: string, value: string): number | null {
@@ -1085,10 +1145,33 @@ function writeTerminalInput(tab: WorkspaceTab, data: string): void {
   }
 }
 
+let trayStateFrame: number | null = null;
+
+function scheduleTrayStateSync(): void {
+  if (trayStateFrame !== null) return;
+  trayStateFrame = window.requestAnimationFrame(() => {
+    trayStateFrame = null;
+    const inactive = new Set<WorkspaceStatus>(["idle", "disconnected", "closed", "error"]);
+    const sessions = [...tabs.values()]
+      .filter((tab) => tab.kind !== "welcome" && !inactive.has(tab.status) && Boolean(
+        tab.sessionId || tab.rdpSessionId || tab.streamSessionId || tab.serialSessionId ||
+        tab.vncSessionId || tab.webSessionId,
+      ))
+      .map((tab) => ({
+        id: tab.id,
+        label: tab.label,
+        protocol: tab.kind as ConnectionProtocol,
+        status: tab.status,
+      }));
+    window.cybergrid.system.updateTrayState({ sessions, broadcastMode });
+  });
+}
+
 function updateBroadcastControls(): void {
   const available = activeBroadcastTabs();
   if (available.length === 0) broadcastMode = false;
   renderQuickSnippetToolbar();
+  scheduleTrayStateSync();
 }
 
 function createRdpTab(label: string, config: RdpConnectionConfig): WorkspaceTab {
@@ -3589,6 +3672,13 @@ function openMigrationModal(): void {
   if (!migrationModal.open) migrationModal.showModal();
 }
 
+function openVaultBackupExport(): void {
+  openMigrationModal();
+  migrationExportFormat.value = "cgvault";
+  migrationStatus.textContent = "Enter a team vault passphrase, then choose the export destination.";
+  requestAnimationFrame(() => migrationPassphrase.focus());
+}
+
 function openScanModal(): void {
   scanError.textContent = "";
   if (!scanModal.open) scanModal.showModal();
@@ -3618,10 +3708,22 @@ function toggleBroadcastMode(): void {
   tabs.get(activeTabId ?? "")?.terminal?.focus();
 }
 
+async function disconnectAllSessions(): Promise<void> {
+  const sessionTabIds = [...tabs.values()]
+    .filter((tab) => tab.kind !== "welcome")
+    .map((tab) => tab.id);
+  broadcastMode = false;
+  for (const tabId of sessionTabIds) await closeTab(tabId);
+  connectionState.textContent = sessionTabIds.length > 0
+    ? `Disconnected ${sessionTabIds.length} session${sessionTabIds.length === 1 ? "" : "s"}.`
+    : "No active sessions to disconnect.";
+  updateBroadcastControls();
+}
+
 async function handleAppMenuCommand(command: AppMenuCommand): Promise<void> {
   const requiresUnlockedVault = new Set<AppMenuCommand>([
     "new-connection", "lock-vault", "import-export", "command-palette", "external-tools",
-    "enterprise", "credential-profiles", "subnet-scanner", "settings",
+    "enterprise", "credential-profiles", "subnet-scanner", "settings", "export-vault-backup",
   ]);
   if (requiresUnlockedVault.has(command) && !vaultUnlocked) {
     vaultError.textContent = "Unlock the credential vault to use this command.";
@@ -3632,6 +3734,7 @@ async function handleAppMenuCommand(command: AppMenuCommand): Promise<void> {
     case "focus-quick-connect": quickConnectInput.focus(); quickConnectInput.select(); break;
     case "lock-vault": await lockVaultFromUi(); break;
     case "import-export": openMigrationModal(); break;
+    case "export-vault-backup": openVaultBackupExport(); break;
     case "command-palette": openCommandPalette(); break;
     case "clear-terminal": clearActiveTerminal(); break;
     case "toggle-sidebar": toggleSidebar(); break;
@@ -3657,6 +3760,7 @@ async function handleAppMenuCommand(command: AppMenuCommand): Promise<void> {
     case "next-tab": activateNextTab(); break;
     case "help": if (helpModal.open) helpModal.close(); else openHelp(); break;
     case "shortcuts": if (shortcutsModal.open) shortcutsModal.close(); else openShortcuts(); break;
+    case "disconnect-all-sessions": await disconnectAllSessions(); break;
   }
 }
 
@@ -4510,6 +4614,7 @@ window.cybergrid.discovery.onResult(handleDiscoveryResult);
 window.cybergrid.discovery.onComplete(handleDiscoveryComplete);
 window.cybergrid.system.onUpdateAvailable((event) => showUpdateToast("available", event));
 window.cybergrid.system.onUpdateDownloaded((event) => showUpdateToast("downloaded", event));
+window.cybergrid.system.onUpdateStatus(showUpdateStatusToast);
 window.cybergrid.system.onMenuCommand((command) => {
   void handleAppMenuCommand(command).catch((error: unknown) => {
     connectionState.textContent = errorMessage(error);

@@ -99,7 +99,10 @@ export const IPC_CHANNELS = {
   quickLauncherHide: "cybergrid:quick-launcher:hide",
   appUpdateAvailable: "cybergrid:update:available",
   appUpdateDownloaded: "cybergrid:update:downloaded",
+  appUpdateStatus: "cybergrid:update:status",
+  appUpdateDownload: "cybergrid:update:download",
   appUpdateInstall: "cybergrid:update:install",
+  trayStateUpdate: "cybergrid:tray:state-update",
   appMenuCommand: "cybergrid:app:menu-command",
 } as const;
 
@@ -225,7 +228,9 @@ export type AppMenuCommand =
   | "reopen-tab"
   | "next-tab"
   | "help"
-  | "shortcuts";
+  | "shortcuts"
+  | "disconnect-all-sessions"
+  | "export-vault-backup";
 export type SerialParity = "none" | "even" | "odd" | "mark" | "space";
 
 export type ConnectionCategory = "server" | "network" | "web" | "desktop";
@@ -792,6 +797,27 @@ export interface AppUpdateEvent {
   version: string;
 }
 
+export interface AppUpdateStatusEvent {
+  stage: "checking" | "download-progress" | "error";
+  message: string;
+  percent?: number;
+  transferred?: number;
+  total?: number;
+  bytesPerSecond?: number;
+}
+
+export interface TraySessionSummary {
+  id: string;
+  label: string;
+  protocol: ConnectionProtocol;
+  status: string;
+}
+
+export interface TrayStateSnapshot {
+  sessions: TraySessionSummary[];
+  broadcastMode: boolean;
+}
+
 export type DiagnosticKind = "ping" | "traceroute" | "dns" | "port";
 
 export interface DiagnosticResult {
@@ -938,9 +964,12 @@ export interface CyberGridApi {
     launchProfileFromQuickLauncher(profileId: string): Promise<void>;
     showMainWindow(): Promise<void>;
     hideQuickLauncher(): void;
+    downloadUpdate(): Promise<void>;
     installUpdate(): Promise<void>;
+    updateTrayState(snapshot: TrayStateSnapshot): void;
     onUpdateAvailable(listener: (event: AppUpdateEvent) => void): Unsubscribe;
     onUpdateDownloaded(listener: (event: AppUpdateEvent) => void): Unsubscribe;
+    onUpdateStatus(listener: (event: AppUpdateStatusEvent) => void): Unsubscribe;
     onMenuCommand(listener: (command: AppMenuCommand) => void): Unsubscribe;
   };
 }

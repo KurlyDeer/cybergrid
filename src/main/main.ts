@@ -5,9 +5,7 @@ import {
   globalShortcut,
   ipcMain,
   Menu,
-  nativeImage,
   session,
-  Tray,
   type MessageBoxOptions,
   type MenuItemConstructorOptions,
   type IpcMainEvent,
@@ -53,6 +51,7 @@ import {
   type SshWriteRequest,
   type StreamConnectionConfig,
   type TerminalAppearanceOverrides,
+  type TrayStateSnapshot,
   type VncConnectionConfig,
   type WebBounds,
   type WebConnectionConfig,
@@ -71,7 +70,9 @@ import type { ScannerController } from "./scanner";
 import type { SerialController } from "./serial";
 import type { SshController } from "./ssh";
 import { StreamController } from "./stream";
+import { SystemTrayController } from "./tray";
 import { generateTotp, validateTotpSecret } from "./totp";
+import { UpdaterController } from "./updater";
 import type { VaultController } from "./vault";
 import type { VncController } from "./vnc";
 import { WebController } from "./web";
@@ -122,9 +123,9 @@ let preferencesController: PreferencesController | null = null;
 let autoUnlockController: AutoUnlockController | null = null;
 let mainWindow: BrowserWindow | null = null;
 let quickLauncherWindow: BrowserWindow | null = null;
-let applicationUpdater: import("electron-updater").AppUpdater | null = null;
-let applicationUpdaterConfigured = false;
-let tray: Tray | null = null;
+const updaterController = new UpdaterController(() => mainWindow);
+let trayController: SystemTrayController | null = null;
+let trayStateSnapshot: TrayStateSnapshot = { sessions: [], broadcastMode: false };
 let autoLockTimer: NodeJS.Timeout | undefined;
 let isQuitting = false;
 let servicesReadyResolve!: () => void;
@@ -137,38 +138,11 @@ void servicesReady.catch(() => undefined);
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 app.setAppUserModelId("com.kurlydeer.cybergrid");
 
-function sendUpdateEvent(
-  channel: typeof IPC_CHANNELS.appUpdateAvailable | typeof IPC_CHANNELS.appUpdateDownloaded,
-  version: string,
-): void {
-  if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) return;
-  mainWindow.webContents.send(channel, { version });
-}
-
-async function configureAutoUpdater(): Promise<void> {
-  if (!app.isPackaged || applicationUpdaterConfigured || isQuitting) return;
-  applicationUpdaterConfigured = true;
-  const { autoUpdater } = await import("electron-updater");
-  applicationUpdater = autoUpdater;
-  autoUpdater.autoDownload = true;
-  autoUpdater.autoInstallOnAppQuit = true;
-  autoUpdater.on("update-available", (info) => {
-    sendUpdateEvent(IPC_CHANNELS.appUpdateAvailable, info.version);
-  });
-  autoUpdater.on("update-downloaded", (info) => {
-    sendUpdateEvent(IPC_CHANNELS.appUpdateDownloaded, info.version);
-  });
-  autoUpdater.on("error", (error) => {
-    console.warn("CyberGrid update check failed:", error);
-  });
-  await autoUpdater.checkForUpdatesAndNotify();
-}
-
 function scheduleUpdateCheck(): void {
   if (!app.isPackaged) return;
   const timer = setTimeout(() => {
     void servicesReady
-      .then(configureAutoUpdater)
+      .then(() => updaterController.checkForUpdates(false))
       .catch((error: unknown) => console.warn("CyberGrid updater did not start:", error));
   }, 2_000);
   timer.unref();
@@ -212,18 +186,7 @@ function showMainMessageBox(options: MessageBoxOptions): Promise<Electron.Messag
 }
 
 async function checkForUpdatesFromMenu(): Promise<void> {
-  if (!app.isPackaged) {
-    await showMainMessageBox({
-      type: "info",
-      title: "CyberGrid Updates",
-      message: "Update checks are available in packaged CyberGrid builds.",
-      detail: `Development build ${app.getVersion()} is running from source.`,
-    });
-    return;
-  }
-  const wasConfigured = applicationUpdaterConfigured;
-  await configureAutoUpdater();
-  if (wasConfigured) await applicationUpdater?.checkForUpdatesAndNotify();
+  await updaterController.checkForUpdates(true);
 }
 
 function installApplicationMenu(): void {
@@ -418,6 +381,22 @@ function normalizeWorkspaceSnapshot(value: unknown): WorkspaceSnapshot {
     layout: value.layout === "grid" ? "grid" : "single",
     updatedAt: new Date().toISOString(),
   };
+}
+
+function normalizeTrayStateSnapshot(value: unknown): TrayStateSnapshot {
+  if (!isRecord(value) || !Array.isArray(value.sessions) || value.sessions.length > 100) {
+    throw new Error("Invalid system tray state.");
+  }
+  const sessions = value.sessions.map((session, index) => {
+    if (!isRecord(session)) throw new Error(`Invalid tray session at index ${index}.`);
+    return {
+      id: readString(session.id, "Tray session ID", { required: true, maxLength: 100, singleLine: true }) as string,
+      label: readString(session.label, "Tray session label", { required: true, maxLength: 160, singleLine: true }) as string,
+      protocol: readConnectionProtocol(session.protocol),
+      status: readString(session.status, "Tray session status", { required: true, maxLength: 40, singleLine: true }) as string,
+    };
+  });
+  return { sessions, broadcastMode: value.broadcastMode === true };
 }
 
 async function loadWorkspaceSnapshot(): Promise<WorkspaceSnapshot> {
@@ -1662,72 +1641,41 @@ function showMainWindow(): void {
   resetAutoLockTimer();
 }
 
-function createTrayImage(): Electron.NativeImage {
-  const size = 16;
-  const bitmap = Buffer.alloc(size * size * 4);
-  const setPixel = (x: number, y: number, alpha = 255): void => {
-    const offset = (y * size + x) * 4;
-    bitmap[offset] = 171;
-    bitmap[offset + 1] = 213;
-    bitmap[offset + 2] = 35;
-    bitmap[offset + 3] = alpha;
-  };
-  for (let index = 2; index < 14; index += 1) {
-    setPixel(index, 2);
-    setPixel(index, 13);
-    setPixel(2, index);
-    setPixel(13, index);
-  }
-  for (let index = 4; index < 12; index += 1) {
-    setPixel(7, index);
-    setPixel(index, 7);
-  }
-  return nativeImage.createFromBitmap(bitmap, { width: size, height: size, scaleFactor: 1 });
-}
-
 let trayRefreshSequence = 0;
 
 async function refreshTrayMenu(): Promise<void> {
   const activeSequence = ++trayRefreshSequence;
-  if (!tray || !vaultController) return;
+  if (!trayController || !vaultController) return;
   const status = await vaultController.status();
-  const favorites = status.unlocked
-    ? vaultController.listProfiles().filter((profile) => profile.favorite).slice(0, 20)
-    : [];
-  if (!tray || activeSequence !== trayRefreshSequence) return;
-  const favoriteItems: MenuItemConstructorOptions[] = favorites.length > 0
-    ? favorites.map((profile) => ({
-        label: `${profile.name} (${profile.protocol.toUpperCase()})`,
-        click: () => {
-          showMainWindow();
-          mainWindow?.webContents.send(IPC_CHANNELS.trayQuickConnect, profile.id);
-        },
-      }))
-    : [{ label: status.unlocked ? "No favorite servers" : "Unlock vault to view favorites", enabled: false }];
-  tray.setContextMenu(Menu.buildFromTemplate([
-    { label: "Show CyberGrid", click: showMainWindow },
-    { label: "Quick Connect Favorites", submenu: favoriteItems },
-    { type: "separator" },
-    {
-      label: "Lock Credential Vault",
-      enabled: status.unlocked,
-      click: () => lockApplication("Credential vault locked from the system tray.", true),
-    },
-    { type: "separator" },
-    {
-      label: "Quit CyberGrid",
-      click: () => {
-        isQuitting = true;
-        app.quit();
-      },
-    },
-  ]));
+  if (!trayController || activeSequence !== trayRefreshSequence) return;
+  trayController.update({
+    ...trayStateSnapshot,
+    vaultUnlocked: status.unlocked,
+  });
 }
 
 function createSystemTray(): void {
-  tray = new Tray(createTrayImage());
-  tray.setToolTip("CyberGrid remote connection manager");
-  tray.on("click", showMainWindow);
+  trayController = new SystemTrayController(app.getVersion(), {
+    showWindow: showMainWindow,
+    lockVault: () => lockApplication("Credential vault locked from the system tray.", true),
+    unlockVault: showMainWindow,
+    disconnectAllSessions: () => sendMenuCommand("disconnect-all-sessions"),
+    quickConnect: () => sendMenuCommand("focus-quick-connect"),
+    toggleBroadcast: () => sendMenuCommand("toggle-broadcast"),
+    runSubnetScan: () => sendMenuCommand("subnet-scanner"),
+    exportVaultBackup: () => sendMenuCommand("export-vault-backup"),
+    checkForUpdates: () => {
+      void checkForUpdatesFromMenu();
+    },
+    quit: () => {
+      isQuitting = true;
+      app.quit();
+    },
+  });
+  trayController.create({
+    ...trayStateSnapshot,
+    vaultUnlocked: vaultController?.isVaultUnlocked() ?? false,
+  });
   if (!isQuitting) void refreshTrayMenu();
 }
 
@@ -2640,12 +2588,22 @@ function registerBootstrapIpcHandler(): void {
     assertTrustedSender(event);
     await servicesReady;
   });
+  ipcMain.handle(IPC_CHANNELS.appUpdateDownload, async (event) => {
+    assertTrustedSender(event);
+    await updaterController.downloadUpdate();
+  });
   ipcMain.handle(IPC_CHANNELS.appUpdateInstall, (event) => {
     assertTrustedSender(event);
-    if (!app.isPackaged || !applicationUpdater) {
-      throw new Error("A downloaded CyberGrid update is not ready to install.");
+    updaterController.installUpdate();
+  });
+  ipcMain.on(IPC_CHANNELS.trayStateUpdate, (event, value: unknown) => {
+    if (!isTrustedSender(event)) return;
+    try {
+      trayStateSnapshot = normalizeTrayStateSnapshot(value);
+      if (!isQuitting) void refreshTrayMenu();
+    } catch (error) {
+      console.warn("Rejected system tray state update:", error);
     }
-    setImmediate(() => applicationUpdater?.quitAndInstall(false, true));
   });
 }
 
@@ -2748,6 +2706,6 @@ app.on("window-all-closed", () => {
 app.on("will-quit", () => {
   globalShortcut.unregisterAll();
   destroyQuickLauncher();
-  tray?.destroy();
-  tray = null;
+  trayController?.destroy();
+  trayController = null;
 });

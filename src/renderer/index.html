@@ -2141,6 +2141,9 @@
       .update-toast-copy { min-width: 0; }
       .update-toast-copy strong { display: block; margin-bottom: 4px; font-size: 12px; }
       .update-toast-copy p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
+      .update-download-progress { width: 100%; height: 7px; margin-top: 10px; overflow: hidden; border: 0; border-radius: 999px; accent-color: var(--accent); }
+      .update-download-progress::-webkit-progress-bar { border-radius: 999px; background: var(--background); }
+      .update-download-progress::-webkit-progress-value { border-radius: 999px; background: var(--accent); }
       .update-toast-actions { display: flex; justify-content: flex-end; gap: 8px; padding: 0 14px 14px; }
       @keyframes update-toast-in { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: translateY(0); } }
       @media (max-width: 1040px) {
