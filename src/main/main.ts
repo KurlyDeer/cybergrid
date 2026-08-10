@@ -340,7 +340,7 @@ function installApplicationMenu(): void {
 async function getSshController(): Promise<SshController> {
   if (sshController) return sshController;
   sshControllerPromise ??= import("./ssh.js").then(({ SshController }) => {
-    const controller = new SshController(auditController);
+    const controller = new SshController(auditController, userDataFile("backups"));
     sshController = controller;
     return controller;
   });
@@ -777,6 +777,7 @@ function normalizeConnectionConfig(value: unknown): SshConnectionConfig {
     privateKey,
     passphrase,
     readyTimeout: 15_000,
+    enableLegacyAlgorithms: value.enableLegacyAlgorithms === true,
   };
 }
 
@@ -823,8 +824,8 @@ function normalizeProfileInput(value: unknown): ServerProfileInput {
   if (credentialProfileId && authType !== "none") {
     throw new Error("Linked credentials cannot be combined with connection-specific authentication.");
   }
-  if (credentialProfileId && protocol !== "ssh" && protocol !== "rdp" && protocol !== "vnc") {
-    throw new Error("Credential profiles can only be linked to SSH, RDP, or VNC connections.");
+  if (credentialProfileId && protocol !== "ssh" && protocol !== "rdp" && protocol !== "vnc" && protocol !== "http" && protocol !== "https") {
+    throw new Error("Credential profiles can only be linked to SSH, RDP, VNC, HTTP, or HTTPS connections.");
   }
   if (authType === "privateKey" && protocol !== "ssh") {
     throw new Error("Private-key authentication is only available for SSH profiles.");
@@ -860,6 +861,9 @@ function normalizeProfileInput(value: unknown): ServerProfileInput {
     keepAliveEnabled: value.keepAliveEnabled !== false,
     persistUntilAppCloses: value.persistUntilAppCloses === true,
     autoReconnect: value.autoReconnect === true,
+    enableLegacySshAlgorithms:
+      protocol === "ssh" && (value.enableLegacySshAlgorithms === true ||
+        (value.enableLegacySshAlgorithms === undefined && category === "network")),
     jumpHost: readString(value.jumpHost, "Jump host", { maxLength: 253, singleLine: true }),
     proxyOverride: readString(value.proxyOverride, "Connection proxy", { maxLength: 2_048, singleLine: true }),
     icon: readDeviceIcon(value.icon, false),
@@ -1280,7 +1284,11 @@ function normalizeWebConfig(value: unknown): WebConnectionConfig {
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
     throw new Error("Embedded browser URLs must use HTTP or HTTPS.");
   }
-  return { url: parsed.toString() };
+  return {
+    url: parsed.toString(),
+    username: readString(value.username, "Web username", { maxLength: 256, singleLine: true }),
+    password: readString(value.password, "Web password", { maxLength: 4_096, trim: false }),
+  };
 }
 
 function normalizeWebBounds(value: unknown): WebBounds {
@@ -1411,7 +1419,7 @@ function normalizeTerminalOverrides(value: unknown): TerminalAppearanceOverrides
   if (value === undefined || value === null) return undefined;
   if (!isRecord(value)) throw new Error("Invalid terminal appearance override.");
   const result: TerminalAppearanceOverrides = {};
-  if (value.theme === "dark" || value.theme === "monochrome" || value.theme === "custom") {
+  if (value.theme === "dark" || value.theme === "light" || value.theme === "monochrome" || value.theme === "custom") {
     result.theme = value.theme;
   }
   result.fontFamily = readString(value.fontFamily, "Override font family", {
@@ -1470,7 +1478,7 @@ function normalizePreferences(value: unknown): AppPreferences {
     throw new Error("Ping interval must be between 10 and 600 seconds.");
   }
   const theme = value.theme;
-  if (theme !== "dark" && theme !== "monochrome" && theme !== "custom") {
+  if (theme !== "dark" && theme !== "light" && theme !== "monochrome" && theme !== "custom") {
     throw new Error("Invalid terminal theme.");
   }
   const proxyMode = value.proxyMode;
@@ -1769,6 +1777,8 @@ async function connectionConfigForProfile(profileId: string): Promise<SshConnect
       period: profile.totpPeriod,
       algorithm: profile.totpAlgorithm,
     }).code : undefined,
+    enableLegacyAlgorithms:
+      profile.enableLegacySshAlgorithms ?? profile.category === "network",
   };
 
   if (profile.authType === "password") {
@@ -1880,7 +1890,13 @@ async function connectProfile(profileId: string, sender: WebContents): Promise<P
       const defaultPort = profile.protocol === "https" ? 443 : 80;
       const normalizedHost = host.replace(/^https?:\/\//i, "").replace(/\/$/, "");
       const port = profile.port === defaultPort ? "" : `:${profile.port}`;
-      const sessionId = await requireWeb().connect({ url: `${profile.protocol}://${normalizedHost}${port}/` }, sender);
+      const sessionId = await requireWeb().connect({
+        url: `${profile.protocol}://${normalizedHost}${port}/`,
+        username,
+        password: profile.authType === "password"
+          ? resolveEnvironmentTokens(profile.password, "Web password")
+          : undefined,
+      }, sender);
       return { protocol: profile.protocol, sessionId, context, policy };
     }
   }
@@ -1906,6 +1922,18 @@ function registerIpcHandlers(): void {
       config,
       event.sender,
       auditContext("ssh", profile.name, `${config.host}:${config.port}`, config.username, profile.group),
+    );
+  });
+
+  ipcMain.handle(IPC_CHANNELS.sshQuickBackup, async (event, sessionId: unknown, profileId: unknown) => {
+    assertTrustedSender(event);
+    const profile = requireVault().getConnectionProfile(readUuid(profileId, "server profile ID"));
+    if (profile.protocol !== "ssh" || profile.category !== "network") {
+      throw new Error("Quick Backup Snapshot is available for SSH network-device profiles.");
+    }
+    return (await getSshController()).quickBackup(
+      readUuid(sessionId, "SSH session ID"),
+      profile.name,
     );
   });
 
@@ -2205,6 +2233,16 @@ function registerIpcHandlers(): void {
     return result;
   });
 
+  ipcMain.handle(IPC_CHANNELS.vaultMoveProfile, async (event, profileId: unknown, group: unknown) => {
+    assertTrustedSender(event);
+    const result = await requireVault().moveProfile(
+      readUuid(profileId, "server profile ID"),
+      normalizeFolderPath(group),
+    );
+    await refreshTrayMenu();
+    return result;
+  });
+
   ipcMain.handle(IPC_CHANNELS.vaultListFolderDefaults, (event) => {
     assertTrustedSender(event);
     return requireVault().listFolderDefaults();
@@ -2468,9 +2506,24 @@ function registerIpcHandlers(): void {
     if (!parsed) return null;
     const warnings = [...parsed.warnings];
     const profiles: ServerProfileInput[] = [];
-    for (const candidate of parsed.profiles) {
+    let credentialProfilesImported = 0;
+    for (let index = 0; index < parsed.profiles.length; index += 1) {
+      const candidate = parsed.profiles[index];
       try {
-        profiles.push(normalizeProfileInput(candidate));
+        const profile = normalizeProfileInput(candidate);
+        const linked = parsed.credentials.find((item) => item.profileIndex === index);
+        if (linked) {
+          const credential = await requireVault().saveCredentialProfile(
+            normalizeCredentialProfileInput(linked.credential),
+          );
+          profile.credentialProfileId = credential.id;
+          profile.authType = "none";
+          profile.password = undefined;
+          profile.privateKeyPath = undefined;
+          profile.passphrase = undefined;
+          credentialProfilesImported += 1;
+        }
+        profiles.push(profile);
       } catch (error) {
         warnings.push(`Skipped profile: ${error instanceof Error ? error.message : "invalid data"}`);
       }
@@ -2485,7 +2538,7 @@ function registerIpcHandlers(): void {
       }
     }
     await refreshTrayMenu();
-    return { imported, warnings, path: parsed.path };
+    return { imported, credentialProfilesImported, warnings, path: parsed.path };
   });
 
   ipcMain.handle(IPC_CHANNELS.migrationExport, async (event, rawRequest: unknown) => {

@@ -5,6 +5,7 @@ export const IPC_CHANNELS = {
   sshDisconnect: "cybergrid:ssh:disconnect",
   sshWrite: "cybergrid:ssh:write",
   sshResize: "cybergrid:ssh:resize",
+  sshQuickBackup: "cybergrid:ssh:quick-backup",
   sshData: "cybergrid:ssh:data",
   sshStatus: "cybergrid:ssh:status",
   sftpList: "cybergrid:sftp:list",
@@ -21,6 +22,7 @@ export const IPC_CHANNELS = {
   vaultLock: "cybergrid:vault:lock",
   vaultListProfiles: "cybergrid:vault:list-profiles",
   vaultSaveProfile: "cybergrid:vault:save-profile",
+  vaultMoveProfile: "cybergrid:vault:move-profile",
   vaultDeleteProfile: "cybergrid:vault:delete-profile",
   vaultUpdateProfileNotes: "cybergrid:vault:update-profile-notes",
   vaultAddConfigBackup: "cybergrid:vault:add-config-backup",
@@ -111,6 +113,14 @@ export interface SshConnectionConfig {
   readyTimeout?: number;
   keepaliveInterval?: number;
   totpCode?: string;
+  enableLegacyAlgorithms?: boolean;
+}
+
+export interface SwitchBackupResult {
+  path: string;
+  vendor: "cisco" | "fortinet" | "hp" | "unknown";
+  command: string;
+  capturedBytes: number;
 }
 
 export interface SshDataEvent {
@@ -267,6 +277,7 @@ export interface ServerProfileInput {
   keepAliveEnabled?: boolean;
   persistUntilAppCloses?: boolean;
   autoReconnect?: boolean;
+  enableLegacySshAlgorithms?: boolean;
   jumpHost?: string;
   proxyOverride?: string;
   icon?: DeviceIcon;
@@ -311,6 +322,7 @@ export interface ServerProfileSummary {
   keepAliveEnabled: boolean;
   persistUntilAppCloses: boolean;
   autoReconnect: boolean;
+  enableLegacySshAlgorithms: boolean;
   category: ConnectionCategory;
   jumpHost?: string;
   proxyOverride?: string;
@@ -390,6 +402,8 @@ export interface VncStatusEvent {
 
 export interface WebConnectionConfig {
   url: string;
+  username?: string;
+  password?: string;
 }
 
 export interface WebBounds {
@@ -427,6 +441,7 @@ export interface MigrationRequest {
 
 export interface MigrationResult {
   imported: number;
+  credentialProfilesImported: number;
   warnings: string[];
   path: string;
 }
@@ -729,7 +744,7 @@ export interface CredentialProfileSummary {
   updatedAt: string;
 }
 
-export type TerminalThemeName = "dark" | "monochrome" | "custom";
+export type TerminalThemeName = "dark" | "light" | "monochrome" | "custom";
 export type ProxyMode = "system" | "direct" | "manual";
 
 export interface AppPreferences {
@@ -802,6 +817,7 @@ export interface CyberGridApi {
     disconnect(sessionId: string): Promise<void>;
     write(sessionId: string, data: string): void;
     resize(sessionId: string, cols: number, rows: number): void;
+    quickBackup(sessionId: string, profileId: string): Promise<SwitchBackupResult>;
     onData(listener: (event: SshDataEvent) => void): Unsubscribe;
     onStatus(listener: (event: SshStatusEvent) => void): Unsubscribe;
   };
@@ -851,6 +867,7 @@ export interface CyberGridApi {
     lock(): Promise<void>;
     listProfiles(): Promise<ServerProfileSummary[]>;
     saveProfile(profile: ServerProfileInput): Promise<ServerProfileSummary>;
+    moveProfile(profileId: string, group: string): Promise<ServerProfileSummary>;
     deleteProfile(profileId: string): Promise<void>;
     updateProfileNotes(profileId: string, notes: string): Promise<ServerProfileSummary>;
     addConfigBackup(profileId: string, input: ConfigBackupInput): Promise<ServerProfileSummary>;

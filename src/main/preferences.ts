@@ -78,7 +78,7 @@ function parseStoredPreferences(value: unknown): AppPreferences {
       Number(preferences.clipboardClearSeconds) >= 0 && Number(preferences.clipboardClearSeconds) <= 300
       ? Number(preferences.clipboardClearSeconds)
       : DEFAULT_APP_PREFERENCES.clipboardClearSeconds,
-    theme: preferences.theme === "monochrome" || preferences.theme === "custom"
+    theme: preferences.theme === "light" || preferences.theme === "monochrome" || preferences.theme === "custom"
       ? preferences.theme
       : "dark",
     fontFamily: storedString(

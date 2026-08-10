@@ -5,6 +5,7 @@ import { XMLParser } from "fast-xml-parser";
 import type {
   AssetRecord,
   ConnectionProtocol,
+  CredentialProfileInput,
   MigrationExportResult,
   MigrationFormat,
   MigrationRequest,
@@ -12,14 +13,21 @@ import type {
   ServerProfileInput,
 } from "../shared/ipc";
 import { decryptTeamVault, encryptTeamVault } from "./team-vault";
+import { decodePuttyRegistryBuffer, parsePuttyRegistry } from "./importers/putty-reg";
 
 const MAX_IMPORT_BYTES = 25 * 1024 * 1024;
 
 export interface ParsedMigration {
   profiles: unknown[];
   assets: unknown[];
+  credentials: ParsedCredentialLink[];
   warnings: string[];
   path: string;
+}
+
+export interface ParsedCredentialLink {
+  profileIndex: number;
+  credential: CredentialProfileInput;
 }
 
 interface ExportPayload {
@@ -73,6 +81,7 @@ function profileFromFields(fields: Record<string, unknown>, fallbackGroup: strin
     host,
     port: Number.isInteger(requestedPort) ? requestedPort : defaultPort(protocol),
     username: text(fields.username ?? fields.Username ?? fields.UserName),
+    domain: text(fields.domain ?? fields.Domain) || undefined,
     group: text(fields.group ?? fields.Group) || fallbackGroup || "Imported",
     authType,
     password: authType === "password" ? password : undefined,
@@ -87,9 +96,10 @@ function profileFromFields(fields: Record<string, unknown>, fallbackGroup: strin
   };
 }
 
-function parseMRemoteNg(content: string): { profiles: ServerProfileInput[]; warnings: string[] } {
+function parseMRemoteNg(content: string): { profiles: ServerProfileInput[]; credentials: ParsedCredentialLink[]; warnings: string[] } {
   const warnings: string[] = [];
   const profiles: ServerProfileInput[] = [];
+  const credentials: ParsedCredentialLink[] = [];
   const parser = new XMLParser({
     ignoreAttributes: false,
     attributeNamePrefix: "",
@@ -125,7 +135,24 @@ function parseMRemoteNg(content: string): { profiles: ServerProfileInput[]; warn
         node.Password = "";
       }
       const profile = profileFromFields(node, nextPath.join(" / ") || "mRemoteNG");
-      if (profile) profiles.push(profile);
+      if (profile) {
+        const profileIndex = profiles.length;
+        if (profile.password) {
+          credentials.push({
+            profileIndex,
+            credential: {
+              name: `${profile.name} credentials`,
+              username: profile.username,
+              domain: profile.domain,
+              authType: "password",
+              password: profile.password,
+            },
+          });
+          profile.authType = "none";
+          profile.password = undefined;
+        }
+        profiles.push(profile);
+      }
       else warnings.push(`${name || "Unnamed node"}: unsupported protocol or missing host.`);
     }
     for (const [key, child] of Object.entries(node)) {
@@ -135,68 +162,7 @@ function parseMRemoteNg(content: string): { profiles: ServerProfileInput[]; warn
     }
   };
   visit(document, []);
-  return { profiles, warnings };
-}
-
-function decodeRegistryBuffer(buffer: Buffer): string {
-  if (buffer[0] === 0xff && buffer[1] === 0xfe) {
-    return buffer.subarray(2).toString("utf16le");
-  }
-  return buffer.toString("utf8");
-}
-
-function unescapeRegistryString(value: string): string {
-  return value.replace(/\\"/g, '"').replace(/\\\\/g, "\\");
-}
-
-function decodePuttySessionName(value: string): string {
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return value;
-  }
-}
-
-function puttyParity(value: unknown): ServerProfileInput["parity"] {
-  return ({ 0: "none", 1: "odd", 2: "even", 3: "mark", 4: "space" } as const)[Number(value) as 0] ?? "none";
-}
-
-function parsePuttyRegistry(content: string): { profiles: ServerProfileInput[]; warnings: string[] } {
-  const profiles: ServerProfileInput[] = [];
-  const warnings: string[] = [];
-  const sessions = content.split(/^\[(?=HKEY_)/m).slice(1);
-  for (const section of sessions) {
-    const headerEnd = section.indexOf("]");
-    const key = section.slice(0, headerEnd);
-    if (!/\\Software\\SimonTatham\\PuTTY\\Sessions\\/i.test(key)) continue;
-    const rawName = key.split("\\").at(-1) ?? "PuTTY Session";
-    const fields: Record<string, unknown> = { name: decodePuttySessionName(rawName), group: "PuTTY" };
-    for (const line of section.slice(headerEnd + 1).split(/\r?\n/)) {
-      const stringValue = /^"([^"]+)"="(.*)"$/.exec(line);
-      if (stringValue) {
-        fields[stringValue[1] as string] = unescapeRegistryString(stringValue[2] as string);
-        continue;
-      }
-      const dword = /^"([^"]+)"=dword:([0-9a-f]{8})$/i.exec(line);
-      if (dword) fields[dword[1] as string] = Number.parseInt(dword[2] as string, 16);
-    }
-    const serial = text(fields.Protocol).toLowerCase() === "serial";
-    const profile = profileFromFields({
-      ...fields,
-      protocol: fields.Protocol ?? "ssh",
-      host: serial ? fields.SerialLine : fields.HostName,
-      port: fields.PortNumber,
-      username: fields.UserName,
-      privateKeyPath: fields.PublicKeyFile,
-      baudRate: fields.SerialSpeed,
-      dataBits: fields.SerialDataBits,
-      stopBits: Number(fields.SerialStopHalfbits) === 4 ? 2 : 1,
-      parity: puttyParity(fields.SerialParity),
-    }, "PuTTY");
-    if (profile) profiles.push(profile);
-    else warnings.push(`${text(fields.name)}: missing hostname or unsupported PuTTY protocol.`);
-  }
-  return { profiles, warnings };
+  return { profiles, credentials, warnings };
 }
 
 function parseCsvRows(content: string): string[][] {
@@ -386,14 +352,22 @@ export class MigrationController {
     const format = detectFormat(path, request.format);
     if (format === "cgvault") {
       const bundle = await decryptTeamVault(buffer.toString("utf8"), request.teamPassphrase ?? "");
-      return { profiles: bundle.profiles, assets: bundle.assets, warnings: [], path };
+      return { profiles: bundle.profiles, assets: bundle.assets, credentials: [], warnings: [], path };
     }
     const parsed = format === "mremoteng"
       ? parseMRemoteNg(buffer.toString("utf8"))
       : format === "putty"
-        ? parsePuttyRegistry(decodeRegistryBuffer(buffer))
+        ? parsePuttyRegistry(decodePuttyRegistryBuffer(buffer))
         : parseCsv(buffer.toString("utf8"));
-    return { profiles: parsed.profiles, assets: [], warnings: parsed.warnings, path };
+    return {
+      profiles: parsed.profiles,
+      assets: [],
+      credentials: "credentials" in parsed && Array.isArray(parsed.credentials)
+        ? parsed.credentials as ParsedCredentialLink[]
+        : [],
+      warnings: parsed.warnings,
+      path,
+    };
   }
 
   async exportConnections(

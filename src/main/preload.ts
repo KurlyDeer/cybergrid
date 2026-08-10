@@ -50,6 +50,7 @@ const IPC_CHANNELS: typeof import("../shared/ipc").IPC_CHANNELS = {
   sshDisconnect: "cybergrid:ssh:disconnect",
   sshWrite: "cybergrid:ssh:write",
   sshResize: "cybergrid:ssh:resize",
+  sshQuickBackup: "cybergrid:ssh:quick-backup",
   sshData: "cybergrid:ssh:data",
   sshStatus: "cybergrid:ssh:status",
   sftpList: "cybergrid:sftp:list",
@@ -80,6 +81,7 @@ const IPC_CHANNELS: typeof import("../shared/ipc").IPC_CHANNELS = {
   vaultSaveCredentialProfile: "cybergrid:vault:save-credential-profile",
   vaultDeleteCredentialProfile: "cybergrid:vault:delete-credential-profile",
   vaultSetFavorite: "cybergrid:vault:set-favorite",
+  vaultMoveProfile: "cybergrid:vault:move-profile",
   vaultListFolderDefaults: "cybergrid:vault:list-folder-defaults",
   vaultSaveFolderDefaults: "cybergrid:vault:save-folder-defaults",
   vaultDeleteFolderDefaults: "cybergrid:vault:delete-folder-defaults",
@@ -164,6 +166,8 @@ const api: CyberGridApi = {
       const request: SshResizeRequest = { sessionId, cols, rows };
       ipcRenderer.send(IPC_CHANNELS.sshResize, request);
     },
+    quickBackup: (sessionId, profileId) =>
+      ipcRenderer.invoke(IPC_CHANNELS.sshQuickBackup, sessionId, profileId),
     onData: (listener) => {
       const handler = (_event: IpcRendererEvent, payload: SshDataEvent) => listener(payload);
       ipcRenderer.on(IPC_CHANNELS.sshData, handler);
@@ -285,6 +289,8 @@ const api: CyberGridApi = {
       ipcRenderer.invoke(IPC_CHANNELS.vaultDeleteCredentialProfile, credentialProfileId),
     setFavorite: (profileId, favorite) =>
       ipcRenderer.invoke(IPC_CHANNELS.vaultSetFavorite, profileId, favorite),
+    moveProfile: (profileId, group) =>
+      ipcRenderer.invoke(IPC_CHANNELS.vaultMoveProfile, profileId, group),
     listFolderDefaults: () => ipcRenderer.invoke(IPC_CHANNELS.vaultListFolderDefaults),
     saveFolderDefaults: (input: FolderDefaultsInput) =>
       ipcRenderer.invoke(IPC_CHANNELS.vaultSaveFolderDefaults, input),

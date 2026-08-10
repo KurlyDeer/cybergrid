@@ -111,6 +111,8 @@ interface WorkspaceTab {
   postConnectStarted?: boolean;
   policy?: SessionPolicy;
   reconnectTimer?: number;
+  quickBackupButton?: HTMLButtonElement;
+  quickBackupStatus?: HTMLSpanElement;
 }
 
 const DEFAULT_SETTINGS: AppPreferences = {
@@ -192,6 +194,7 @@ let workspaceSaveTimer: number | null = null;
 const excludedBroadcastGroups = new Set<string>();
 let currentSettings: AppPreferences = { ...DEFAULT_SETTINGS };
 let quickSnippetToolbarVisible = localStorage.getItem(QUICK_SNIPPET_TOOLBAR_KEY) === "true";
+let draggedProfileId: string | null = null;
 
 function elementById<T extends HTMLElement>(id: string): T {
   const element = document.getElementById(id);
@@ -213,6 +216,7 @@ const contentArea = elementById<HTMLDivElement>("content-area");
 const terminalStack = elementById<HTMLDivElement>("terminal-stack");
 const connectionState = elementById<HTMLDivElement>("connection-state");
 const profileTree = elementById<HTMLDivElement>("profile-tree");
+const sidebarScroll = elementById<HTMLDivElement>("sidebar-scroll");
 const assetList = elementById<HTMLDivElement>("asset-list");
 const assetCount = elementById<HTMLSpanElement>("asset-count");
 const scanButton = elementById<HTMLButtonElement>("scan-button");
@@ -302,6 +306,8 @@ const serverKeepaliveInput = elementById<HTMLInputElement>("server-keepalive");
 const serverKeepaliveEnabledInput = elementById<HTMLInputElement>("server-keepalive-enabled");
 const serverPersistInput = elementById<HTMLInputElement>("server-persist");
 const serverAutoReconnectInput = elementById<HTMLInputElement>("server-auto-reconnect");
+const serverLegacySshField = elementById<HTMLDivElement>("server-legacy-ssh-field");
+const serverLegacySshInput = elementById<HTMLInputElement>("server-legacy-ssh");
 const serverJumpHostInput = elementById<HTMLInputElement>("server-jump-host");
 const serverProxyOverrideInput = elementById<HTMLInputElement>("server-proxy-override");
 const serverIconInput = elementById<HTMLSelectElement>("server-icon");
@@ -536,7 +542,7 @@ function loadLegacySettings(): AppPreferences {
     if (!isRecord(parsed)) {
       return { ...DEFAULT_SETTINGS };
     }
-    const theme = parsed.theme === "monochrome" || parsed.theme === "custom"
+    const theme = parsed.theme === "light" || parsed.theme === "monochrome" || parsed.theme === "custom"
       ? parsed.theme
       : "dark";
     const fontSize = Number(parsed.fontSize);
@@ -588,6 +594,32 @@ function terminalTheme(settings: AppPreferences): ITheme {
       brightBlue: "#ffffff",
       brightMagenta: "#ffffff",
       brightCyan: "#ffffff",
+      brightWhite: "#ffffff",
+    };
+  }
+
+  if (settings.theme === "light") {
+    return {
+      background: "#ffffff",
+      foreground: "#172437",
+      cursor: "#087f6a",
+      cursorAccent: "#ffffff",
+      selectionBackground: "#9bd8cc88",
+      black: "#172437",
+      red: "#c7354a",
+      green: "#087f6a",
+      yellow: "#8a6500",
+      blue: "#1769aa",
+      magenta: "#7b3fb2",
+      cyan: "#08798a",
+      white: "#e8eef5",
+      brightBlack: "#68798e",
+      brightRed: "#e0495e",
+      brightGreen: "#0a987d",
+      brightYellow: "#a77c00",
+      brightBlue: "#2682c9",
+      brightMagenta: "#9658ca",
+      brightCyan: "#1696a7",
       brightWhite: "#ffffff",
     };
   }
@@ -650,7 +682,13 @@ function applySettings(settings: AppPreferences): void {
   document.documentElement.dataset.theme = settings.theme;
   document.documentElement.style.setProperty(
     "--accent",
-    settings.theme === "custom" ? settings.accent : DEFAULT_SETTINGS.accent,
+    settings.theme === "custom"
+      ? settings.accent
+      : settings.theme === "light"
+        ? "#087f6a"
+        : settings.theme === "monochrome"
+          ? "#ffffff"
+          : DEFAULT_SETTINGS.accent,
   );
   for (const tab of tabs.values()) {
     applyTerminalAppearance(tab, tab.policy?.terminalAppearance);
@@ -1282,6 +1320,7 @@ function updateTabStatus(tab: WorkspaceTab, status: WorkspaceStatus, message?: s
   tab.status = status;
   tab.statusElement.classList.toggle("connected", status === "connected" || status === "running" || status === "ready");
   tab.statusElement.classList.toggle("error", status === "error");
+  if (tab.quickBackupButton) tab.quickBackupButton.disabled = status !== "connected";
   if (status === "error") tab.terminal?.writeln(`\r\n\x1b[31mConnection error: ${message ?? "Unknown error"}\x1b[0m`);
   else if (status === "disconnected" || status === "closed") tab.terminal?.writeln(`\r\n\x1b[90m${message ?? "Disconnected."}\x1b[0m`);
   if (activeTabId === tab.id) {
@@ -1349,6 +1388,7 @@ function attachSshSession(tab: WorkspaceTab, sessionId: string): void {
   queuedSshStatus.delete(sessionId);
   tab.fitAddon?.fit();
   if (tab.terminal) window.cybergrid.ssh.resize(sessionId, tab.terminal.cols, tab.terminal.rows);
+  if (tab.quickBackupButton) tab.quickBackupButton.disabled = false;
   updateBroadcastControls();
 }
 
@@ -1480,6 +1520,35 @@ function handleWebStatus(event: WebStatusEvent): void {
   if (tab) updateTabStatus(tab, event.status, event.message); else queuedWebStatus.set(event.sessionId, event);
 }
 
+function installSwitchBackupAction(tab: WorkspaceTab, profile: ServerProfileSummary): void {
+  if (profile.protocol !== "ssh" || profile.category !== "network") return;
+  const actions = document.createElement("div");
+  actions.className = "terminal-quick-actions";
+  const button = document.createElement("button");
+  button.type = "button";
+  button.disabled = true;
+  button.textContent = "Quick Backup Snapshot";
+  button.title = "Detect the switch vendor and save its running configuration";
+  const status = createTextElement("span", "terminal-quick-action-status", "") as HTMLSpanElement;
+  button.addEventListener("click", async () => {
+    if (!tab.sessionId) return;
+    button.disabled = true;
+    status.textContent = "Capturing configuration...";
+    try {
+      const result = await window.cybergrid.ssh.quickBackup(tab.sessionId, profile.id);
+      status.textContent = `${result.vendor.toUpperCase()} backup saved: ${result.path}`;
+    } catch (error) {
+      status.textContent = errorMessage(error);
+    } finally {
+      button.disabled = !tab.sessionId || tab.status !== "connected";
+    }
+  });
+  actions.append(button, status);
+  tab.paneElement.append(actions);
+  tab.quickBackupButton = button;
+  tab.quickBackupStatus = status;
+}
+
 function createTabForProfile(profile: ServerProfileSummary): WorkspaceTab {
   let tab: WorkspaceTab;
   if (profile.protocol === "rdp") tab = createRdpTab(profile.name, { host: profile.host, port: profile.port, username: profile.username });
@@ -1494,6 +1563,7 @@ function createTabForProfile(profile: ServerProfileSummary): WorkspaceTab {
     group: profile.group, port: profile.port, profileId: profile.id,
   });
   tab.duplicate = () => connectSavedProfile(profile);
+  installSwitchBackupAction(tab, profile);
   return tab;
 }
 
@@ -1580,7 +1650,17 @@ async function connectQuickWeb(url: string): Promise<void> {
   tab.context = tabContext(parsed.hostname, { host: parsed.hostname, ip: parsed.hostname, port: Number(parsed.port || (protocol === "https" ? 443 : 80)) });
   tab.duplicate = () => connectQuickWeb(url);
   updateTabStatus(tab, "loading");
-  try { attachWebSession(tab, await window.cybergrid.web.connect({ url: parsed.toString() })); }
+  const username = decodeURIComponent(parsed.username);
+  const password = decodeURIComponent(parsed.password);
+  parsed.username = "";
+  parsed.password = "";
+  try {
+    attachWebSession(tab, await window.cybergrid.web.connect({
+      url: parsed.toString(),
+      username: username || undefined,
+      password: password || undefined,
+    }));
+  }
   catch (error) { handleConnectionFailure(tab, error); }
 }
 
@@ -2542,11 +2622,51 @@ interface ProfileFolderNode {
   children: Map<string, ProfileFolderNode>;
 }
 
+function autoScrollSidebar(clientY: number): void {
+  const bounds = sidebarScroll.getBoundingClientRect();
+  const edge = 44;
+  if (clientY < bounds.top + edge) sidebarScroll.scrollTop -= 18;
+  else if (clientY > bounds.bottom - edge) sidebarScroll.scrollTop += 18;
+}
+
+async function moveProfileToGroup(profileId: string, group: string): Promise<void> {
+  const profile = savedProfiles.find((candidate) => candidate.id === profileId);
+  if (!profile || profile.group === group) return;
+  connectionState.textContent = `Moving ${profile.name} to ${group}...`;
+  try {
+    await window.cybergrid.vault.moveProfile(profileId, group);
+    await refreshProfiles();
+    connectionState.textContent = `${profile.name} moved to ${group}.`;
+  } catch (error) {
+    connectionState.textContent = errorMessage(error);
+  }
+}
+
 function renderProfiles(): void {
+  const previousScrollTop = sidebarScroll.scrollTop;
   profileTree.replaceChildren();
   groupOptions.replaceChildren();
+  profileTree.ondragover = (event) => {
+    if (!draggedProfileId) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+    autoScrollSidebar(event.clientY);
+    if (!(event.target as HTMLElement).closest(".folder-header")) profileTree.classList.add("drop-target");
+  };
+  profileTree.ondragleave = (event) => {
+    if (!profileTree.contains(event.relatedTarget as Node | null)) profileTree.classList.remove("drop-target");
+  };
+  profileTree.ondrop = (event) => {
+    if ((event.target as HTMLElement).closest(".folder-header")) return;
+    event.preventDefault();
+    profileTree.classList.remove("drop-target");
+    const profileId = event.dataTransfer?.getData("application/x-cybergrid-profile") || draggedProfileId;
+    const targetGroup = (event.target as HTMLElement).closest<HTMLElement>(".server-item")?.dataset.profileGroup;
+    if (profileId) void moveProfileToGroup(profileId, targetGroup || "Ungrouped");
+  };
   if (savedProfiles.length === 0) {
     profileTree.append(createTextElement("div", "sidebar-empty", "No saved connections yet. Add one or import an existing connection tree."));
+    sidebarScroll.scrollTop = previousScrollTop;
     return;
   }
   const root: ProfileFolderNode = { name: "", path: "", profiles: [], children: new Map() };
@@ -2581,6 +2701,8 @@ function renderProfiles(): void {
     button.className = "server-item";
     button.classList.toggle("selected", selectedProfileId === profile.id);
     button.type = "button";
+    button.draggable = true;
+    button.dataset.profileGroup = profile.group;
     button.title = `Select for notes; double-click to connect${profile.inheritFolderDefaults ? " · inherited defaults" : ""}`;
     button.style.setProperty("--node-color", profile.indicatorColor ?? "var(--accent)");
     const endpoint = profile.protocol === "serial"
@@ -2599,8 +2721,22 @@ function renderProfiles(): void {
     button.addEventListener("click", () => {
       selectedProfileId = profile.id;
       populateQuickConnect(profile);
-      renderProfiles();
+      for (const item of profileTree.querySelectorAll(".server-item.selected")) item.classList.remove("selected");
+      button.classList.add("selected");
       if (snippetsDrawerOpen) renderNodeWorkspace();
+    });
+    button.addEventListener("dragstart", (event) => {
+      draggedProfileId = profile.id;
+      row.classList.add("dragging");
+      event.dataTransfer?.setData("application/x-cybergrid-profile", profile.id);
+      event.dataTransfer?.setData("text/plain", profile.name);
+      if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+    });
+    button.addEventListener("dragend", () => {
+      draggedProfileId = null;
+      row.classList.remove("dragging");
+      profileTree.classList.remove("drop-target");
+      for (const item of profileTree.querySelectorAll(".folder-header.drop-target")) item.classList.remove("drop-target");
     });
     button.addEventListener("dblclick", () => void connectSavedProfile(profile));
     button.addEventListener("contextmenu", (event) => openServerContextMenu(event, profile));
@@ -2644,6 +2780,24 @@ function renderProfiles(): void {
       if (collapsedGroups.has(node.path)) collapsedGroups.delete(node.path); else collapsedGroups.add(node.path);
       renderProfiles();
     });
+    folder.addEventListener("dragover", (event) => {
+      if (!draggedProfileId) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+      folder.classList.add("drop-target");
+      autoScrollSidebar(event.clientY);
+    });
+    folder.addEventListener("dragleave", (event) => {
+      if (!folder.contains(event.relatedTarget as Node | null)) folder.classList.remove("drop-target");
+    });
+    folder.addEventListener("drop", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      folder.classList.remove("drop-target");
+      const profileId = event.dataTransfer?.getData("application/x-cybergrid-profile") || draggedProfileId;
+      if (profileId) void moveProfileToGroup(profileId, node.path);
+    });
     folder.addEventListener("contextmenu", (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -2664,6 +2818,7 @@ function renderProfiles(): void {
     parent.append(section);
   };
   for (const node of [...root.children.values()].sort((left, right) => left.name.localeCompare(right.name))) renderFolder(node, profileTree);
+  sidebarScroll.scrollTop = previousScrollTop;
 }
 
 async function refreshProfiles(): Promise<void> {
@@ -3219,7 +3374,7 @@ const DEFAULT_PROTOCOL_PORTS: Record<Exclude<ConnectionProtocol, "serial">, numb
 };
 
 const CATEGORY_PROTOCOLS: Record<ConnectionCategory, ConnectionProtocol[]> = {
-  server: ["rdp", "ssh"],
+  server: ["rdp", "ssh", "vnc"],
   network: ["ssh", "telnet", "raw", "serial"],
   web: ["https", "http"],
   desktop: ["vnc", "rdp"],
@@ -3233,27 +3388,30 @@ const CATEGORY_DEFAULT_PROTOCOL: Record<ConnectionCategory, ConnectionProtocol> 
 };
 
 function selectConnectionCategory(category: ConnectionCategory, resetProtocol = true): void {
-  connectionCategory = category;
+  const normalizedCategory: ConnectionCategory = category === "desktop" ? "server" : category;
+  connectionCategory = normalizedCategory;
   for (const button of categoryButtons) {
-    button.classList.toggle("active", button.dataset.connectionCategory === category);
-    button.setAttribute("aria-pressed", String(button.dataset.connectionCategory === category));
+    button.classList.toggle("active", button.dataset.connectionCategory === normalizedCategory);
+    button.setAttribute("aria-pressed", String(button.dataset.connectionCategory === normalizedCategory));
   }
-  const allowed = new Set(CATEGORY_PROTOCOLS[category]);
+  const allowed = new Set(CATEGORY_PROTOCOLS[normalizedCategory]);
   for (const option of serverProtocolInput.options) {
     option.hidden = !allowed.has(option.value as ConnectionProtocol);
     option.disabled = !allowed.has(option.value as ConnectionProtocol);
   }
   if (resetProtocol || !allowed.has(serverProtocolInput.value as ConnectionProtocol)) {
-    serverProtocolInput.value = CATEGORY_DEFAULT_PROTOCOL[category];
+    serverProtocolInput.value = CATEGORY_DEFAULT_PROTOCOL[normalizedCategory];
   }
+  if (resetProtocol) serverLegacySshInput.checked = normalizedCategory === "network";
   updateProfileFields(true);
 }
 
 function updateProfileFields(resetDefaults = false): void {
   const protocol = serverProtocolInput.value as ConnectionProtocol;
   const serial = protocol === "serial";
-  const usesUsername = protocol === "ssh" || protocol === "rdp";
-  const usesAuthentication = protocol === "ssh" || protocol === "rdp" || protocol === "vnc";
+  const webProtocol = protocol === "http" || protocol === "https";
+  const usesUsername = protocol === "ssh" || protocol === "rdp" || webProtocol;
+  const usesAuthentication = protocol === "ssh" || protocol === "rdp" || protocol === "vnc" || webProtocol;
   const privateKeyOption = authTypeInput.querySelector<HTMLOptionElement>('option[value="privateKey"]');
   renderCredentialProfileOptions();
   if (!usesAuthentication) serverCredentialProfileInput.value = "";
@@ -3269,7 +3427,7 @@ function updateProfileFields(resetDefaults = false): void {
   serverCredentialProfileField.hidden = !usesAuthentication;
   serverUsernameField.hidden = !usesUsername || linkedCredential;
   serverDomainInput.closest<HTMLElement>(".field")?.toggleAttribute("hidden", protocol !== "rdp" || linkedCredential);
-  serverUsernameInput.required = usesUsername && !serverInheritFolderInput.checked && !linkedCredential;
+  serverUsernameInput.required = (protocol === "ssh" || protocol === "rdp") && !serverInheritFolderInput.checked && !linkedCredential;
   serverAuthField.hidden = !usesAuthentication || linkedCredential;
   privateKeyOption?.toggleAttribute("disabled", protocol !== "ssh");
 
@@ -3290,6 +3448,8 @@ function updateProfileFields(resetDefaults = false): void {
   serverPasswordInput.required = usesPassword && !serverPasswordInput.placeholder.startsWith("Stored");
   serverKeyPathInput.required = usesPrivateKey && !serverKeyPathInput.placeholder.startsWith("Stored");
   serverKeepaliveInput.disabled = !serverKeepaliveEnabledInput.checked || protocol !== "ssh";
+  serverLegacySshField.hidden = protocol !== "ssh";
+  serverLegacySshInput.disabled = protocol !== "ssh";
 }
 
 function openServerModal(profile?: ServerProfileSummary): void {
@@ -3330,6 +3490,7 @@ function openServerModal(profile?: ServerProfileSummary): void {
     serverKeepaliveInput.value = profile.keepaliveSeconds ? String(profile.keepaliveSeconds) : "";
     serverPersistInput.checked = profile.persistUntilAppCloses;
     serverAutoReconnectInput.checked = profile.autoReconnect;
+    serverLegacySshInput.checked = profile.enableLegacySshAlgorithms;
     serverJumpHostInput.value = profile.jumpHost ?? "";
     serverProxyOverrideInput.value = profile.proxyOverride ?? "";
     serverIconInput.value = profile.icon;
@@ -3347,6 +3508,7 @@ function openServerModal(profile?: ServerProfileSummary): void {
     serverCredentialProfileInput.value = "";
     serverPasswordInput.placeholder = "";
     serverPassphraseInput.placeholder = "";
+    serverLegacySshInput.checked = connectionCategory === "network";
   }
   updateProfileFields(false);
   if (!serverModal.open) {
@@ -3848,7 +4010,10 @@ migrationImportButton.addEventListener("click", async () => {
     const warningText = result.warnings.length > 0
       ? ` ${result.warnings.length} warning${result.warnings.length === 1 ? "" : "s"}: ${result.warnings.slice(0, 3).join(" ")}`
       : "";
-    migrationStatus.textContent = `Imported ${result.imported} connection${result.imported === 1 ? "" : "s"} from ${result.path}.${warningText}`;
+    const credentialText = result.credentialProfilesImported > 0
+      ? ` Linked ${result.credentialProfilesImported} credential profile${result.credentialProfilesImported === 1 ? "" : "s"}.`
+      : "";
+    migrationStatus.textContent = `Imported ${result.imported} connection${result.imported === 1 ? "" : "s"} from ${result.path}.${credentialText}${warningText}`;
   } catch (error) {
     migrationStatus.textContent = "";
     migrationError.textContent = errorMessage(error);
@@ -4152,6 +4317,7 @@ serverForm.addEventListener("submit", async (event) => {
     keepAliveEnabled: serverKeepaliveEnabledInput.checked,
     persistUntilAppCloses: serverPersistInput.checked,
     autoReconnect: serverAutoReconnectInput.checked,
+    enableLegacySshAlgorithms: protocol === "ssh" && serverLegacySshInput.checked,
     jumpHost: serverJumpHostInput.value.trim() || undefined,
     proxyOverride: serverProxyOverrideInput.value.trim() || undefined,
     icon: (serverIconInput.value || undefined) as DeviceIcon | undefined,

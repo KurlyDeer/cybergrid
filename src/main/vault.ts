@@ -266,6 +266,10 @@ function parseProfile(value: unknown): DecryptedServerProfile {
     keepAliveEnabled: value.keepAliveEnabled === undefined ? undefined : value.keepAliveEnabled !== false,
     persistUntilAppCloses: value.persistUntilAppCloses === undefined ? undefined : value.persistUntilAppCloses === true,
     autoReconnect: value.autoReconnect === undefined ? undefined : value.autoReconnect === true,
+    enableLegacySshAlgorithms:
+      value.enableLegacySshAlgorithms === undefined
+        ? undefined
+        : value.enableLegacySshAlgorithms === true,
     jumpHost: optionalString(value.jumpHost, "profile.jumpHost"),
     proxyOverride: optionalString(value.proxyOverride, "profile.proxyOverride"),
     icon: value.icon === undefined ? undefined : parseDeviceIcon(value.icon, "profile.icon"),
@@ -341,7 +345,7 @@ function optionalColor(value: unknown, field: string): string | undefined {
 function parseTerminalOverrides(value: unknown, field: string): TerminalAppearanceOverrides | undefined {
   if (value === undefined) return undefined;
   if (!isRecord(value)) throw new Error(`Vault field ${field} is invalid.`);
-  const theme = value.theme === "dark" || value.theme === "monochrome" || value.theme === "custom"
+  const theme = value.theme === "dark" || value.theme === "light" || value.theme === "monochrome" || value.theme === "custom"
     ? value.theme : undefined;
   const fontSize = value.fontSize === undefined ? undefined : Number(value.fontSize);
   const lineHeight = value.lineHeight === undefined ? undefined : Number(value.lineHeight);
@@ -741,6 +745,8 @@ function summarizeProfile(profile: DecryptedServerProfile): ServerProfileSummary
     keepAliveEnabled: profile.keepAliveEnabled !== false,
     persistUntilAppCloses: profile.persistUntilAppCloses === true,
     autoReconnect: profile.autoReconnect === true,
+    enableLegacySshAlgorithms:
+      profile.enableLegacySshAlgorithms ?? profile.category === "network",
     jumpHost: profile.jumpHost,
     proxyOverride: profile.proxyOverride,
     icon: profile.icon ?? defaultProfileIcon(profile),
@@ -1024,6 +1030,7 @@ export class VaultController {
       keepAliveEnabled: profile.keepAliveEnabled,
       persistUntilAppCloses: profile.persistUntilAppCloses,
       autoReconnect: profile.autoReconnect,
+      enableLegacySshAlgorithms: profile.enableLegacySshAlgorithms,
       jumpHost: profile.jumpHost,
       proxyOverride: profile.proxyOverride,
       icon: profile.icon,
@@ -1059,6 +1066,24 @@ export class VaultController {
       throw error;
     }
     return summarizeProfile(profile);
+  }
+
+  async moveProfile(profileId: string, group: string): Promise<ServerProfileSummary> {
+    const payload = this.requirePayload();
+    const profile = payload.profiles.find((candidate) => candidate.id === profileId);
+    if (!profile) throw new Error("Server profile was not found.");
+    const previousGroup = profile.group;
+    const previousUpdatedAt = profile.updatedAt;
+    profile.group = group;
+    profile.updatedAt = new Date().toISOString();
+    try {
+      await this.persist();
+    } catch (error) {
+      profile.group = previousGroup;
+      profile.updatedAt = previousUpdatedAt;
+      throw error;
+    }
+    return summarizeProfile(this.getConnectionProfile(profile.id));
   }
 
   async deleteProfile(profileId: string): Promise<void> {

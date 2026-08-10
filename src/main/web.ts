@@ -10,6 +10,9 @@ import {
 interface WebSession {
   view: WebContentsView;
   sender: WebContents;
+  credentialOrigin: string;
+  username?: string;
+  password?: string;
   closed: boolean;
 }
 
@@ -43,7 +46,14 @@ export class WebController {
         partition: "persist:cybergrid-web",
       },
     });
-    const session: WebSession = { view, sender, closed: false };
+    const session: WebSession = {
+      view,
+      sender,
+      credentialOrigin: url.origin,
+      username: config.username,
+      password: config.password,
+      closed: false,
+    };
     this.sessions.set(sessionId, session);
     window.contentView.addChildView(view);
     view.setBounds({ x: 0, y: 0, width: 0, height: 0 });
@@ -67,7 +77,11 @@ export class WebController {
       }
     });
     view.webContents.on("did-start-loading", () => this.sendStatus(sessionId, session, "loading"));
-    view.webContents.on("did-finish-load", () => this.sendStatus(sessionId, session, "ready"));
+    view.webContents.on("did-finish-load", () => {
+      void this.autofillSameOrigin(session).finally(() => {
+        this.sendStatus(sessionId, session, "ready");
+      });
+    });
     view.webContents.on("did-fail-load", (_event, code, description) => {
       if (code !== -3) {
         this.sendStatus(sessionId, session, "error", description);
@@ -119,6 +133,39 @@ export class WebController {
       throw new Error("Embedded browser session was not found.");
     }
     return session;
+  }
+
+  private async autofillSameOrigin(session: WebSession): Promise<void> {
+    if ((!session.username && !session.password) || session.view.webContents.isDestroyed()) return;
+    let currentUrl: URL;
+    try {
+      currentUrl = requireWebUrl(session.view.webContents.getURL());
+    } catch {
+      return;
+    }
+    if (currentUrl.origin !== session.credentialOrigin) return;
+    const username = JSON.stringify(session.username ?? "");
+    const password = JSON.stringify(session.password ?? "");
+    await session.view.webContents.executeJavaScript(`(() => {
+      const setValue = (element, value) => {
+        if (!element || !value) return;
+        const descriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value");
+        descriptor?.set?.call(element, value);
+        element.dispatchEvent(new Event("input", { bubbles: true }));
+        element.dispatchEvent(new Event("change", { bubbles: true }));
+      };
+      const visible = (element) => Boolean(element && !element.disabled && element.offsetParent !== null);
+      const passwordField = [...document.querySelectorAll('input[type="password"]')].find(visible);
+      const usernameSelectors = [
+        'input[autocomplete="username"]', 'input[name*="user" i]', 'input[id*="user" i]',
+        'input[name*="login" i]', 'input[id*="login" i]', 'input[type="email"]', 'input[type="text"]'
+      ];
+      const usernameField = usernameSelectors
+        .flatMap((selector) => [...document.querySelectorAll(selector)])
+        .find((element) => visible(element) && element !== passwordField);
+      setValue(usernameField, ${username});
+      setValue(passwordField, ${password});
+    })()`, true).catch(() => undefined);
   }
 
   private finish(sessionId: string, session: WebSession): void {

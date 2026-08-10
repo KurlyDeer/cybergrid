@@ -35,6 +35,19 @@
         --danger: #ffffff;
       }
 
+      :root[data-theme="light"] {
+        color-scheme: light;
+        --background: #f4f7fb;
+        --panel: #ffffff;
+        --panel-raised: #eaf0f7;
+        --border: #c5d1df;
+        --text: #172437;
+        --muted: #5e7087;
+        --accent: #087f6a;
+        --accent-soft: rgba(8, 127, 106, 0.13);
+        --danger: #c7354a;
+      }
+
       * {
         box-sizing: border-box;
       }
@@ -178,6 +191,49 @@
         background: #000000;
       }
 
+      :root[data-theme="light"] .sidebar {
+        background: #e9eff6;
+      }
+
+      :root[data-theme="light"] .quick-connect-bar input,
+      :root[data-theme="light"] .field input,
+      :root[data-theme="light"] .field select,
+      :root[data-theme="light"] .sftp-path-input,
+      :root[data-theme="light"] .snippets-toolbar input,
+      :root[data-theme="light"] .snippet-form input,
+      :root[data-theme="light"] .snippet-form select,
+      :root[data-theme="light"] .snippet-form textarea,
+      :root[data-theme="light"] .backup-editor textarea,
+      :root[data-theme="light"] .help-topic code {
+        background: #ffffff;
+      }
+
+      :root[data-theme="light"] .tabs-row,
+      :root[data-theme="light"] .vnc-pane {
+        background: #e9eff6;
+      }
+
+      :root[data-theme="light"] .vault-overlay {
+        background: radial-gradient(circle at 50% 42%, var(--accent-soft), transparent 32%), rgba(237, 243, 249, 0.98);
+      }
+
+      :root[data-theme="light"] .vault-card,
+      :root[data-theme="light"] .documentation-dialog > .modal-header,
+      :root[data-theme="light"] .documentation-dialog > .modal-actions {
+        background: var(--panel);
+      }
+
+      :root[data-theme="light"] .help-topic p,
+      :root[data-theme="light"] .help-topic li,
+      :root[data-theme="light"] .backup-card pre {
+        color: var(--muted);
+      }
+
+      :root[data-theme="light"] .node-badge,
+      :root[data-theme="light"] .primary-button {
+        color: #ffffff;
+      }
+
       .brand {
         display: flex;
         align-items: center;
@@ -298,6 +354,13 @@
         color: var(--text);
       }
 
+      .folder-header.drop-target,
+      .server-tree.drop-target {
+        background: var(--accent-soft);
+        box-shadow: inset 0 0 0 1px var(--accent);
+        color: var(--text);
+      }
+
       .folder-chevron {
         font-family: ui-monospace, monospace;
         font-size: 10px;
@@ -330,6 +393,10 @@
         display: grid;
         grid-template-columns: minmax(0, 1fr) 28px;
         align-items: center;
+      }
+
+      .server-row.dragging {
+        opacity: 0.45;
       }
 
       .server-item {
@@ -779,6 +846,36 @@
         inset: 0;
         display: none;
       }
+
+      .terminal-quick-actions {
+        position: absolute;
+        z-index: 8;
+        top: 10px;
+        right: 12px;
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        padding: 5px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: color-mix(in srgb, var(--panel) 92%, transparent);
+        box-shadow: 0 8px 28px rgba(0, 0, 0, 0.24);
+      }
+
+      .terminal-quick-actions button {
+        padding: 6px 9px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        background: var(--panel-raised);
+        color: var(--text);
+        cursor: pointer;
+        font-size: 10px;
+        font-weight: 800;
+      }
+
+      .terminal-quick-actions button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+      .terminal-quick-actions button:disabled { cursor: wait; opacity: .55; }
+      .terminal-quick-action-status { max-width: 260px; color: var(--muted); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
       .workspace-pane.active {
         display: block;
@@ -1937,7 +2034,7 @@
       .node-badge { margin-left: auto; padding: 1px 5px; border-radius: 999px; background: var(--node-color, var(--accent)); color: #07110e; font-size: 8px; font-weight: 900; }
       .server-item.selected { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); background: var(--accent-soft); }
       .connection-dialog { width: min(840px, calc(100vw - 32px)); }
-      .category-picker { display: grid; grid-column: 1 / -1; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+      .category-picker { display: grid; grid-column: 1 / -1; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
       .category-card { min-height: 72px; padding: 10px; border: 1px solid var(--border); border-radius: 9px; background: var(--panel-raised); color: var(--muted); cursor: pointer; text-align: left; }
       .category-card strong { display: block; margin-bottom: 4px; color: var(--text); font-size: 12px; }
       .category-card span { font-size: 10px; line-height: 1.35; }
@@ -2078,7 +2175,7 @@
           <span>CYBERGRID</span>
         </div>
 
-        <div class="sidebar-scroll">
+        <div class="sidebar-scroll" id="sidebar-scroll">
           <div class="sidebar-toolbar">
             <h1>Connections</h1>
             <div class="sidebar-toolbar-actions">
@@ -2255,10 +2352,9 @@
         </header>
         <div class="modal-body">
           <div class="category-picker" role="group" aria-label="Connection category">
-            <button class="category-card active" type="button" data-connection-category="server"><strong>+ Server / Computer</strong><span>RDP or SSH administration</span></button>
+            <button class="category-card active" type="button" data-connection-category="server"><strong>+ Server &amp; Workstation</strong><span>RDP, SSH, or VNC administration</span></button>
             <button class="category-card" type="button" data-connection-category="network"><strong>+ Network Device</strong><span>SSH, Telnet, RAW, or Serial</span></button>
             <button class="category-card" type="button" data-connection-category="web"><strong>+ Web Console</strong><span>HTTPS for iDRAC, iLO, and firewalls</span></button>
-            <button class="category-card" type="button" data-connection-category="desktop"><strong>+ Desktop / VM</strong><span>VNC, Hyper-V, or VMware console</span></button>
           </div>
           <div class="connection-section-title">Essentials</div>
           <div class="field"><label for="server-name">Connection name</label><input id="server-name" required maxlength="100" placeholder="ERP-PROD-01" autocomplete="off" /></div>
@@ -2293,6 +2389,7 @@
                 <div class="checkbox-field compact-check"><input id="server-keepalive-enabled" type="checkbox" checked /><label class="checkbox-label" for="server-keepalive-enabled">SSH keep-alive</label></div>
                 <div class="checkbox-field compact-check"><input id="server-persist" type="checkbox" /><label class="checkbox-label" for="server-persist">Keep until app closes</label></div>
                 <div class="checkbox-field compact-check"><input id="server-auto-reconnect" type="checkbox" /><label class="checkbox-label" for="server-auto-reconnect">Auto-reconnect on drop</label></div>
+                <div class="checkbox-field compact-check" id="server-legacy-ssh-field"><input id="server-legacy-ssh" type="checkbox" /><label class="checkbox-label" for="server-legacy-ssh">Enable Legacy Cisco/Switch SSH Ciphers</label></div>
               </div>
               <div class="field"><label for="server-keepalive">Keepalive interval (seconds)</label><input id="server-keepalive" type="number" min="1" max="300" placeholder="Inherited / 10" /></div>
               <div class="field"><label for="server-tags">Search tags</label><input id="server-tags" maxlength="680" placeholder="database, production, east-coast" /></div>
@@ -2304,7 +2401,7 @@
               <div class="field color-field"><label for="server-indicator-color">Indicator color</label><input id="server-indicator-color" type="color" value="#23d5ab" /></div>
               <div class="icon-picker-note">Badges are short operational labels; colors provide a fast environment or application cue in dense trees.</div>
               <div class="subsection-label">Terminal override</div>
-              <div class="field"><label for="server-terminal-theme">Color scheme</label><select id="server-terminal-theme"><option value="">Use group / global</option><option value="dark">CyberGrid Dark</option><option value="monochrome">Monochrome</option><option value="custom">Custom colors</option></select></div>
+              <div class="field"><label for="server-terminal-theme">Color scheme</label><select id="server-terminal-theme"><option value="">Use group / global</option><option value="dark">CyberGrid Dark</option><option value="light">CyberGrid Light</option><option value="monochrome">Monochrome</option><option value="custom">Custom colors</option></select></div>
               <div class="field"><label for="server-terminal-font">Font family</label><input id="server-terminal-font" maxlength="200" placeholder="Use group / global" /></div>
               <div class="field"><label for="server-terminal-size">Font size</label><input id="server-terminal-size" type="number" min="10" max="28" placeholder="Global" /></div>
               <div class="field"><label for="server-terminal-line-height">Line height</label><input id="server-terminal-line-height" type="number" min="1" max="2" step="0.05" placeholder="1.18" /></div>
@@ -2348,7 +2445,7 @@
           <div class="field"><label for="folder-defaults-icon">Folder / child icon</label><select id="folder-defaults-icon"><option value="">No override</option><option value="windows">Windows Server</option><option value="ubuntu">Ubuntu / Debian</option><option value="redhat">Red Hat / CentOS</option><option value="macos">macOS</option><option value="bare-metal">Bare Metal</option><option value="vmware">VMware</option><option value="hyperv">Hyper-V</option><option value="cisco">Cisco Switch</option><option value="fortinet">Fortinet Firewall</option><option value="router">Router</option><option value="database">Database</option><option value="web-server">Web Server</option><option value="server">Generic Server</option></select></div>
           <div class="field"><label for="folder-defaults-badge">Application badge</label><input id="folder-defaults-badge" maxlength="4" placeholder="ERP" /></div>
           <div class="field color-field"><label for="folder-defaults-color">Indicator color</label><input id="folder-defaults-color" type="color" value="#23d5ab" /></div>
-          <div class="field"><label for="folder-defaults-terminal-theme">Terminal scheme</label><select id="folder-defaults-terminal-theme"><option value="">Global default</option><option value="dark">CyberGrid Dark</option><option value="monochrome">Monochrome</option><option value="custom">Custom colors</option></select></div>
+          <div class="field"><label for="folder-defaults-terminal-theme">Terminal scheme</label><select id="folder-defaults-terminal-theme"><option value="">Global default</option><option value="dark">CyberGrid Dark</option><option value="light">CyberGrid Light</option><option value="monochrome">Monochrome</option><option value="custom">Custom colors</option></select></div>
           <div class="field"><label for="folder-defaults-terminal-font">Terminal font</label><input id="folder-defaults-terminal-font" maxlength="200" placeholder="Global default" /></div>
           <div class="field"><label for="folder-defaults-terminal-size">Terminal font size</label><input id="folder-defaults-terminal-size" type="number" min="10" max="28" /></div>
           <div class="field"><label for="folder-defaults-line-height">Terminal line height</label><input id="folder-defaults-line-height" type="number" min="1" max="2" step="0.05" /></div>
@@ -2565,7 +2662,7 @@
               <h3>Terminal Theme &amp; Fonts</h3>
               <p>Changes apply to every open and future terminal session.</p>
               <div class="settings-grid">
-                <div class="field"><label for="theme-mode">Theme</label><select id="theme-mode"><option value="dark">CyberGrid Dark</option><option value="monochrome">High-contrast monochrome</option><option value="custom">Custom palette</option></select></div>
+                <div class="field"><label for="theme-mode">Theme</label><select id="theme-mode"><option value="dark">CyberGrid Dark</option><option value="light">CyberGrid Light</option><option value="monochrome">High-contrast monochrome</option><option value="custom">Custom palette</option></select></div>
                 <div class="checkbox-field"><input id="terminal-cursor-blink" type="checkbox" /><label class="checkbox-label" for="terminal-cursor-blink">Blinking cursor</label></div>
                 <div class="field full-width"><label for="terminal-font-family">Terminal font family</label><input id="terminal-font-family" maxlength="200" /></div>
                 <div class="field"><label for="terminal-font-size">Font size</label><input id="terminal-font-size" type="number" min="10" max="28" required /></div>
@@ -2668,7 +2765,7 @@
           <article class="help-topic" data-help-panel="migration" hidden>
             <h3>Import / Export</h3>
             <p>Open <strong>File → Import / Export</strong>. CyberGrid accepts mRemoteNG <code>confCons.xml</code>, PuTTY Registry exports, CSV, and encrypted <code>.cgvault</code> files.</p>
-            <ul><li>Review imported profiles before first use; source formats may omit secrets or use different protocol defaults.</li><li>CSV and legacy exports omit ordinary passwords. Use environment tokens such as <code>${USER_SECRET}</code> for portable team trees.</li><li><code>.cgvault</code> is the credential-preserving team format and requires its own strong passphrase.</li><li>For offline continuity, use the encrypted Disaster Recovery Runbook in Settings &gt; Security.</li></ul>
+            <ul><li>Review imported profiles before first use; source formats may use different protocol defaults.</li><li>Plaintext mRemoteNG credentials are moved into central Vault Credential Profiles. Passwords encrypted by mRemoteNG itself still require re-entry.</li><li>CSV and PuTTY exports omit ordinary passwords. Use environment tokens such as <code>${USER_SECRET}</code> for portable team trees.</li><li><code>.cgvault</code> is the credential-preserving team format and requires its own strong passphrase.</li><li>For offline continuity, use the encrypted Disaster Recovery Runbook in Settings &gt; Security.</li></ul>
           </article>
           <article class="help-topic" data-help-panel="transfers" hidden>
             <h3>SFTP Transfers &amp; Config Backups</h3>

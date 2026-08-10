@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { mkdir, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import type { WebContents } from "electron";
 import { AuditController, type AuditSessionContext } from "./audit";
 import {
@@ -9,6 +11,7 @@ import {
   type SshConnectionConfig,
   type SshConnectionStatus,
   type SshStatusEvent,
+  type SwitchBackupResult,
 } from "../shared/ipc";
 
 type Client = import("ssh2").Client;
@@ -37,7 +40,10 @@ export class SshController {
   private readonly sessions = new Map<string, SshSession>();
   private readonly observedSenders = new WeakSet<WebContents>();
 
-  constructor(private readonly audit: AuditController) {}
+  constructor(
+    private readonly audit: AuditController,
+    private readonly backupDirectory: string,
+  ) {}
 
   async connect(
     config: SshConnectionConfig,
@@ -118,6 +124,32 @@ export class SshController {
       keepaliveInterval: config.keepaliveInterval ?? 10_000,
       keepaliveCountMax: 3,
       tryKeyboard: Boolean(config.password || config.totpCode),
+      algorithms: config.enableLegacyAlgorithms
+        ? {
+            kex: [
+              "diffie-hellman-group1-sha1",
+              "diffie-hellman-group14-sha1",
+              "diffie-hellman-group-exchange-sha1",
+              "diffie-hellman-group-exchange-sha256",
+              "ecdh-sha2-nistp256",
+            ],
+            cipher: [
+              "aes128-ctr",
+              "aes192-ctr",
+              "aes256-ctr",
+              "aes128-cbc",
+              "3des-cbc",
+              "aes256-cbc",
+            ],
+            serverHostKey: [
+              "ssh-rsa",
+              "ssh-dss",
+              "ecdsa-sha2-nistp256",
+              "rsa-sha2-512",
+              "rsa-sha2-256",
+            ],
+          }
+        : undefined,
     };
 
     setImmediate(() => {
@@ -135,6 +167,31 @@ export class SshController {
 
   resize(sessionId: string, cols: number, rows: number): void {
     this.getOpenSession(sessionId).stream?.setWindow(rows, cols, 0, 0);
+  }
+
+  async quickBackup(sessionId: string, displayName: string): Promise<SwitchBackupResult> {
+    const session = this.getOpenSession(sessionId);
+    let versionOutput = await this.captureCommand(session, "show version", 12_000);
+    let vendor = this.detectSwitchVendor(versionOutput);
+    if (vendor === "unknown" && /(?:unknown|invalid|not found|unrecognized)/i.test(versionOutput)) {
+      versionOutput += await this.captureCommand(session, "get system status", 12_000);
+      vendor = this.detectSwitchVendor(versionOutput);
+    }
+
+    const command = vendor === "fortinet" ? "show full-configuration" : "show running-config";
+    const output = await this.captureCommand(session, command, 45_000, 1_500);
+    if (!output.trim()) throw new Error("The switch returned no configuration output.");
+
+    await mkdir(this.backupDirectory, { recursive: true, mode: 0o700 });
+    const timestamp = new Date().toISOString().replace(/:/g, "-").replace(/\.\d{3}Z$/, "Z");
+    const safeName = displayName
+      .normalize("NFKD")
+      .replace(/[^a-z0-9._-]+/gi, "_")
+      .replace(/^_+|_+$/g, "")
+      .slice(0, 80) || "Switch";
+    const path = join(this.backupDirectory, `${safeName}_${timestamp}.cfg`);
+    await writeFile(path, output, { encoding: "utf8", mode: 0o600 });
+    return { path, vendor, command, capturedBytes: Buffer.byteLength(output, "utf8") };
   }
 
   async listDirectory(sessionId: string, remotePath: string): Promise<SftpDirectoryListing> {
@@ -285,6 +342,56 @@ export class SshController {
       });
     });
     return session.sftpPromise;
+  }
+
+  private captureCommand(
+    session: SshSession,
+    command: string,
+    timeoutMs: number,
+    idleMs = 900,
+  ): Promise<string> {
+    const stream = session.stream;
+    if (!stream) throw new Error("SSH session is not connected.");
+    return new Promise<string>((resolve, reject) => {
+      let output = "";
+      let settled = false;
+      let idleTimer: NodeJS.Timeout | undefined;
+      let timeout: NodeJS.Timeout | undefined;
+      const cleanup = (): void => {
+        if (timeout) clearTimeout(timeout);
+        if (idleTimer) clearTimeout(idleTimer);
+        stream.off("data", onData);
+        stream.off("error", onError);
+      };
+      const finish = (): void => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve(output);
+      };
+      const onData = (data: Buffer): void => {
+        output += data.toString("utf8");
+        if (idleTimer) clearTimeout(idleTimer);
+        idleTimer = setTimeout(finish, idleMs);
+      };
+      const onError = (error: Error): void => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(error);
+      };
+      stream.on("data", onData);
+      stream.on("error", onError);
+      timeout = setTimeout(finish, timeoutMs);
+      stream.write(`${command}\r`);
+    });
+  }
+
+  private detectSwitchVendor(output: string): SwitchBackupResult["vendor"] {
+    if (/forti(?:gate|os|net)|fortinet/i.test(output)) return "fortinet";
+    if (/\b(?:aruba|procurve|hewlett[- ]packard|hpe|comware)\b/i.test(output)) return "hp";
+    if (/\b(?:cisco|ios(?: xe)?|nx-os|catalyst)\b/i.test(output)) return "cisco";
+    return "unknown";
   }
 
   private joinRemotePath(directory: string, name: string): string {
