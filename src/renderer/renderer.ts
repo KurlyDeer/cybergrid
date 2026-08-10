@@ -4289,6 +4289,12 @@ openShortcutsButton.addEventListener("click", openShortcuts);
 shortcutsCloseButton.addEventListener("click", () => shortcutsModal.close());
 helpModal.addEventListener("click", (event) => { if (event.target === helpModal) helpModal.close(); });
 shortcutsModal.addEventListener("click", (event) => { if (event.target === shortcutsModal) shortcutsModal.close(); });
+for (const dialog of [helpModal, shortcutsModal]) {
+  dialog.addEventListener("cancel", (event) => {
+    event.preventDefault();
+    dialog.close();
+  });
+}
 
 commandPaletteInput.addEventListener("input", () => {
   paletteSelectionIndex = 0;

@@ -181,6 +181,29 @@ function sendMenuCommand(command: AppMenuCommand): void {
   window.webContents.send(IPC_CHANNELS.appMenuCommand, command);
 }
 
+function syncFullscreenWindowChrome(window: BrowserWindow): void {
+  if (window.isDestroyed()) return;
+  window.setAutoHideMenuBar(false);
+  window.setMenuBarVisibility(true);
+  const menuItem = Menu.getApplicationMenu()?.getMenuItemById("fullscreen-toggle");
+  if (menuItem) {
+    menuItem.label = window.isFullScreen() ? "Exit Fullscreen (F11)" : "Enter Fullscreen (F11)";
+  }
+}
+
+function toggleMainWindowFullscreen(): void {
+  showMainWindow();
+  const window = mainWindow;
+  if (!window || window.isDestroyed()) return;
+  window.setFullScreen(!window.isFullScreen());
+}
+
+function exitMainWindowFullscreen(): void {
+  const window = mainWindow;
+  if (!window || window.isDestroyed() || !window.isFullScreen()) return;
+  window.setFullScreen(false);
+}
+
 function showMainMessageBox(options: MessageBoxOptions): Promise<Electron.MessageBoxReturnValue> {
   const window = mainWindow;
   return window && !window.isDestroyed()
@@ -242,7 +265,17 @@ function installApplicationMenu(): void {
         { label: "Split Grid View (2x2)", accelerator: "CommandOrControl+Shift+G", click: command("toggle-grid") },
         { type: "separator" },
         { role: "resetZoom", label: "Reset Zoom" },
-        { role: "togglefullscreen", label: "Fullscreen" },
+        {
+          id: "fullscreen-toggle",
+          label: "Enter Fullscreen (F11)",
+          accelerator: "F11",
+          click: toggleMainWindowFullscreen,
+        },
+        {
+          label: "Exit Fullscreen",
+          accelerator: "CommandOrControl+Shift+F",
+          click: exitMainWindowFullscreen,
+        },
       ],
     },
     {
@@ -301,6 +334,7 @@ function installApplicationMenu(): void {
     },
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+  if (mainWindow && !mainWindow.isDestroyed()) syncFullscreenWindowChrome(mainWindow);
 }
 
 async function getSshController(): Promise<SshController> {
@@ -458,6 +492,7 @@ function createMainWindow(): BrowserWindow {
     minWidth: 980,
     minHeight: 640,
     show: false,
+    autoHideMenuBar: false,
     backgroundColor: "#1e1e1e",
     title: "CyberGrid",
     webPreferences: {
@@ -492,6 +527,8 @@ function createMainWindow(): BrowserWindow {
   window.on("session-end", () => {
     isQuitting = true;
   });
+  window.on("enter-full-screen", () => syncFullscreenWindowChrome(window));
+  window.on("leave-full-screen", () => syncFullscreenWindowChrome(window));
   window.on("closed", () => {
     if (mainWindow === window) {
       mainWindow = null;
@@ -502,6 +539,20 @@ function createMainWindow(): BrowserWindow {
   window.webContents.on("will-navigate", (event, url) => {
     if (url !== window.webContents.getURL()) {
       event.preventDefault();
+    }
+  });
+  window.webContents.on("before-input-event", (event, input) => {
+    if (input.type !== "keyDown") return;
+    const key = input.key.toLowerCase();
+    if (key === "f11") {
+      event.preventDefault();
+      toggleMainWindowFullscreen();
+      return;
+    }
+    const exitAccelerator = input.control && input.shift && key === "f";
+    if (window.isFullScreen() && (key === "escape" || exitAccelerator)) {
+      if (exitAccelerator) event.preventDefault();
+      exitMainWindowFullscreen();
     }
   });
 
@@ -567,11 +618,14 @@ function toggleQuickLauncher(): void {
   createQuickLauncherWindow();
 }
 
-function registerGlobalQuickLauncher(): void {
+function registerGlobalApplicationShortcuts(): void {
   const registered = globalShortcut.register("Alt+Space", toggleQuickLauncher);
   if (!registered) {
     console.warn("CyberGrid could not register Alt+Space; the shortcut may be reserved by the operating system.");
     globalShortcut.register("CommandOrControl+Alt+Space", toggleQuickLauncher);
+  }
+  if (!globalShortcut.register("F11", toggleMainWindowFullscreen)) {
+    console.warn("CyberGrid could not register F11 globally; the focused-window shortcut remains available.");
   }
 }
 
@@ -2607,7 +2661,7 @@ if (!hasSingleInstanceLock) {
     registerBootstrapIpcHandler();
     mainWindow = createMainWindow();
     installApplicationMenu();
-    registerGlobalQuickLauncher();
+    registerGlobalApplicationShortcuts();
 
     app.on("activate", () => {
       if (BrowserWindow.getAllWindows().length === 0) {

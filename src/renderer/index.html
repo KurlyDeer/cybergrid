@@ -1989,20 +1989,51 @@
       .ipam-host.offline { border-color: color-mix(in srgb, #e05858 65%, var(--border)); background: color-mix(in srgb, #e05858 18%, #171116); color: #eaa2a2; }
       .ipam-host.saved { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 36%, #101a24); color: #e7fff6; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent); }
       .ipam-status { color: var(--muted); font-size: 10px; }
-      .help-dialog { width: min(960px, calc(100vw - 36px)); max-height: calc(100vh - 36px); }
-      .help-layout { display: grid; grid-template-columns: 220px minmax(0, 1fr); min-height: min(600px, 70vh); }
+      dialog.documentation-dialog {
+        width: min(960px, calc(100vw - 36px));
+        max-height: calc(100vh - 120px);
+        overflow: hidden;
+      }
+      dialog.documentation-dialog[open] { display: flex; min-height: 0; flex-direction: column; }
+      .documentation-dialog > .modal-header {
+        position: sticky;
+        z-index: 10;
+        top: 0;
+        flex: 0 0 auto;
+        background: #1e1e1e;
+      }
+      .documentation-viewport {
+        min-width: 0;
+        min-height: 0;
+        flex: 1 1 auto;
+        overflow-x: hidden;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        scrollbar-gutter: stable;
+      }
+      .documentation-dialog > .modal-actions {
+        position: sticky;
+        z-index: 10;
+        bottom: 0;
+        flex: 0 0 auto;
+        border-top: 1px solid var(--border);
+        background: #1e1e1e;
+      }
+      .help-layout { display: grid; min-width: 0; min-height: 0; grid-template-columns: 220px minmax(0, 1fr); }
       .help-nav { display: grid; align-content: start; gap: 4px; padding: 14px; border-right: 1px solid var(--border); background: color-mix(in srgb, var(--panel-raised) 70%, transparent); }
       .help-nav button { min-height: 38px; padding: 8px 10px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: var(--muted); cursor: pointer; font-size: 11px; font-weight: 700; text-align: left; }
       .help-nav button.active { border-color: var(--border); background: var(--accent-soft); color: var(--accent); }
-      .help-content { max-height: min(600px, 70vh); overflow: auto; padding: 22px 26px; }
+      .help-content { min-width: 0; min-height: 0; padding: 22px 26px; }
       .help-topic h3 { margin: 0 0 8px; font-size: 18px; }
       .help-topic h4 { margin: 22px 0 7px; color: var(--accent); font-size: 12px; text-transform: uppercase; letter-spacing: .07em; }
       .help-topic p, .help-topic li { color: #aebdca; font-size: 12px; line-height: 1.65; }
       .help-topic code { padding: 2px 5px; border: 1px solid var(--border); border-radius: 4px; background: #09111a; color: var(--accent); font-family: ui-monospace, monospace; }
       .help-topic ol, .help-topic ul { padding-left: 20px; }
-      .shortcuts-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
-      .shortcut-row { display: grid; grid-template-columns: 115px minmax(0, 1fr); align-items: center; gap: 10px; padding: 9px 10px; border: 1px solid var(--border); border-radius: 7px; background: var(--panel-raised); color: var(--muted); font-size: 11px; }
+      #shortcuts-modal .documentation-viewport { display: block; }
+      .shortcuts-grid { display: grid; min-width: 0; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+      .shortcut-row { display: grid; min-width: 0; grid-template-columns: 115px minmax(0, 1fr); align-items: center; gap: 10px; padding: 9px 10px; border: 1px solid var(--border); border-radius: 7px; background: var(--panel-raised); color: var(--muted); font-size: 11px; }
       .shortcut-row kbd { justify-self: start; color: var(--text); }
+      .shortcut-row span { min-width: 0; overflow-wrap: anywhere; }
       .dr-export-card { display: grid; gap: 12px; margin-top: 20px; padding: 14px; border: 1px solid var(--border); border-radius: 9px; background: color-mix(in srgb, var(--panel-raised) 70%, transparent); }
       .dr-export-card h4 { margin: 0; font-size: 12px; }
       .dr-export-card p, .dr-export-status { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
@@ -2019,6 +2050,12 @@
         .category-picker { grid-template-columns: repeat(2, minmax(0, 1fr)); }
         .session-toggles { grid-template-columns: 1fr; }
         .help-layout { grid-template-columns: 175px minmax(0, 1fr); }
+      }
+      @media (max-width: 720px), (max-height: 680px) {
+        dialog.documentation-dialog { max-height: calc(100vh - 32px); }
+        .shortcuts-grid { grid-template-columns: minmax(0, 1fr); }
+        .help-layout { grid-template-columns: minmax(0, 1fr); }
+        .help-nav { position: sticky; z-index: 5; top: 0; grid-template-columns: repeat(2, minmax(0, 1fr)); border-right: 0; border-bottom: 1px solid var(--border); }
       }
     </style>
   </head>
@@ -2605,11 +2642,12 @@
       </div>
     </dialog>
 
-    <dialog class="help-dialog" id="help-modal" aria-labelledby="help-modal-title">
+    <dialog class="help-dialog documentation-dialog" id="help-modal" aria-labelledby="help-modal-title">
       <header class="modal-header">
         <h2 id="help-modal-title">CyberGrid v1.0.0 Documentation &amp; Help</h2>
         <p>Operational guidance stays local and remains available without a network connection.</p>
       </header>
+      <div class="documentation-viewport">
       <div class="help-layout">
         <nav class="help-nav" aria-label="Help topics">
           <button type="button" class="active" data-help-topic="quick-start">Quick Start</button>
@@ -2657,12 +2695,13 @@
           </article>
         </div>
       </div>
+      </div>
       <footer class="modal-actions"><button class="primary-button" id="help-close-button" type="button">Close</button></footer>
     </dialog>
 
-    <dialog id="shortcuts-modal" aria-labelledby="shortcuts-modal-title">
+    <dialog class="documentation-dialog" id="shortcuts-modal" aria-labelledby="shortcuts-modal-title">
       <header class="modal-header"><h2 id="shortcuts-modal-title">Keyboard Shortcuts</h2><p>High-efficiency navigation from anywhere in the main workspace.</p></header>
-      <div class="modal-body"><div class="shortcuts-grid full-width">
+      <div class="modal-body documentation-viewport"><div class="shortcuts-grid full-width">
         <div class="shortcut-row"><kbd>Ctrl + K</kbd><span>Search saved connections</span></div><div class="shortcut-row"><kbd>Alt + Space</kbd><span>Global quick launcher</span></div>
         <div class="shortcut-row"><kbd>Ctrl + N</kbd><span>Focus Quick Connect</span></div><div class="shortcut-row"><kbd>Ctrl + B</kbd><span>Toggle connections sidebar</span></div>
         <div class="shortcut-row"><kbd>Ctrl + W</kbd><span>Close active tab</span></div><div class="shortcut-row"><kbd>Ctrl + Shift + T</kbd><span>Reopen last closed tab</span></div>
@@ -2670,7 +2709,8 @@
         <div class="shortcut-row"><kbd>F1</kbd><span>Documentation &amp; Help</span></div><div class="shortcut-row"><kbd>Ctrl + /</kbd><span>This shortcut sheet</span></div>
         <div class="shortcut-row"><kbd>Enter</kbd><span>Open selected search result</span></div><div class="shortcut-row"><kbd>Up / Down</kbd><span>Navigate search results</span></div>
         <div class="shortcut-row"><kbd>Ctrl + C</kbd><span>Copy terminal selection</span></div><div class="shortcut-row"><kbd>Ctrl + V</kbd><span>Paste into active terminal</span></div>
-        <div class="shortcut-row"><kbd>Esc</kbd><span>Close the topmost modal</span></div><div class="shortcut-row"><kbd>Double-click</kbd><span>Open a saved connection</span></div>
+        <div class="shortcut-row"><kbd>F11</kbd><span>Enter or exit fullscreen</span></div><div class="shortcut-row"><kbd>Ctrl + Shift + F</kbd><span>Exit fullscreen</span></div>
+        <div class="shortcut-row"><kbd>Esc</kbd><span>Close the topmost modal or exit fullscreen</span></div><div class="shortcut-row"><kbd>Double-click</kbd><span>Open a saved connection</span></div>
       </div></div>
       <footer class="modal-actions"><button class="primary-button" id="shortcuts-close-button" type="button">Close</button></footer>
     </dialog>
