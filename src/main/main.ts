@@ -8,6 +8,7 @@ import {
   nativeImage,
   session,
   Tray,
+  type MessageBoxOptions,
   type MenuItemConstructorOptions,
   type IpcMainEvent,
   type IpcMainInvokeEvent,
@@ -19,6 +20,7 @@ import { lookup } from "node:dns/promises";
 import { basename, join, posix, resolve, sep } from "node:path";
 import {
   IPC_CHANNELS,
+  type AppMenuCommand,
   type AppPreferences,
   type AdministrationProtocol,
   type AssetInput,
@@ -27,6 +29,8 @@ import {
   type ConnectionCategory,
   type ConnectionProtocol,
   type ConnectionTaskInput,
+  type CredentialProfileAuthType,
+  type CredentialProfileInput,
   type DeviceIcon,
   type DeviceOsFamily,
   type DiagnosticKind,
@@ -168,6 +172,135 @@ function scheduleUpdateCheck(): void {
       .catch((error: unknown) => console.warn("CyberGrid updater did not start:", error));
   }, 2_000);
   timer.unref();
+}
+
+function sendMenuCommand(command: AppMenuCommand): void {
+  showMainWindow();
+  const window = mainWindow;
+  if (!window || window.isDestroyed() || window.webContents.isDestroyed()) return;
+  window.webContents.send(IPC_CHANNELS.appMenuCommand, command);
+}
+
+function showMainMessageBox(options: MessageBoxOptions): Promise<Electron.MessageBoxReturnValue> {
+  const window = mainWindow;
+  return window && !window.isDestroyed()
+    ? dialog.showMessageBox(window, options)
+    : dialog.showMessageBox(options);
+}
+
+async function checkForUpdatesFromMenu(): Promise<void> {
+  if (!app.isPackaged) {
+    await showMainMessageBox({
+      type: "info",
+      title: "CyberGrid Updates",
+      message: "Update checks are available in packaged CyberGrid builds.",
+      detail: `Development build ${app.getVersion()} is running from source.`,
+    });
+    return;
+  }
+  const wasConfigured = applicationUpdaterConfigured;
+  await configureAutoUpdater();
+  if (wasConfigured) await applicationUpdater?.checkForUpdatesAndNotify();
+}
+
+function installApplicationMenu(): void {
+  const command = (value: AppMenuCommand): (() => void) => () => sendMenuCommand(value);
+  const template: MenuItemConstructorOptions[] = [
+    {
+      label: "File",
+      submenu: [
+        { label: "New Connection...", accelerator: "CommandOrControl+Shift+N", click: command("new-connection") },
+        { label: "Quick Connect", accelerator: "CommandOrControl+N", click: command("focus-quick-connect") },
+        { type: "separator" },
+        { label: "Lock Vault", accelerator: "CommandOrControl+L", click: command("lock-vault") },
+        { label: "Import / Export (.xml, .cgvault)...", click: command("import-export") },
+        { type: "separator" },
+        {
+          label: "Exit",
+          accelerator: "Alt+F4",
+          click: () => {
+            isQuitting = true;
+            app.quit();
+          },
+        },
+      ],
+    },
+    {
+      label: "Edit",
+      submenu: [
+        { role: "copy", label: "Copy" },
+        { role: "paste", label: "Paste" },
+        { type: "separator" },
+        { label: "Command Palette...", accelerator: "CommandOrControl+K", click: command("command-palette") },
+        { label: "Clear Active Terminal", accelerator: "CommandOrControl+Shift+K", click: command("clear-terminal") },
+      ],
+    },
+    {
+      label: "View",
+      submenu: [
+        { label: "Toggle Sidebar", accelerator: "CommandOrControl+B", click: command("toggle-sidebar") },
+        { label: "Split Grid View (2x2)", accelerator: "CommandOrControl+Shift+G", click: command("toggle-grid") },
+        { type: "separator" },
+        { role: "resetZoom", label: "Reset Zoom" },
+        { role: "togglefullscreen", label: "Fullscreen" },
+      ],
+    },
+    {
+      label: "Tools",
+      submenu: [
+        { label: "Broadcast Terminal (Multi-Exec)", click: command("toggle-broadcast") },
+        { label: "Broadcast Targets...", click: command("broadcast-targets") },
+        { label: "SFTP File Browser", click: command("toggle-sftp") },
+        { label: "Node Workspace (Snippets / Notes / Backups)", click: command("node-workspace") },
+        { label: "Quick Snippet Toolbar", click: command("toggle-quick-snippets") },
+        { type: "separator" },
+        { label: "External Tools Launcher", click: command("external-tools") },
+        { label: "Credential Profiles...", click: command("credential-profiles") },
+        { label: "Enterprise Integrations...", click: command("enterprise") },
+        { label: "Subnet IPAM Scanner...", click: command("subnet-scanner") },
+        { type: "separator" },
+        { label: "Settings...", click: command("settings") },
+      ],
+    },
+    {
+      label: "Window",
+      submenu: [
+        { label: "Close Tab", accelerator: "CommandOrControl+W", click: command("close-tab") },
+        { label: "Reopen Tab", accelerator: "CommandOrControl+Shift+T", click: command("reopen-tab") },
+        { label: "Next Tab", accelerator: "Control+Tab", click: command("next-tab") },
+      ],
+    },
+    {
+      label: "Help",
+      submenu: [
+        { label: "Built-in Documentation", accelerator: "F1", click: command("help") },
+        { label: "Keyboard Shortcuts", accelerator: "CommandOrControl+/", click: command("shortcuts") },
+        { type: "separator" },
+        {
+          label: "Check for Updates...",
+          click: () => void checkForUpdatesFromMenu().catch((error: unknown) => {
+            void showMainMessageBox({
+              type: "error",
+              title: "CyberGrid Update Check",
+              message: "CyberGrid could not check for updates.",
+              detail: errorStack(error),
+            });
+          }),
+        },
+        { type: "separator" },
+        {
+          label: "About CyberGrid",
+          click: () => void showMainMessageBox({
+            type: "info",
+            title: "About CyberGrid",
+            message: `CyberGrid ${app.getVersion()}`,
+            detail: "A secure command center for terminal, remote desktop, infrastructure inventory, and systems operations.\n\nMIT License",
+          }),
+        },
+      ],
+    },
+  ];
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
 async function getSshController(): Promise<SshController> {
@@ -627,6 +760,18 @@ function normalizeProfileInput(value: unknown): ServerProfileInput {
   const authType = value.authType === "password" || value.authType === "privateKey"
     ? value.authType
     : "none";
+  const credentialProfileId = value.credentialProfileId === undefined || value.credentialProfileId === ""
+    ? undefined
+    : readUuid(value.credentialProfileId, "credential profile ID");
+  const profileId = value.id === undefined || value.id === ""
+    ? undefined
+    : readUuid(value.id, "server profile ID");
+  if (credentialProfileId && authType !== "none") {
+    throw new Error("Linked credentials cannot be combined with connection-specific authentication.");
+  }
+  if (credentialProfileId && protocol !== "ssh" && protocol !== "rdp" && protocol !== "vnc") {
+    throw new Error("Credential profiles can only be linked to SSH, RDP, or VNC connections.");
+  }
   if (authType === "privateKey" && protocol !== "ssh") {
     throw new Error("Private-key authentication is only available for SSH profiles.");
   }
@@ -638,6 +783,7 @@ function normalizeProfileInput(value: unknown): ServerProfileInput {
   const category: ConnectionCategory = value.category === "network" || value.category === "web" || value.category === "desktop"
     ? value.category : "server";
   const profile: ServerProfileInput = {
+    id: profileId,
     category,
     protocol,
     name: readString(value.name, "Display name", { required: true, maxLength: 100 }) as string,
@@ -650,6 +796,7 @@ function normalizeProfileInput(value: unknown): ServerProfileInput {
     group: value.group === undefined || value.group === ""
       ? "Ungrouped" : normalizeFolderPath(value.group),
     authType,
+    credentialProfileId,
     tags: readTags(value.tags, "Profile tags"),
     favorite: value.favorite === true,
     inheritFolderDefaults: value.inheritFolderDefaults !== false,
@@ -679,13 +826,13 @@ function normalizeProfileInput(value: unknown): ServerProfileInput {
   }
   if (authType === "password") {
     profile.password = readString(value.password, "Password", {
-      required: true,
+      required: !profileId,
       maxLength: 4_096,
       trim: false,
     });
   } else if (authType === "privateKey") {
     profile.privateKeyPath = readString(value.privateKeyPath, "Private key path", {
-      required: true,
+      required: !profileId,
       maxLength: 2_048,
     });
     profile.passphrase = readString(value.passphrase, "Key passphrase", {
@@ -1143,7 +1290,43 @@ function normalizeSnippetInput(value: unknown): SnippetInput {
     language: readSnippetLanguage(value.language),
     tags,
     body,
+    pinned: value.pinned === true,
   };
+}
+
+function normalizeCredentialProfileInput(value: unknown): CredentialProfileInput {
+  if (!isRecord(value)) throw new Error("Invalid credential profile.");
+  const authType: CredentialProfileAuthType = value.authType === "privateKey" ? "privateKey" : "password";
+  const result: CredentialProfileInput = {
+    id: value.id === undefined || value.id === "" ? undefined : readUuid(value.id, "credential profile ID"),
+    name: readString(value.name, "Credential profile name", {
+      required: true,
+      maxLength: 100,
+      singleLine: true,
+    }) as string,
+    username: readString(value.username, "Credential username", {
+      maxLength: 256,
+      singleLine: true,
+    }) ?? "",
+    domain: readString(value.domain, "Credential domain", { maxLength: 256, singleLine: true }),
+    authType,
+  };
+  if (authType === "password") {
+    result.password = readString(value.password, "Credential password", {
+      maxLength: 4_096,
+      trim: false,
+    });
+  } else {
+    result.privateKeyPath = readString(value.privateKeyPath, "Credential private key path", {
+      maxLength: 2_048,
+      singleLine: true,
+    });
+    result.passphrase = readString(value.passphrase, "Credential key passphrase", {
+      maxLength: 4_096,
+      trim: false,
+    });
+  }
+  return result;
 }
 
 function auditContext(
@@ -1942,6 +2125,21 @@ function registerIpcHandlers(): void {
     await requireVault().deleteSnippet(readUuid(snippetId, "snippet ID"));
   });
 
+  ipcMain.handle(IPC_CHANNELS.vaultListCredentialProfiles, (event) => {
+    assertTrustedSender(event);
+    return requireVault().listCredentialProfiles();
+  });
+
+  ipcMain.handle(IPC_CHANNELS.vaultSaveCredentialProfile, async (event, input: unknown) => {
+    assertTrustedSender(event);
+    return requireVault().saveCredentialProfile(normalizeCredentialProfileInput(input));
+  });
+
+  ipcMain.handle(IPC_CHANNELS.vaultDeleteCredentialProfile, async (event, credentialProfileId: unknown) => {
+    assertTrustedSender(event);
+    await requireVault().deleteCredentialProfile(readUuid(credentialProfileId, "credential profile ID"));
+  });
+
   ipcMain.handle(IPC_CHANNELS.vaultSetFavorite, async (event, profileId: unknown, favorite: unknown) => {
     assertTrustedSender(event);
     if (typeof favorite !== "boolean") throw new Error("Invalid favorite state.");
@@ -2408,6 +2606,7 @@ if (!hasSingleInstanceLock) {
   void app.whenReady().then(() => {
     registerBootstrapIpcHandler();
     mainWindow = createMainWindow();
+    installApplicationMenu();
     registerGlobalQuickLauncher();
 
     app.on("activate", () => {

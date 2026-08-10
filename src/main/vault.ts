@@ -16,6 +16,9 @@ import type {
   ConfigBackupRecord,
   ConnectionCategory,
   ConnectionProtocol,
+  CredentialProfileAuthType,
+  CredentialProfileInput,
+  CredentialProfileSummary,
   DeviceIcon,
   DeviceOsFamily,
   ConnectionTaskInput,
@@ -82,6 +85,7 @@ interface VaultPayload {
   profiles: DecryptedServerProfile[];
   assets: AssetRecord[];
   snippets: SnippetRecord[];
+  credentialProfiles: StoredCredentialProfile[];
   folderDefaults: StoredFolderDefaults[];
   externalTools: ExternalToolRecord[];
   connectionTasks: ConnectionTaskRecord[];
@@ -89,6 +93,12 @@ interface VaultPayload {
 }
 
 interface StoredFolderDefaults extends FolderDefaultsInput {
+  updatedAt: string;
+}
+
+interface StoredCredentialProfile extends Omit<CredentialProfileInput, "id"> {
+  id: string;
+  createdAt: string;
   updatedAt: string;
 }
 
@@ -244,6 +254,7 @@ function parseProfile(value: unknown): DecryptedServerProfile {
     username: requireString(value.username, "profile.username"),
     group: requireString(value.group, "profile.group"),
     authType,
+    credentialProfileId: optionalString(value.credentialProfileId, "profile.credentialProfileId"),
     protocol,
     category: parseConnectionCategory(value.category),
     tags,
@@ -489,8 +500,37 @@ function parseSnippet(value: unknown): SnippetRecord {
     language: parseSnippetLanguage(value.language),
     tags: value.tags.map((tag, index) => requireString(tag, `snippet.tags[${index}]`)),
     body: requireString(value.body, "snippet.body"),
+    pinned: value.pinned === true,
     createdAt: requireString(value.createdAt, "snippet.createdAt"),
     updatedAt: requireString(value.updatedAt, "snippet.updatedAt"),
+  };
+}
+
+function parseCredentialProfileAuthType(value: unknown): CredentialProfileAuthType {
+  if (value === "password" || value === "privateKey") return value;
+  throw new Error("Vault credential profile authentication type is invalid.");
+}
+
+function parseCredentialProfile(value: unknown): StoredCredentialProfile {
+  if (!isRecord(value)) throw new Error("Vault credential profile is invalid.");
+  const authType = parseCredentialProfileAuthType(value.authType);
+  return {
+    id: requireString(value.id, "credentialProfile.id"),
+    name: requireString(value.name, "credentialProfile.name"),
+    username: requireString(value.username, "credentialProfile.username"),
+    domain: optionalString(value.domain, "credentialProfile.domain"),
+    authType,
+    password: authType === "password"
+      ? requireString(value.password, "credentialProfile.password")
+      : undefined,
+    privateKeyPath: authType === "privateKey"
+      ? requireString(value.privateKeyPath, "credentialProfile.privateKeyPath")
+      : undefined,
+    passphrase: authType === "privateKey"
+      ? optionalString(value.passphrase, "credentialProfile.passphrase")
+      : undefined,
+    createdAt: requireString(value.createdAt, "credentialProfile.createdAt"),
+    updatedAt: requireString(value.updatedAt, "credentialProfile.updatedAt"),
   };
 }
 
@@ -585,6 +625,9 @@ function parsePayload(value: unknown): VaultPayload {
   if (value.snippets !== undefined && !Array.isArray(value.snippets)) {
     throw new Error("Vault snippet library is invalid.");
   }
+  if (value.credentialProfiles !== undefined && !Array.isArray(value.credentialProfiles)) {
+    throw new Error("Vault credential profile library is invalid.");
+  }
   if (value.folderDefaults !== undefined && !Array.isArray(value.folderDefaults)) throw new Error("Vault folder defaults are invalid.");
   if (value.externalTools !== undefined && !Array.isArray(value.externalTools)) throw new Error("Vault external tools are invalid.");
   if (value.connectionTasks !== undefined && !Array.isArray(value.connectionTasks)) throw new Error("Vault connection tasks are invalid.");
@@ -594,6 +637,7 @@ function parsePayload(value: unknown): VaultPayload {
     profiles: value.profiles.map(parseProfile),
     assets: (value.assets ?? []).map(parseAsset),
     snippets: (value.snippets ?? []).map(parseSnippet),
+    credentialProfiles: (value.credentialProfiles ?? []).map(parseCredentialProfile),
     folderDefaults: (value.folderDefaults ?? []).map(parseFolderDefaults),
     externalTools: (value.externalTools ?? []).map(parseExternalTool),
     connectionTasks: (value.connectionTasks ?? []).map(parseConnectionTask),
@@ -678,6 +722,10 @@ function summarizeProfile(profile: DecryptedServerProfile): ServerProfileSummary
     username: profile.username,
     group: profile.group,
     authType: profile.authType,
+    credentialProfileId: profile.credentialProfileId,
+    hasPassword: profile.authType === "password" && Boolean(profile.password),
+    privateKeyPath: profile.privateKeyPath,
+    hasPassphrase: Boolean(profile.passphrase),
     protocol: profile.protocol,
     category: profile.category ?? "server",
     baudRate: profile.baudRate,
@@ -736,6 +784,21 @@ function summarizeSyncSource(value: StoredSyncSource): InventorySyncSourceSummar
   return { ...safe, hasPassword: Boolean(value.password) };
 }
 
+function summarizeCredentialProfile(value: StoredCredentialProfile): CredentialProfileSummary {
+  return {
+    id: value.id,
+    name: value.name,
+    username: value.username,
+    domain: value.domain,
+    authType: value.authType,
+    hasPassword: Boolean(value.password),
+    privateKeyPath: value.privateKeyPath,
+    hasPassphrase: Boolean(value.passphrase),
+    createdAt: value.createdAt,
+    updatedAt: value.updatedAt,
+  };
+}
+
 function cloneAsset(asset: AssetRecord): AssetRecord {
   return {
     ...asset,
@@ -780,6 +843,7 @@ export class VaultController {
       profiles: [],
       assets: [],
       snippets: [],
+      credentialProfiles: [],
       folderDefaults: [],
       externalTools: [],
       connectionTasks: [],
@@ -866,22 +930,51 @@ export class VaultController {
 
   async saveProfile(input: ServerProfileInput): Promise<ServerProfileSummary> {
     const payload = this.requirePayload();
+    const existingIndex = input.id
+      ? payload.profiles.findIndex((profile) => profile.id === input.id)
+      : -1;
+    if (input.id && existingIndex < 0) throw new Error("Server profile was not found.");
+    const existing = existingIndex >= 0 ? payload.profiles[existingIndex] : undefined;
+    if (input.credentialProfileId) {
+      const credential = payload.credentialProfiles.find((item) => item.id === input.credentialProfileId);
+      if (!credential) throw new Error("Linked credential profile was not found.");
+      if (credential.authType === "privateKey" && input.protocol !== "ssh") {
+        throw new Error("Private-key credential profiles can only be linked to SSH connections.");
+      }
+    }
     const timestamp = new Date().toISOString();
     const profile: DecryptedServerProfile = {
+      ...existing,
       ...input,
-      id: randomUUID(),
-      createdAt: timestamp,
+      password: !input.credentialProfileId && input.authType === "password"
+        ? (input.password || (existing?.authType === "password" ? existing.password : undefined))
+        : undefined,
+      privateKeyPath: !input.credentialProfileId && input.authType === "privateKey"
+        ? (input.privateKeyPath || (existing?.authType === "privateKey" ? existing.privateKeyPath : undefined))
+        : undefined,
+      passphrase: !input.credentialProfileId && input.authType === "privateKey"
+        ? (input.passphrase || (existing?.authType === "privateKey" ? existing.passphrase : undefined))
+        : undefined,
+      totpSecret: input.totpSecret || existing?.totpSecret,
+      totpDigits: input.totpSecret ? input.totpDigits : existing?.totpDigits,
+      totpPeriod: input.totpSecret ? input.totpPeriod : existing?.totpPeriod,
+      totpAlgorithm: input.totpSecret ? input.totpAlgorithm : existing?.totpAlgorithm,
+      id: existing?.id ?? randomUUID(),
+      createdAt: existing?.createdAt ?? timestamp,
       updatedAt: timestamp,
     };
-
-    payload.profiles.push(profile);
+    if (profile.authType === "password" && !profile.password) throw new Error("A password is required.");
+    if (profile.authType === "privateKey" && !profile.privateKeyPath) throw new Error("A private key path is required.");
+    if (existingIndex >= 0) payload.profiles.splice(existingIndex, 1, profile);
+    else payload.profiles.push(profile);
     try {
       await this.persist();
     } catch (error) {
-      payload.profiles.pop();
+      if (existingIndex >= 0 && existing) payload.profiles.splice(existingIndex, 1, existing);
+      else payload.profiles.pop();
       throw error;
     }
-    return summarizeProfile(profile);
+    return summarizeProfile(this.getConnectionProfile(profile.id));
   }
 
   async importProfiles(inputs: ServerProfileInput[]): Promise<number> {
@@ -904,7 +997,9 @@ export class VaultController {
   }
 
   exportProfiles(): ServerProfileInput[] {
-    return this.requirePayload().profiles.map((profile) => ({
+    return this.requirePayload().profiles
+      .map((profile) => this.getConnectionProfile(profile.id))
+      .map((profile) => ({
       protocol: profile.protocol,
       category: profile.category,
       name: profile.name,
@@ -1132,6 +1227,7 @@ export class VaultController {
       language: input.language,
       tags: [...input.tags],
       body: input.body,
+      pinned: input.pinned === true,
       id: existing?.id ?? randomUUID(),
       createdAt: existing?.createdAt ?? timestamp,
       updatedAt: timestamp,
@@ -1157,6 +1253,73 @@ export class VaultController {
       await this.persist();
     } catch (error) {
       if (removed) payload.snippets.splice(snippetIndex, 0, removed);
+      throw error;
+    }
+  }
+
+  listCredentialProfiles(): CredentialProfileSummary[] {
+    return this.requirePayload().credentialProfiles
+      .map(summarizeCredentialProfile)
+      .sort((left, right) => left.name.localeCompare(right.name));
+  }
+
+  async saveCredentialProfile(input: CredentialProfileInput): Promise<CredentialProfileSummary> {
+    const payload = this.requirePayload();
+    const timestamp = new Date().toISOString();
+    const existingIndex = input.id
+      ? payload.credentialProfiles.findIndex((credential) => credential.id === input.id)
+      : -1;
+    if (input.id && existingIndex < 0) throw new Error("Credential profile was not found.");
+    const existing = existingIndex >= 0 ? payload.credentialProfiles[existingIndex] : undefined;
+    const credential: StoredCredentialProfile = {
+      id: existing?.id ?? randomUUID(),
+      name: input.name,
+      username: input.username,
+      domain: input.domain,
+      authType: input.authType,
+      password: input.authType === "password" ? (input.password || existing?.password) : undefined,
+      privateKeyPath: input.authType === "privateKey"
+        ? (input.privateKeyPath || existing?.privateKeyPath)
+        : undefined,
+      passphrase: input.authType === "privateKey" ? (input.passphrase || existing?.passphrase) : undefined,
+      createdAt: existing?.createdAt ?? timestamp,
+      updatedAt: timestamp,
+    };
+    if (credential.authType === "password" && !credential.password) {
+      throw new Error("A password is required for this credential profile.");
+    }
+    if (credential.authType === "privateKey" && !credential.privateKeyPath) {
+      throw new Error("A private key path is required for this credential profile.");
+    }
+    if (existingIndex >= 0) payload.credentialProfiles.splice(existingIndex, 1, credential);
+    else payload.credentialProfiles.push(credential);
+    try {
+      await this.persist();
+    } catch (error) {
+      if (existingIndex >= 0 && existing) payload.credentialProfiles.splice(existingIndex, 1, existing);
+      else payload.credentialProfiles.pop();
+      throw error;
+    }
+    return summarizeCredentialProfile(credential);
+  }
+
+  async deleteCredentialProfile(credentialProfileId: string): Promise<void> {
+    const payload = this.requirePayload();
+    const referencingProfiles = payload.profiles.filter(
+      (profile) => profile.credentialProfileId === credentialProfileId,
+    );
+    if (referencingProfiles.length > 0) {
+      throw new Error(
+        `Credential profile is linked to ${referencingProfiles.length} connection${referencingProfiles.length === 1 ? "" : "s"}. Unlink it before deleting.`,
+      );
+    }
+    const index = payload.credentialProfiles.findIndex((credential) => credential.id === credentialProfileId);
+    if (index < 0) throw new Error("Credential profile was not found.");
+    const [removed] = payload.credentialProfiles.splice(index, 1);
+    try {
+      await this.persist();
+    } catch (error) {
+      if (removed) payload.credentialProfiles.splice(index, 0, removed);
       throw error;
     }
   }
@@ -1386,6 +1549,21 @@ export class VaultController {
       terminalOverrides: cloneTerminalOverrides(profile.terminalOverrides),
       configBackups: cloneConfigBackups(profile.configBackups),
     };
+    if (profile.credentialProfileId) {
+      const credential = this.requirePayload().credentialProfiles.find(
+        (candidate) => candidate.id === profile.credentialProfileId,
+      );
+      if (!credential) throw new Error(`Linked credential profile for "${profile.name}" was not found.`);
+      if (credential.authType === "privateKey" && profile.protocol !== "ssh") {
+        throw new Error(`Connection "${profile.name}" links an SSH key credential to a non-SSH protocol.`);
+      }
+      resolved.username = credential.username;
+      resolved.domain = credential.domain;
+      resolved.authType = credential.authType;
+      resolved.password = credential.password;
+      resolved.privateKeyPath = credential.privateKeyPath;
+      resolved.passphrase = credential.passphrase;
+    }
     if (profile.inheritFolderDefaults !== false) {
       const parts = profile.group.split("/").map((part) => part.trim()).filter(Boolean);
       const inherited = this.requirePayload().folderDefaults

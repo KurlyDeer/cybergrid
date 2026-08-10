@@ -1,9 +1,11 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
 import type {
   AssetInput,
+  AppMenuCommand,
   AppPreferences,
   AppUpdateEvent,
   ConfigBackupInput,
+  CredentialProfileInput,
   CyberGridApi,
   DiscoveryCompleteEvent,
   DiscoveryProgressEvent,
@@ -74,6 +76,9 @@ const IPC_CHANNELS: typeof import("../shared/ipc").IPC_CHANNELS = {
   vaultListSnippets: "cybergrid:vault:list-snippets",
   vaultSaveSnippet: "cybergrid:vault:save-snippet",
   vaultDeleteSnippet: "cybergrid:vault:delete-snippet",
+  vaultListCredentialProfiles: "cybergrid:vault:list-credential-profiles",
+  vaultSaveCredentialProfile: "cybergrid:vault:save-credential-profile",
+  vaultDeleteCredentialProfile: "cybergrid:vault:delete-credential-profile",
   vaultSetFavorite: "cybergrid:vault:set-favorite",
   vaultListFolderDefaults: "cybergrid:vault:list-folder-defaults",
   vaultSaveFolderDefaults: "cybergrid:vault:save-folder-defaults",
@@ -138,6 +143,7 @@ const IPC_CHANNELS: typeof import("../shared/ipc").IPC_CHANNELS = {
   appUpdateAvailable: "cybergrid:update:available",
   appUpdateDownloaded: "cybergrid:update:downloaded",
   appUpdateInstall: "cybergrid:update:install",
+  appMenuCommand: "cybergrid:app:menu-command",
 };
 
 const api: CyberGridApi = {
@@ -272,6 +278,11 @@ const api: CyberGridApi = {
       ipcRenderer.invoke(IPC_CHANNELS.vaultSaveSnippet, snippet),
     deleteSnippet: (snippetId) =>
       ipcRenderer.invoke(IPC_CHANNELS.vaultDeleteSnippet, snippetId),
+    listCredentialProfiles: () => ipcRenderer.invoke(IPC_CHANNELS.vaultListCredentialProfiles),
+    saveCredentialProfile: (input: CredentialProfileInput) =>
+      ipcRenderer.invoke(IPC_CHANNELS.vaultSaveCredentialProfile, input),
+    deleteCredentialProfile: (credentialProfileId) =>
+      ipcRenderer.invoke(IPC_CHANNELS.vaultDeleteCredentialProfile, credentialProfileId),
     setFavorite: (profileId, favorite) =>
       ipcRenderer.invoke(IPC_CHANNELS.vaultSetFavorite, profileId, favorite),
     listFolderDefaults: () => ipcRenderer.invoke(IPC_CHANNELS.vaultListFolderDefaults),
@@ -363,6 +374,11 @@ const api: CyberGridApi = {
       const handler = (_event: IpcRendererEvent, payload: AppUpdateEvent) => listener(payload);
       ipcRenderer.on(IPC_CHANNELS.appUpdateDownloaded, handler);
       return () => ipcRenderer.removeListener(IPC_CHANNELS.appUpdateDownloaded, handler);
+    },
+    onMenuCommand: (listener) => {
+      const handler = (_event: IpcRendererEvent, command: AppMenuCommand) => listener(command);
+      ipcRenderer.on(IPC_CHANNELS.appMenuCommand, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.appMenuCommand, handler);
     },
     onVaultLocked: (listener) => {
       const handler = (_event: IpcRendererEvent, reason: string) => listener(reason);

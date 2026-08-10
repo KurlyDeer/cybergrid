@@ -154,6 +154,16 @@
         grid-template-columns: 270px minmax(0, 1fr);
         width: 100%;
         height: 100%;
+        transition: grid-template-columns 160ms ease;
+      }
+
+      .app-shell.sidebar-hidden {
+        grid-template-columns: 0 minmax(0, 1fr);
+      }
+
+      .app-shell.sidebar-hidden .sidebar {
+        overflow: hidden;
+        visibility: hidden;
       }
 
       .sidebar {
@@ -514,7 +524,7 @@
         display: grid;
         min-width: 0;
         min-height: 0;
-        grid-template-rows: auto auto minmax(0, 1fr);
+        grid-template-rows: auto auto minmax(0, 1fr) auto;
       }
 
       .quick-connect-bar {
@@ -598,6 +608,7 @@
 
       .tabs-row {
         display: flex;
+        min-height: 43px;
         min-width: 0;
         align-items: stretch;
         border-bottom: 1px solid var(--border);
@@ -681,47 +692,13 @@
         color: var(--text);
       }
 
-      .tab-actions {
-        display: flex;
-        max-width: 62vw;
-        align-items: stretch;
-        overflow-x: auto;
-        border-left: 1px solid var(--border);
-      }
-
-      .toolbar-button {
-        min-width: 70px;
-        border: 0;
-        border-right: 1px solid var(--border);
-        border-radius: 0;
-        background: transparent;
-        color: var(--muted);
-        font-size: 11px;
-      }
-
-      .toolbar-button:hover:not(:disabled),
-      .toolbar-button.active {
-        background: var(--panel-raised);
-        color: var(--accent);
-      }
-
-      #broadcast-toggle-button.active {
-        border-color: color-mix(in srgb, var(--danger) 70%, var(--border));
-        background: color-mix(in srgb, var(--danger) 14%, var(--panel-raised));
-        color: var(--danger);
-      }
-
-      .toolbar-button:disabled {
-        cursor: not-allowed;
-        opacity: 0.35;
-      }
-
       .connection-state {
         display: flex;
         max-width: 260px;
         align-items: center;
         overflow: hidden;
         padding: 0 14px;
+        border-left: 1px solid var(--border);
         color: var(--muted);
         font-size: 11px;
         text-overflow: ellipsis;
@@ -741,6 +718,26 @@
       .content-area.snippets-open {
         grid-template-columns: minmax(0, 1fr) minmax(320px, 30vw);
       }
+
+      .quick-snippet-toolbar {
+        display: grid;
+        min-width: 0;
+        grid-template-columns: auto minmax(0, 1fr) auto;
+        gap: 10px;
+        align-items: center;
+        min-height: 46px;
+        padding: 6px 10px 6px 14px;
+        border-top: 1px solid var(--border);
+        background: color-mix(in srgb, var(--panel) 94%, #000);
+      }
+
+      .quick-snippet-toolbar[hidden] { display: none; }
+      .quick-snippet-label { color: var(--muted); font-size: 9px; font-weight: 900; letter-spacing: .1em; text-transform: uppercase; }
+      .quick-snippet-buttons { display: flex; min-width: 0; gap: 6px; overflow-x: auto; }
+      .quick-snippet-button { min-height: 30px; max-width: 220px; padding: 0 11px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel-raised); color: var(--text); font-size: 10px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .quick-snippet-button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+      .quick-snippet-button:disabled { cursor: not-allowed; opacity: .42; }
+      .quick-snippet-empty { align-self: center; color: var(--muted); font-size: 10px; }
 
       .terminal-stack {
         position: relative;
@@ -1736,6 +1733,12 @@
         text-transform: uppercase;
       }
 
+      .field-hint {
+        color: var(--muted);
+        font-size: 9px;
+        line-height: 1.35;
+      }
+
       .field.full-width,
       .auth-section,
       .form-error,
@@ -2084,19 +2087,6 @@
 
         <div class="tabs-row">
           <div class="tabs" id="tabs" role="tablist" aria-label="Connection sessions"></div>
-          <div class="tab-actions">
-            <button class="toolbar-button" id="command-palette-button" type="button" title="Search saved servers (Ctrl+K)">Search Ctrl+K</button>
-            <button class="toolbar-button" id="layout-button" type="button" aria-pressed="false" disabled>Grid 2x2</button>
-            <button class="toolbar-button" id="broadcast-toggle-button" type="button" aria-pressed="false" disabled>Broadcast Off</button>
-            <button class="toolbar-button" id="broadcast-targets-button" type="button" disabled>Targets (0/0)</button>
-            <button class="toolbar-button" id="toggle-snippets-button" type="button">Operations</button>
-            <button class="toolbar-button" id="toggle-sftp-button" type="button" disabled>Files</button>
-            <button class="toolbar-button" id="external-tools-button" type="button">External Tools</button>
-            <button class="toolbar-button" id="enterprise-button" type="button">Enterprise</button>
-            <button class="toolbar-button" id="migration-button" type="button">Import / Export</button>
-            <button class="toolbar-button" id="help-button" type="button" title="Documentation &amp; Help (F1)">Help F1</button>
-            <button class="toolbar-button" id="settings-button" type="button">Settings</button>
-          </div>
           <div class="connection-state" id="connection-state">Ready</div>
         </div>
 
@@ -2155,6 +2145,7 @@
                     <select id="snippet-language" aria-label="Snippet language"><option value="bash">Bash</option><option value="powershell">PowerShell</option><option value="cisco">Cisco CLI</option></select>
                   </div>
                   <input id="snippet-tags" maxlength="680" placeholder="Tags, comma separated" aria-label="Snippet tags" autocomplete="off" />
+                  <div class="checkbox-field compact-check"><input id="snippet-pinned" type="checkbox" /><label class="checkbox-label" for="snippet-pinned">Pin to Quick Snippet Toolbar</label></div>
                   <textarea id="snippet-body" required maxlength="65536" placeholder="Command body. Tokens: ${HOST}, ${USERNAME}, ${IP}" aria-label="Snippet command body" spellcheck="false"></textarea>
                   <div class="form-error" id="snippet-form-error" role="alert"></div>
                   <div class="snippet-form-actions"><button class="secondary-button compact-button" id="snippet-cancel-button" type="button">Cancel</button><button class="primary-button compact-button" type="submit">Save</button></div>
@@ -2187,6 +2178,11 @@
             </div>
           </aside>
         </div>
+        <section class="quick-snippet-toolbar" id="quick-snippet-toolbar" aria-label="Pinned command snippets" hidden>
+          <span class="quick-snippet-label">Quick macros</span>
+          <div class="quick-snippet-buttons" id="quick-snippet-buttons"></div>
+          <button class="icon-button" id="quick-snippet-close" type="button" aria-label="Hide Quick Snippet Toolbar">&times;</button>
+        </section>
       </section>
     </main>
 
@@ -2232,6 +2228,7 @@
           <div class="field"><label for="server-group">Stack / location</label><input id="server-group" list="group-options" maxlength="100" placeholder="Charlotte DC / ERP Stack" autocomplete="off" /><datalist id="group-options"></datalist></div>
           <div class="field"><label for="server-host" id="server-host-label">Hostname or IP</label><input id="server-host" required maxlength="2048" placeholder="server.example.net" autocomplete="off" /></div>
           <div class="field"><label for="server-protocol">Protocol</label><select id="server-protocol"><option value="ssh">SSH</option><option value="rdp">Windows RDP</option><option value="telnet">Telnet</option><option value="raw">RAW TCP</option><option value="vnc">VNC Desktop</option><option value="https">HTTPS Web</option><option value="http">HTTP Web</option><option value="serial">Serial / COM</option></select></div>
+          <div class="field" id="server-credential-profile-field"><label for="server-credential-profile">Vault credential profile</label><select id="server-credential-profile"><option value="">Connection-specific / inherited</option></select><span class="field-hint">Reusable credentials are managed from Tools → Credential Profiles.</span></div>
           <div class="field" id="server-username-field"><label for="server-username">Username</label><input id="server-username" maxlength="256" autocomplete="username" /></div>
           <div class="field" id="server-domain-field"><label for="server-domain">Domain</label><input id="server-domain" maxlength="256" placeholder="CORP" autocomplete="off" /></div>
           <div class="field" id="server-auth-field"><label for="auth-type">Credentials</label><select id="auth-type"><option value="none">Interactive / inherited</option><option value="password">Password</option><option value="privateKey">SSH private key</option></select></div>
@@ -2329,6 +2326,21 @@
       <div>
         <header class="modal-header"><h2 id="enterprise-title">Enterprise Integrations</h2><p>Manage local tools, connection automation, and authoritative inventory sources.</p></header>
         <div class="enterprise-scroll">
+          <section class="enterprise-card" id="credential-profile-card">
+            <h3>Vault Credential Profiles</h3><p>Store one encrypted identity and link it to multiple connections. Updating the profile updates every linked server without duplicating secrets.</p>
+            <form id="credential-profile-form" class="enterprise-form-grid">
+              <input id="credential-profile-id" type="hidden" />
+              <div class="field"><label for="credential-profile-name">Profile name</label><input id="credential-profile-name" required maxlength="100" placeholder="Production Windows Admin" /></div>
+              <div class="field"><label for="credential-profile-auth">Authentication</label><select id="credential-profile-auth"><option value="password">Password</option><option value="privateKey">SSH private key</option></select></div>
+              <div class="field"><label for="credential-profile-username">Username</label><input id="credential-profile-username" maxlength="256" autocomplete="username" /></div>
+              <div class="field"><label for="credential-profile-domain">Domain</label><input id="credential-profile-domain" maxlength="256" placeholder="CORP" autocomplete="off" /></div>
+              <div class="field full-width" id="credential-profile-password-field"><label for="credential-profile-password">Password</label><input id="credential-profile-password" type="password" maxlength="4096" autocomplete="new-password" /></div>
+              <div class="field full-width" id="credential-profile-key-field" hidden><label for="credential-profile-key">Private key path</label><div class="path-picker"><input id="credential-profile-key" maxlength="2048" autocomplete="off" /><button class="secondary-button" id="credential-profile-key-browse" type="button">Browse</button></div></div>
+              <div class="field full-width" id="credential-profile-passphrase-field" hidden><label for="credential-profile-passphrase">Key passphrase</label><input id="credential-profile-passphrase" type="password" maxlength="4096" autocomplete="new-password" /></div>
+              <div class="enterprise-actions full-width"><button class="primary-button" type="submit">Save credential</button><button class="secondary-button" id="credential-profile-reset" type="button">New</button></div>
+            </form>
+            <div class="enterprise-list" id="credential-profile-list"></div>
+          </section>
           <section class="enterprise-card">
             <h3>External Tools</h3><p>Arguments accept $HOST, $IP, $PORT, and $USER. Processes launch directly without a command shell.</p>
             <form id="external-tool-form" class="enterprise-form-grid">
@@ -2617,19 +2629,19 @@
           </article>
           <article class="help-topic" data-help-panel="migration" hidden>
             <h3>Import / Export</h3>
-            <p>Open <strong>Import / Export</strong> from the top bar. CyberGrid accepts mRemoteNG <code>confCons.xml</code>, PuTTY Registry exports, CSV, and encrypted <code>.cgvault</code> files.</p>
+            <p>Open <strong>File → Import / Export</strong>. CyberGrid accepts mRemoteNG <code>confCons.xml</code>, PuTTY Registry exports, CSV, and encrypted <code>.cgvault</code> files.</p>
             <ul><li>Review imported profiles before first use; source formats may omit secrets or use different protocol defaults.</li><li>CSV and legacy exports omit ordinary passwords. Use environment tokens such as <code>${USER_SECRET}</code> for portable team trees.</li><li><code>.cgvault</code> is the credential-preserving team format and requires its own strong passphrase.</li><li>For offline continuity, use the encrypted Disaster Recovery Runbook in Settings &gt; Security.</li></ul>
           </article>
           <article class="help-topic" data-help-panel="transfers" hidden>
             <h3>SFTP Transfers &amp; Config Backups</h3>
-            <p>With an SSH tab active, select <strong>Files</strong> to browse the remote filesystem. Upload and download actions use the same authenticated SSH transport and display transfer progress.</p>
-            <h4>Network configuration snapshots</h4><p>Select a network device, open <strong>Operations</strong>, then choose Config Backups. Paste or capture versioned output such as <code>show running-config</code>. Snapshots and notes remain encrypted in the vault.</p>
+            <p>With an SSH tab active, select <strong>Tools → SFTP File Browser</strong> to browse the remote filesystem. Upload and download actions use the same authenticated SSH transport and display transfer progress.</p>
+            <h4>Network configuration snapshots</h4><p>Select a network device, open <strong>Tools → Node Workspace</strong>, then choose Config Backups. Paste or capture versioned output such as <code>show running-config</code>. Snapshots and notes remain encrypted in the vault.</p>
             <p>Confirm the destination path and available space before transferring large files. CyberGrid does not overwrite remote files without using the selected destination name.</p>
           </article>
           <article class="help-topic" data-help-panel="broadcast" hidden>
             <h3>Broadcast Terminal (Multi-Exec)</h3>
             <p>Broadcast Mode mirrors input from the active primary SSH or serial terminal to explicitly selected connected targets.</p>
-            <ol><li>Open and verify every intended target session.</li><li>Select <strong>Targets</strong>, filter by group, and review the target count.</li><li>Enable <strong>Broadcast</strong> and enter the command in the primary terminal.</li><li>Disable Broadcast immediately after the multi-host operation.</li></ol>
+            <ol><li>Open and verify every intended target session.</li><li>Choose <strong>Tools → Broadcast Targets</strong>, filter by group, and review the target count.</li><li>Enable <strong>Tools → Broadcast Terminal</strong> and enter the command in the primary terminal.</li><li>Disable Broadcast immediately after the multi-host operation.</li></ol>
             <p>Start with a harmless identity command. Interactive prompts and shell state can differ between hosts, so destructive commands require a separate validation step.</p>
           </article>
           <article class="help-topic" data-help-panel="networking" hidden>
@@ -2652,6 +2664,9 @@
       <header class="modal-header"><h2 id="shortcuts-modal-title">Keyboard Shortcuts</h2><p>High-efficiency navigation from anywhere in the main workspace.</p></header>
       <div class="modal-body"><div class="shortcuts-grid full-width">
         <div class="shortcut-row"><kbd>Ctrl + K</kbd><span>Search saved connections</span></div><div class="shortcut-row"><kbd>Alt + Space</kbd><span>Global quick launcher</span></div>
+        <div class="shortcut-row"><kbd>Ctrl + N</kbd><span>Focus Quick Connect</span></div><div class="shortcut-row"><kbd>Ctrl + B</kbd><span>Toggle connections sidebar</span></div>
+        <div class="shortcut-row"><kbd>Ctrl + W</kbd><span>Close active tab</span></div><div class="shortcut-row"><kbd>Ctrl + Shift + T</kbd><span>Reopen last closed tab</span></div>
+        <div class="shortcut-row"><kbd>Ctrl + Tab</kbd><span>Activate next tab</span></div><div class="shortcut-row"><kbd>Ctrl + Shift + G</kbd><span>Toggle 2x2 terminal grid</span></div>
         <div class="shortcut-row"><kbd>F1</kbd><span>Documentation &amp; Help</span></div><div class="shortcut-row"><kbd>Ctrl + /</kbd><span>This shortcut sheet</span></div>
         <div class="shortcut-row"><kbd>Enter</kbd><span>Open selected search result</span></div><div class="shortcut-row"><kbd>Up / Down</kbd><span>Navigate search results</span></div>
         <div class="shortcut-row"><kbd>Ctrl + C</kbd><span>Copy terminal selection</span></div><div class="shortcut-row"><kbd>Ctrl + V</kbd><span>Paste into active terminal</span></div>

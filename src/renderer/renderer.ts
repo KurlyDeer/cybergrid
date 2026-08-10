@@ -8,6 +8,7 @@ type ConnectionProtocol = import("../shared/ipc").ConnectionProtocol;
 type AssetInput = import("../shared/ipc").AssetInput;
 type AssetRecord = import("../shared/ipc").AssetRecord;
 type AppPreferences = import("../shared/ipc").AppPreferences;
+type AppMenuCommand = import("../shared/ipc").AppMenuCommand;
 type AppUpdateEvent = import("../shared/ipc").AppUpdateEvent;
 type ConfigBackupInput = import("../shared/ipc").ConfigBackupInput;
 type ConnectionCategory = import("../shared/ipc").ConnectionCategory;
@@ -20,6 +21,8 @@ type DiagnosticKind = import("../shared/ipc").DiagnosticKind;
 type DiagnosticResult = import("../shared/ipc").DiagnosticResult;
 type ConnectionTaskInput = import("../shared/ipc").ConnectionTaskInput;
 type ConnectionTaskRecord = import("../shared/ipc").ConnectionTaskRecord;
+type CredentialProfileInput = import("../shared/ipc").CredentialProfileInput;
+type CredentialProfileSummary = import("../shared/ipc").CredentialProfileSummary;
 type ExternalToolInput = import("../shared/ipc").ExternalToolInput;
 type ExternalToolRecord = import("../shared/ipc").ExternalToolRecord;
 type FolderDefaultsInput = import("../shared/ipc").FolderDefaultsInput;
@@ -132,6 +135,7 @@ const DEFAULT_SETTINGS: AppPreferences = {
   externalToolPaths: { wireshark: "", winscp: "", nmap: "", powershell: "powershell.exe" },
 };
 const SETTINGS_KEY = "cybergrid:terminal-settings:v1";
+const QUICK_SNIPPET_TOOLBAR_KEY = "cybergrid:quick-snippet-toolbar:v1";
 
 const tabs = new Map<string, WorkspaceTab>();
 const sshSessions = new Map<string, WorkspaceTab>();
@@ -155,6 +159,7 @@ const collapsedGroups = new Set<string>();
 let savedProfiles: ServerProfileSummary[] = [];
 let savedAssets: AssetRecord[] = [];
 let savedSnippets: SnippetRecord[] = [];
+let credentialProfiles: CredentialProfileSummary[] = [];
 let folderDefaults: FolderDefaultsSummary[] = [];
 let externalTools: ExternalToolRecord[] = [];
 let connectionTasks: ConnectionTaskRecord[] = [];
@@ -171,10 +176,12 @@ let vaultMode: "create" | "unlock" = "unlock";
 let sftpDrawerOpen = false;
 let snippetsDrawerOpen = false;
 let selectedProfileId: string | null = null;
+let editingProfileId: string | null = null;
 let connectionCategory: ConnectionCategory = "server";
 let broadcastMode = false;
 let layoutMode: "single" | "grid" = "single";
 let recentTerminalTabIds: string[] = [];
+const closedTabActions: Array<() => Promise<void>> = [];
 let paletteSelectionIndex = 0;
 let paletteMatches: ServerProfileSummary[] = [];
 let vaultUnlocked = false;
@@ -184,6 +191,7 @@ let restoringWorkspace = false;
 let workspaceSaveTimer: number | null = null;
 const excludedBroadcastGroups = new Set<string>();
 let currentSettings: AppPreferences = { ...DEFAULT_SETTINGS };
+let quickSnippetToolbarVisible = localStorage.getItem(QUICK_SNIPPET_TOOLBAR_KEY) === "true";
 
 function elementById<T extends HTMLElement>(id: string): T {
   const element = document.getElementById(id);
@@ -210,17 +218,6 @@ const assetCount = elementById<HTMLSpanElement>("asset-count");
 const scanButton = elementById<HTMLButtonElement>("scan-button");
 const addServerButton = elementById<HTMLButtonElement>("add-server-button");
 const lockButton = elementById<HTMLButtonElement>("lock-button");
-const settingsButton = elementById<HTMLButtonElement>("settings-button");
-const migrationButton = elementById<HTMLButtonElement>("migration-button");
-const helpButton = elementById<HTMLButtonElement>("help-button");
-const toggleSftpButton = elementById<HTMLButtonElement>("toggle-sftp-button");
-const toggleSnippetsButton = elementById<HTMLButtonElement>("toggle-snippets-button");
-const broadcastToggleButton = elementById<HTMLButtonElement>("broadcast-toggle-button");
-const broadcastTargetsButton = elementById<HTMLButtonElement>("broadcast-targets-button");
-const layoutButton = elementById<HTMLButtonElement>("layout-button");
-const commandPaletteButton = elementById<HTMLButtonElement>("command-palette-button");
-const externalToolsButton = elementById<HTMLButtonElement>("external-tools-button");
-const enterpriseButton = elementById<HTMLButtonElement>("enterprise-button");
 
 const sftpDrawer = elementById<HTMLElement>("sftp-drawer");
 const sftpCloseButton = elementById<HTMLButtonElement>("sftp-close-button");
@@ -245,9 +242,13 @@ const snippetIdInput = elementById<HTMLInputElement>("snippet-id");
 const snippetNameInput = elementById<HTMLInputElement>("snippet-name");
 const snippetLanguageInput = elementById<HTMLSelectElement>("snippet-language");
 const snippetTagsInput = elementById<HTMLInputElement>("snippet-tags");
+const snippetPinnedInput = elementById<HTMLInputElement>("snippet-pinned");
 const snippetBodyInput = elementById<HTMLTextAreaElement>("snippet-body");
 const snippetCancelButton = elementById<HTMLButtonElement>("snippet-cancel-button");
 const snippetFormError = elementById<HTMLDivElement>("snippet-form-error");
+const quickSnippetToolbar = elementById<HTMLElement>("quick-snippet-toolbar");
+const quickSnippetButtons = elementById<HTMLDivElement>("quick-snippet-buttons");
+const quickSnippetCloseButton = elementById<HTMLButtonElement>("quick-snippet-close");
 const operationsTabButtons = [...document.querySelectorAll<HTMLButtonElement>("[data-operations-tab]")];
 const operationsPanels = [...document.querySelectorAll<HTMLElement>("[data-operations-panel]")];
 const notesNodeContext = elementById<HTMLDivElement>("notes-node-context");
@@ -281,12 +282,15 @@ const vaultError = elementById<HTMLDivElement>("vault-error");
 const vaultSubmit = elementById<HTMLButtonElement>("vault-submit");
 
 const serverModal = elementById<HTMLDialogElement>("server-modal");
+const serverModalTitle = elementById<HTMLHeadingElement>("server-modal-title");
 const serverForm = elementById<HTMLFormElement>("server-form");
 const serverNameInput = elementById<HTMLInputElement>("server-name");
 const serverProtocolInput = elementById<HTMLSelectElement>("server-protocol");
 const serverHostInput = elementById<HTMLInputElement>("server-host");
 const serverHostLabel = elementById<HTMLLabelElement>("server-host-label");
 const serverPortInput = elementById<HTMLInputElement>("server-port");
+const serverCredentialProfileField = elementById<HTMLDivElement>("server-credential-profile-field");
+const serverCredentialProfileInput = elementById<HTMLSelectElement>("server-credential-profile");
 const serverUsernameInput = elementById<HTMLInputElement>("server-username");
 const serverGroupInput = elementById<HTMLInputElement>("server-group");
 const serverTagsInput = elementById<HTMLInputElement>("server-tags");
@@ -365,6 +369,22 @@ const folderDefaultsCancelButton = elementById<HTMLButtonElement>("folder-defaul
 const enterpriseModal = elementById<HTMLDialogElement>("enterprise-modal");
 const enterpriseCloseButton = elementById<HTMLButtonElement>("enterprise-close");
 const enterpriseError = elementById<HTMLDivElement>("enterprise-error");
+const credentialProfileCard = elementById<HTMLElement>("credential-profile-card");
+const credentialProfileForm = elementById<HTMLFormElement>("credential-profile-form");
+const credentialProfileIdInput = elementById<HTMLInputElement>("credential-profile-id");
+const credentialProfileNameInput = elementById<HTMLInputElement>("credential-profile-name");
+const credentialProfileAuthInput = elementById<HTMLSelectElement>("credential-profile-auth");
+const credentialProfileUsernameInput = elementById<HTMLInputElement>("credential-profile-username");
+const credentialProfileDomainInput = elementById<HTMLInputElement>("credential-profile-domain");
+const credentialProfilePasswordField = elementById<HTMLDivElement>("credential-profile-password-field");
+const credentialProfilePasswordInput = elementById<HTMLInputElement>("credential-profile-password");
+const credentialProfileKeyField = elementById<HTMLDivElement>("credential-profile-key-field");
+const credentialProfileKeyInput = elementById<HTMLInputElement>("credential-profile-key");
+const credentialProfileKeyBrowseButton = elementById<HTMLButtonElement>("credential-profile-key-browse");
+const credentialProfilePassphraseField = elementById<HTMLDivElement>("credential-profile-passphrase-field");
+const credentialProfilePassphraseInput = elementById<HTMLInputElement>("credential-profile-passphrase");
+const credentialProfileResetButton = elementById<HTMLButtonElement>("credential-profile-reset");
+const credentialProfileList = elementById<HTMLDivElement>("credential-profile-list");
 const externalToolForm = elementById<HTMLFormElement>("external-tool-form");
 const externalToolIdInput = elementById<HTMLInputElement>("external-tool-id");
 const externalToolNameInput = elementById<HTMLInputElement>("external-tool-name");
@@ -1029,19 +1049,8 @@ function writeTerminalInput(tab: WorkspaceTab, data: string): void {
 
 function updateBroadcastControls(): void {
   const available = activeBroadcastTabs();
-  const selected = selectedBroadcastTabs();
   if (available.length === 0) broadcastMode = false;
-  broadcastToggleButton.disabled = available.length === 0;
-  broadcastTargetsButton.disabled = available.length === 0;
-  broadcastToggleButton.classList.toggle("active", broadcastMode);
-  broadcastToggleButton.setAttribute("aria-pressed", String(broadcastMode));
-  broadcastToggleButton.textContent = broadcastMode
-    ? `Broadcast On (${selected.length})`
-    : "Broadcast Off";
-  broadcastTargetsButton.textContent = `Targets (${selected.length}/${available.length})`;
-  broadcastTargetsButton.title = available.length === 0
-    ? "Open an SSH or serial session to use broadcast mode"
-    : "Choose the active SSH and serial groups that receive broadcast input";
+  renderQuickSnippetToolbar();
 }
 
 function createRdpTab(label: string, config: RdpConnectionConfig): WorkspaceTab {
@@ -1109,10 +1118,6 @@ function rememberTerminalTab(tab: WorkspaceTab): void {
 function updateLayoutControls(): void {
   const count = terminalTabsForGrid().length;
   if (count < 2) layoutMode = "single";
-  layoutButton.disabled = count < 2;
-  layoutButton.classList.toggle("active", layoutMode === "grid");
-  layoutButton.setAttribute("aria-pressed", String(layoutMode === "grid"));
-  layoutButton.textContent = layoutMode === "grid" ? `Grid (${Math.min(4, count)})` : "Grid 2x2";
 }
 
 function renderWorkspaceLayout(): void {
@@ -1165,6 +1170,10 @@ function activateTab(id: string): void {
 async function closeTab(id: string): Promise<void> {
   const tab = tabs.get(id);
   if (!tab) return;
+  if (tab.duplicate) {
+    closedTabActions.push(tab.duplicate);
+    if (closedTabActions.length > 12) closedTabActions.shift();
+  }
   const tabOrder = [...tabs.keys()];
   const closedIndex = tabOrder.indexOf(id);
   if (tab.reconnectTimer !== undefined) window.clearTimeout(tab.reconnectTimer);
@@ -1221,6 +1230,52 @@ async function closeTab(id: string): Promise<void> {
   updateBroadcastControls();
   renderWorkspaceLayout();
   scheduleWorkspaceSave();
+}
+
+async function reopenClosedTab(): Promise<void> {
+  const reopen = closedTabActions.pop();
+  if (!reopen) {
+    connectionState.textContent = "No recently closed connection tab is available.";
+    return;
+  }
+  await reopen();
+}
+
+function activateNextTab(): void {
+  const ids = [...tabs.keys()];
+  if (ids.length < 2) return;
+  const currentIndex = activeTabId ? ids.indexOf(activeTabId) : -1;
+  activateTab(ids[(currentIndex + 1) % ids.length] as string);
+}
+
+function toggleGridLayout(): void {
+  if (terminalTabsForGrid().length < 2) {
+    connectionState.textContent = "Open at least two terminal sessions to use the 2x2 grid.";
+    return;
+  }
+  layoutMode = layoutMode === "grid" ? "single" : "grid";
+  renderWorkspaceLayout();
+  tabs.get(activeTabId ?? "")?.terminal?.focus();
+  scheduleWorkspaceSave();
+}
+
+function clearActiveTerminal(): void {
+  const terminal = tabs.get(activeTabId ?? "")?.terminal;
+  if (!terminal) {
+    connectionState.textContent = "The active tab does not contain a terminal.";
+    return;
+  }
+  terminal.clear();
+  terminal.focus();
+}
+
+function toggleSidebar(): void {
+  appShell.classList.toggle("sidebar-hidden");
+  requestAnimationFrame(() => {
+    tabs.get(activeTabId ?? "")?.fitAddon?.fit();
+    const tab = activeTabId ? tabs.get(activeTabId) : undefined;
+    if (tab) updateWebBounds(tab);
+  });
 }
 
 function updateTabStatus(tab: WorkspaceTab, status: WorkspaceStatus, message?: string): void {
@@ -1715,6 +1770,89 @@ function resetSyncSourceForm(): void {
   updateSyncSourceFields();
 }
 
+function updateCredentialProfileFields(): void {
+  const privateKey = credentialProfileAuthInput.value === "privateKey";
+  credentialProfilePasswordField.hidden = privateKey;
+  credentialProfileKeyField.hidden = !privateKey;
+  credentialProfilePassphraseField.hidden = !privateKey;
+  credentialProfilePasswordInput.required = !privateKey && !credentialProfilePasswordInput.placeholder.startsWith("Stored");
+  credentialProfileKeyInput.required = privateKey && !credentialProfileKeyInput.placeholder.startsWith("Stored");
+}
+
+function resetCredentialProfileForm(): void {
+  credentialProfileForm.reset();
+  credentialProfileIdInput.value = "";
+  credentialProfileAuthInput.value = "password";
+  credentialProfilePasswordInput.value = "";
+  credentialProfilePasswordInput.placeholder = "Password";
+  credentialProfileKeyInput.value = "";
+  credentialProfileKeyInput.placeholder = "Private key path";
+  credentialProfilePassphraseInput.value = "";
+  credentialProfilePassphraseInput.placeholder = "Optional passphrase";
+  updateCredentialProfileFields();
+}
+
+function renderCredentialProfileOptions(): void {
+  const selectedId = serverCredentialProfileInput.value;
+  const protocol = serverProtocolInput.value as ConnectionProtocol;
+  serverCredentialProfileInput.replaceChildren(new Option("Connection-specific / inherited", ""));
+  for (const credential of credentialProfiles) {
+    const option = new Option(
+      `${credential.name} · ${credential.username || "password only"}`,
+      credential.id,
+    );
+    option.disabled = credential.authType === "privateKey" && protocol !== "ssh";
+    serverCredentialProfileInput.append(option);
+  }
+  serverCredentialProfileInput.value = [...serverCredentialProfileInput.options]
+    .some((option) => option.value === selectedId && !option.disabled) ? selectedId : "";
+}
+
+function renderCredentialProfiles(): void {
+  credentialProfileList.replaceChildren();
+  if (credentialProfiles.length === 0) {
+    credentialProfileList.append(createTextElement("div", "sidebar-empty", "No reusable credential profiles saved."));
+  }
+  for (const credential of credentialProfiles) {
+    const row = createTextElement("div", "enterprise-record", "");
+    const identity = credential.domain && credential.username
+      ? `${credential.domain}\\${credential.username}`
+      : credential.username || "Password-only identity";
+    row.append(createTextElement(
+      "span",
+      "",
+      `${credential.name} · ${identity} · ${credential.authType === "privateKey" ? "SSH key" : "Password"}`,
+    ));
+    row.append(
+      recordButton("Edit", () => {
+        credentialProfileIdInput.value = credential.id;
+        credentialProfileNameInput.value = credential.name;
+        credentialProfileUsernameInput.value = credential.username;
+        credentialProfileDomainInput.value = credential.domain ?? "";
+        credentialProfileAuthInput.value = credential.authType;
+        credentialProfilePasswordInput.value = "";
+        credentialProfilePasswordInput.placeholder = credential.hasPassword
+          ? "Stored password (leave blank to keep)" : "Password";
+        credentialProfileKeyInput.value = credential.privateKeyPath ?? "";
+        credentialProfileKeyInput.placeholder = credential.privateKeyPath
+          ? "Stored private key path" : "Private key path";
+        credentialProfilePassphraseInput.value = "";
+        credentialProfilePassphraseInput.placeholder = credential.hasPassphrase
+          ? "Stored passphrase (leave blank to keep)" : "Optional passphrase";
+        updateCredentialProfileFields();
+        credentialProfileCard.scrollIntoView({ block: "start", behavior: "smooth" });
+      }),
+      recordButton("Delete", () => {
+        if (!window.confirm(`Delete credential profile "${credential.name}"?`)) return;
+        void window.cybergrid.vault.deleteCredentialProfile(credential.id).then(refreshVaultContent)
+          .catch((error: unknown) => { enterpriseError.textContent = errorMessage(error); });
+      }),
+    );
+    credentialProfileList.append(row);
+  }
+  renderCredentialProfileOptions();
+}
+
 function renderTaskOptions(): void {
   for (const select of [serverPreTasksInput, serverPostTasksInput]) {
     const selected = new Set([...select.selectedOptions].map((option) => option.value));
@@ -1730,6 +1868,7 @@ function renderTaskOptions(): void {
 }
 
 function renderEnterpriseData(): void {
+  renderCredentialProfiles();
   externalToolList.replaceChildren();
   for (const tool of externalTools) {
     const row = createTextElement("div", "enterprise-record", "");
@@ -1811,7 +1950,8 @@ function renderEnterpriseData(): void {
 }
 
 async function refreshEnterpriseData(): Promise<void> {
-  [folderDefaults, externalTools, connectionTasks, syncSources] = await Promise.all([
+  [credentialProfiles, folderDefaults, externalTools, connectionTasks, syncSources] = await Promise.all([
+    window.cybergrid.vault.listCredentialProfiles(),
     window.cybergrid.vault.listFolderDefaults(),
     window.cybergrid.vault.listExternalTools(),
     window.cybergrid.vault.listConnectionTasks(),
@@ -1824,7 +1964,16 @@ async function refreshEnterpriseData(): Promise<void> {
 function openEnterpriseModal(): void {
   enterpriseError.textContent = "";
   renderEnterpriseData();
+  updateCredentialProfileFields();
   if (!enterpriseModal.open) enterpriseModal.showModal();
+}
+
+function openCredentialProfiles(): void {
+  openEnterpriseModal();
+  requestAnimationFrame(() => {
+    credentialProfileCard.scrollIntoView({ block: "start" });
+    credentialProfileNameInput.focus();
+  });
 }
 
 function updateFolderDefaultsFields(): void {
@@ -1879,10 +2028,11 @@ function updateSyncSourceFields(): void {
 }
 
 async function refreshVaultContent(): Promise<void> {
-  const [profiles, assets, snippets, defaults, tools, tasks, sources] = await Promise.all([
+  const [profiles, assets, snippets, credentials, defaults, tools, tasks, sources] = await Promise.all([
     window.cybergrid.vault.listProfiles(),
     window.cybergrid.vault.listAssets(),
     window.cybergrid.vault.listSnippets(),
+    window.cybergrid.vault.listCredentialProfiles(),
     window.cybergrid.vault.listFolderDefaults(),
     window.cybergrid.vault.listExternalTools(),
     window.cybergrid.vault.listConnectionTasks(),
@@ -1891,6 +2041,7 @@ async function refreshVaultContent(): Promise<void> {
   savedProfiles = profiles;
   savedAssets = assets;
   savedSnippets = snippets;
+  credentialProfiles = credentials;
   folderDefaults = defaults;
   externalTools = tools;
   connectionTasks = tasks;
@@ -2221,8 +2372,7 @@ async function copyProfileTotp(profileId: string): Promise<void> {
   closeServerContextMenu();
 }
 
-function openExternalToolsMenu(event: MouseEvent): void {
-  event.preventDefault();
+function openExternalToolsMenu(): void {
   serverContextMenu.replaceChildren();
   const active = activeTabId ? tabs.get(activeTabId) : undefined;
   const profileId = active?.context.profileId;
@@ -2240,8 +2390,7 @@ function openExternalToolsMenu(event: MouseEvent): void {
     closeServerContextMenu();
     openEnterpriseModal();
   });
-  const rect = externalToolsButton.getBoundingClientRect();
-  positionContextMenu(rect.left, rect.bottom + 4, Math.min(420, 48 + externalTools.length * 34));
+  positionContextMenu(window.innerWidth - 278, 48, Math.min(420, 48 + externalTools.length * 34));
 }
 
 async function duplicateWorkspaceTab(tab: WorkspaceTab, split = false): Promise<void> {
@@ -2330,6 +2479,10 @@ function openServerContextMenu(event: MouseEvent, profile: ServerProfileSummary)
   addAction("Open connection", () => {
     closeServerContextMenu();
     void connectSavedProfile(profile);
+  });
+  addAction("Connection properties...", () => {
+    closeServerContextMenu();
+    openServerModal(profile);
   });
   addAction(profile.favorite ? "Remove from favorites" : "Add to favorites", () => {
     closeServerContextMenu();
@@ -2527,7 +2680,6 @@ function activeSshTab(): WorkspaceTab | undefined {
 
 function updateSftpAvailability(): void {
   const available = Boolean(activeSshTab());
-  toggleSftpButton.disabled = !available;
   if (!available && sftpDrawerOpen) {
     setSftpDrawerOpen(false);
   }
@@ -2538,7 +2690,6 @@ function setSftpDrawerOpen(open: boolean): void {
   sftpDrawerOpen = open;
   contentArea.classList.toggle("sftp-open", open);
   sftpDrawer.hidden = !open;
-  toggleSftpButton.classList.toggle("active", open);
   const tab = activeSshTab();
   if (open && tab) {
     if (tab.sftp) {
@@ -2555,7 +2706,6 @@ function setSnippetsDrawerOpen(open: boolean): void {
   snippetsDrawerOpen = open;
   contentArea.classList.toggle("snippets-open", open);
   snippetsDrawer.hidden = !open;
-  toggleSnippetsButton.classList.toggle("active", open);
   if (open) {
     renderSnippets();
     renderNodeWorkspace();
@@ -2650,6 +2800,7 @@ function editableSnippet(snippet?: SnippetRecord): void {
   snippetLanguageInput.value = snippet?.language ?? "bash";
   snippetTagsInput.value = snippet?.tags.join(", ") ?? "";
   snippetBodyInput.value = snippet?.body ?? "";
+  snippetPinnedInput.checked = snippet?.pinned ?? false;
   snippetFormTitle.textContent = snippet ? "Edit snippet" : "New snippet";
   snippetFormError.textContent = "";
   snippetForm.hidden = false;
@@ -2706,8 +2857,43 @@ function executeSnippet(snippet: SnippetRecord): void {
       writeTerminalInput(tab, commandForTerminal(substituteSnippetTokens(snippet, tab)));
     }
     snippetStatus.textContent = `Executed "${snippet.name}" on ${targets.length} session${targets.length === 1 ? "" : "s"}.`;
+    connectionState.textContent = `Ran ${snippet.name} on ${targets.length} session${targets.length === 1 ? "" : "s"}`;
   } catch (error) {
     snippetStatus.textContent = errorMessage(error);
+    connectionState.textContent = errorMessage(error);
+  }
+}
+
+function setQuickSnippetToolbarVisible(visible: boolean): void {
+  quickSnippetToolbarVisible = visible;
+  localStorage.setItem(QUICK_SNIPPET_TOOLBAR_KEY, String(visible));
+  renderQuickSnippetToolbar();
+  requestAnimationFrame(() => tabs.get(activeTabId ?? "")?.fitAddon?.fit());
+}
+
+function renderQuickSnippetToolbar(): void {
+  quickSnippetToolbar.hidden = !quickSnippetToolbarVisible;
+  quickSnippetButtons.replaceChildren();
+  if (!quickSnippetToolbarVisible) return;
+  const pinned = savedSnippets.filter((snippet) => snippet.pinned);
+  if (pinned.length === 0) {
+    quickSnippetButtons.append(createTextElement(
+      "span",
+      "quick-snippet-empty",
+      "No pinned macros. Pin commands from Tools → Node Workspace.",
+    ));
+    return;
+  }
+  const hasTarget = broadcastMode ? selectedBroadcastTabs().length > 0 : Boolean(activeSnippetTab());
+  for (const snippet of pinned) {
+    const button = document.createElement("button");
+    button.className = "quick-snippet-button";
+    button.type = "button";
+    button.textContent = snippet.name;
+    button.title = `${snippet.language === "cisco" ? "Cisco CLI" : snippet.language} · ${snippet.body.split(/\r?\n/)[0] ?? ""}`;
+    button.disabled = !hasTarget;
+    button.addEventListener("click", () => executeSnippet(snippet));
+    quickSnippetButtons.append(button);
   }
 }
 
@@ -2724,6 +2910,7 @@ function renderSnippets(): void {
       "sidebar-empty",
       savedSnippets.length === 0 ? "No command snippets saved yet." : "No snippets match this filter.",
     ));
+    renderQuickSnippetToolbar();
     return;
   }
   for (const snippet of filtered) {
@@ -2748,6 +2935,26 @@ function renderSnippets(): void {
     editButton.type = "button";
     editButton.textContent = "Edit";
     editButton.addEventListener("click", () => editableSnippet(snippet));
+    const pinButton = document.createElement("button");
+    pinButton.className = "secondary-button compact-button";
+    pinButton.type = "button";
+    pinButton.textContent = snippet.pinned ? "Unpin" : "Pin";
+    pinButton.addEventListener("click", async () => {
+      try {
+        await window.cybergrid.vault.saveSnippet({
+          id: snippet.id,
+          name: snippet.name,
+          language: snippet.language,
+          tags: [...snippet.tags],
+          body: snippet.body,
+          pinned: !snippet.pinned,
+        });
+        savedSnippets = await window.cybergrid.vault.listSnippets();
+        renderSnippets();
+      } catch (error) {
+        snippetStatus.textContent = errorMessage(error);
+      }
+    });
     const deleteButton = document.createElement("button");
     deleteButton.className = "secondary-button compact-button";
     deleteButton.type = "button";
@@ -2762,10 +2969,11 @@ function renderSnippets(): void {
         snippetStatus.textContent = errorMessage(error);
       }
     });
-    actions.append(runButton, editButton, deleteButton);
+    actions.append(runButton, pinButton, editButton, deleteButton);
     card.append(heading, tags, preview, actions);
     snippetList.append(card);
   }
+  renderQuickSnippetToolbar();
 }
 
 function renderBroadcastTargets(): void {
@@ -2966,6 +3174,7 @@ function applyLockedRendererState(reason?: string): void {
   savedProfiles = [];
   savedAssets = [];
   savedSnippets = [];
+  credentialProfiles = [];
   folderDefaults = [];
   externalTools = [];
   connectionTasks = [];
@@ -3046,6 +3255,9 @@ function updateProfileFields(resetDefaults = false): void {
   const usesUsername = protocol === "ssh" || protocol === "rdp";
   const usesAuthentication = protocol === "ssh" || protocol === "rdp" || protocol === "vnc";
   const privateKeyOption = authTypeInput.querySelector<HTMLOptionElement>('option[value="privateKey"]');
+  renderCredentialProfileOptions();
+  if (!usesAuthentication) serverCredentialProfileInput.value = "";
+  const linkedCredential = Boolean(serverCredentialProfileInput.value);
 
   serverHostLabel.textContent = serial ? "COM port or device path" : "Hostname or IP";
   serverHostInput.placeholder = serial ? "COM3 or /dev/ttyUSB0" : "server.example.net";
@@ -3054,10 +3266,11 @@ function updateProfileFields(resetDefaults = false): void {
   serverPortInput.required = !serial;
   serverSerialSection.hidden = !serial;
   serverBaudRateInput.required = serial;
-  serverUsernameField.hidden = !usesUsername;
-  serverDomainInput.closest<HTMLElement>(".field")?.toggleAttribute("hidden", protocol !== "rdp");
-  serverUsernameInput.required = usesUsername && !serverInheritFolderInput.checked;
-  serverAuthField.hidden = !usesAuthentication;
+  serverCredentialProfileField.hidden = !usesAuthentication;
+  serverUsernameField.hidden = !usesUsername || linkedCredential;
+  serverDomainInput.closest<HTMLElement>(".field")?.toggleAttribute("hidden", protocol !== "rdp" || linkedCredential);
+  serverUsernameInput.required = usesUsername && !serverInheritFolderInput.checked && !linkedCredential;
+  serverAuthField.hidden = !usesAuthentication || linkedCredential;
   privateKeyOption?.toggleAttribute("disabled", protocol !== "ssh");
 
   if (resetDefaults) {
@@ -3068,26 +3281,74 @@ function updateProfileFields(resetDefaults = false): void {
   } else if (!usesAuthentication) {
     authTypeInput.value = "none";
   }
+  if (linkedCredential) authTypeInput.value = "none";
 
-  const usesPassword = usesAuthentication && authTypeInput.value === "password";
-  const usesPrivateKey = protocol === "ssh" && authTypeInput.value === "privateKey";
+  const usesPassword = usesAuthentication && !linkedCredential && authTypeInput.value === "password";
+  const usesPrivateKey = protocol === "ssh" && !linkedCredential && authTypeInput.value === "privateKey";
   serverPasswordSection.hidden = !usesPassword;
   serverKeySection.hidden = !usesPrivateKey;
-  serverPasswordInput.required = usesPassword;
-  serverKeyPathInput.required = usesPrivateKey;
+  serverPasswordInput.required = usesPassword && !serverPasswordInput.placeholder.startsWith("Stored");
+  serverKeyPathInput.required = usesPrivateKey && !serverKeyPathInput.placeholder.startsWith("Stored");
   serverKeepaliveInput.disabled = !serverKeepaliveEnabledInput.checked || protocol !== "ssh";
 }
 
-function openServerModal(): void {
+function openServerModal(profile?: ServerProfileSummary): void {
   serverForm.reset();
-  serverProtocolInput.value = "ssh";
+  editingProfileId = profile?.id ?? null;
+  serverModalTitle.textContent = profile ? "Connection Properties" : "Add Connection";
+  serverProtocolInput.value = profile?.protocol ?? "ssh";
   serverBaudRateInput.value = "9600";
-  serverInheritFolderInput.checked = true;
-  serverKeepaliveEnabledInput.checked = true;
-  serverIndicatorColorInput.value = currentSettings.accent;
+  serverInheritFolderInput.checked = profile?.inheritFolderDefaults ?? true;
+  serverKeepaliveEnabledInput.checked = profile?.keepAliveEnabled ?? true;
+  serverIndicatorColorInput.value = profile?.indicatorColor ?? currentSettings.accent;
   renderTaskOptions();
   serverFormError.textContent = "";
-  selectConnectionCategory("server");
+  selectConnectionCategory(profile?.category ?? "server", false);
+  if (profile) {
+    serverProtocolInput.value = profile.protocol;
+    renderCredentialProfileOptions();
+    serverCredentialProfileInput.value = profile.credentialProfileId ?? "";
+    serverNameInput.value = profile.name;
+    serverHostInput.value = profile.host;
+    serverPortInput.value = String(profile.port);
+    serverUsernameInput.value = profile.username.replace(profile.domain ? `${profile.domain}\\` : "", "");
+    serverGroupInput.value = profile.group;
+    serverTagsInput.value = profile.tags.join(", ");
+    serverFavoriteInput.checked = profile.favorite;
+    serverDomainInput.value = profile.domain ?? "";
+    authTypeInput.value = profile.credentialProfileId ? "none" : profile.authType;
+    serverPasswordInput.value = "";
+    serverPasswordInput.placeholder = profile.hasPassword ? "Stored password (leave blank to keep)" : "";
+    serverKeyPathInput.value = profile.privateKeyPath ?? "";
+    serverPassphraseInput.value = "";
+    serverPassphraseInput.placeholder = profile.hasPassphrase ? "Stored passphrase (leave blank to keep)" : "";
+    serverBaudRateInput.value = String(profile.baudRate ?? 9_600);
+    serverDataBitsInput.value = String(profile.dataBits ?? 8);
+    serverStopBitsInput.value = String(profile.stopBits ?? 1);
+    serverParityInput.value = profile.parity ?? "none";
+    serverTimeoutInput.value = profile.readyTimeoutSeconds ? String(profile.readyTimeoutSeconds) : "";
+    serverKeepaliveInput.value = profile.keepaliveSeconds ? String(profile.keepaliveSeconds) : "";
+    serverPersistInput.checked = profile.persistUntilAppCloses;
+    serverAutoReconnectInput.checked = profile.autoReconnect;
+    serverJumpHostInput.value = profile.jumpHost ?? "";
+    serverProxyOverrideInput.value = profile.proxyOverride ?? "";
+    serverIconInput.value = profile.icon;
+    serverApplicationBadgeInput.value = profile.applicationBadge ?? "";
+    serverTerminalThemeInput.value = profile.terminalOverrides?.theme ?? "";
+    serverTerminalFontInput.value = profile.terminalOverrides?.fontFamily ?? "";
+    serverTerminalSizeInput.value = profile.terminalOverrides?.fontSize ? String(profile.terminalOverrides.fontSize) : "";
+    serverTerminalLineHeightInput.value = profile.terminalOverrides?.lineHeight ? String(profile.terminalOverrides.lineHeight) : "";
+    serverTerminalBackgroundInput.value = profile.terminalOverrides?.background ?? currentSettings.background;
+    serverTerminalForegroundInput.value = profile.terminalOverrides?.foreground ?? currentSettings.foreground;
+    serverTerminalCursorInput.value = profile.terminalOverrides?.cursor ?? currentSettings.cursor;
+    for (const option of serverPreTasksInput.options) option.selected = profile.preConnectTaskIds.includes(option.value);
+    for (const option of serverPostTasksInput.options) option.selected = profile.postConnectTaskIds.includes(option.value);
+  } else {
+    serverCredentialProfileInput.value = "";
+    serverPasswordInput.placeholder = "";
+    serverPassphraseInput.placeholder = "";
+  }
+  updateProfileFields(false);
   if (!serverModal.open) {
     serverModal.showModal();
   }
@@ -3159,6 +3420,84 @@ function openSettingsModal(): void {
   }
 }
 
+function openMigrationModal(): void {
+  migrationStatus.textContent = "";
+  migrationError.textContent = "";
+  migrationPassphrase.value = "";
+  if (!migrationModal.open) migrationModal.showModal();
+}
+
+function openScanModal(): void {
+  scanError.textContent = "";
+  if (!scanModal.open) scanModal.showModal();
+  requestAnimationFrame(() => scanTargetInput.focus());
+}
+
+async function lockVaultFromUi(): Promise<void> {
+  try {
+    await window.cybergrid.vault.lock();
+    applyLockedRendererState();
+  } catch (error) {
+    window.alert(errorMessage(error));
+  }
+}
+
+function toggleBroadcastMode(): void {
+  if (broadcastMode) {
+    broadcastMode = false;
+    connectionState.textContent = "Broadcast mode disabled";
+  } else if (selectedBroadcastTabs().length === 0) {
+    openBroadcastTargets();
+  } else {
+    broadcastMode = true;
+    connectionState.textContent = `Broadcast mode enabled for ${selectedBroadcastTabs().length} session${selectedBroadcastTabs().length === 1 ? "" : "s"}`;
+  }
+  updateBroadcastControls();
+  tabs.get(activeTabId ?? "")?.terminal?.focus();
+}
+
+async function handleAppMenuCommand(command: AppMenuCommand): Promise<void> {
+  const requiresUnlockedVault = new Set<AppMenuCommand>([
+    "new-connection", "lock-vault", "import-export", "command-palette", "external-tools",
+    "enterprise", "credential-profiles", "subnet-scanner", "settings",
+  ]);
+  if (requiresUnlockedVault.has(command) && !vaultUnlocked) {
+    vaultError.textContent = "Unlock the credential vault to use this command.";
+    return;
+  }
+  switch (command) {
+    case "new-connection": openServerModal(); break;
+    case "focus-quick-connect": quickConnectInput.focus(); quickConnectInput.select(); break;
+    case "lock-vault": await lockVaultFromUi(); break;
+    case "import-export": openMigrationModal(); break;
+    case "command-palette": openCommandPalette(); break;
+    case "clear-terminal": clearActiveTerminal(); break;
+    case "toggle-sidebar": toggleSidebar(); break;
+    case "toggle-grid": toggleGridLayout(); break;
+    case "toggle-broadcast": toggleBroadcastMode(); break;
+    case "broadcast-targets": openBroadcastTargets(); break;
+    case "toggle-sftp":
+      if (!activeSshTab()) connectionState.textContent = "Select a connected SSH tab to open SFTP.";
+      else setSftpDrawerOpen(!sftpDrawerOpen);
+      break;
+    case "node-workspace":
+      setSnippetsDrawerOpen(!snippetsDrawerOpen);
+      if (snippetsDrawerOpen) selectOperationsPanel("commands");
+      break;
+    case "toggle-quick-snippets": setQuickSnippetToolbarVisible(!quickSnippetToolbarVisible); break;
+    case "external-tools": openExternalToolsMenu(); break;
+    case "enterprise": openEnterpriseModal(); break;
+    case "credential-profiles": openCredentialProfiles(); break;
+    case "subnet-scanner": openScanModal(); break;
+    case "settings": openSettingsModal(); break;
+    case "close-tab": if (activeTabId) await closeTab(activeTabId); break;
+    case "reopen-tab": await reopenClosedTab(); break;
+    case "next-tab": activateNextTab(); break;
+    case "help": if (helpModal.open) helpModal.close(); else openHelp(); break;
+    case "shortcuts": if (shortcutsModal.open) shortcutsModal.close(); else openShortcuts(); break;
+  }
+}
+
 quickConnectForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   connectionState.textContent = "Parsing Quick Connect URL...";
@@ -3177,18 +3516,6 @@ quickConnectForm.addEventListener("submit", async (event) => {
   }
 });
 
-broadcastToggleButton.addEventListener("click", () => {
-  if (broadcastMode) {
-    broadcastMode = false;
-  } else if (selectedBroadcastTabs().length === 0) {
-    openBroadcastTargets();
-  } else {
-    broadcastMode = true;
-  }
-  updateBroadcastControls();
-  tabs.get(activeTabId ?? "")?.terminal?.focus();
-});
-broadcastTargetsButton.addEventListener("click", openBroadcastTargets);
 broadcastSelectAllButton.addEventListener("click", () => {
   for (const input of broadcastTargetList.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')) {
     input.checked = true;
@@ -3220,10 +3547,9 @@ broadcastTargetsModal.addEventListener("click", (event) => {
   if (event.target === broadcastTargetsModal) broadcastTargetsModal.close();
 });
 
-toggleSftpButton.addEventListener("click", () => setSftpDrawerOpen(!sftpDrawerOpen));
 sftpCloseButton.addEventListener("click", () => setSftpDrawerOpen(false));
-toggleSnippetsButton.addEventListener("click", () => setSnippetsDrawerOpen(!snippetsDrawerOpen));
 snippetsCloseButton.addEventListener("click", () => setSnippetsDrawerOpen(false));
+quickSnippetCloseButton.addEventListener("click", () => setQuickSnippetToolbarVisible(false));
 for (const button of operationsTabButtons) {
   button.addEventListener("click", () => {
     const panel = button.dataset.operationsTab;
@@ -3270,6 +3596,7 @@ snippetForm.addEventListener("submit", async (event) => {
     language: snippetLanguageInput.value as SnippetLanguage,
     tags: [...new Set(snippetTagsInput.value.split(",").map((tag) => tag.trim()).filter(Boolean))],
     body: snippetBodyInput.value,
+    pinned: snippetPinnedInput.checked,
   };
   if (snippetIdInput.value) input.id = snippetIdInput.value;
   try {
@@ -3359,12 +3686,40 @@ vaultForm.addEventListener("submit", async (event) => {
   }
 });
 
-addServerButton.addEventListener("click", openServerModal);
-externalToolsButton.addEventListener("click", openExternalToolsMenu);
-enterpriseButton.addEventListener("click", openEnterpriseModal);
+addServerButton.addEventListener("click", () => openServerModal());
 enterpriseCloseButton.addEventListener("click", () => enterpriseModal.close());
 enterpriseModal.addEventListener("click", (event) => {
   if (event.target === enterpriseModal) enterpriseModal.close();
+});
+
+credentialProfileAuthInput.addEventListener("change", updateCredentialProfileFields);
+credentialProfileResetButton.addEventListener("click", resetCredentialProfileForm);
+credentialProfileKeyBrowseButton.addEventListener("click", async () => {
+  const selectedPath = await window.cybergrid.system.selectPrivateKey();
+  if (selectedPath) credentialProfileKeyInput.value = selectedPath;
+});
+credentialProfileForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  enterpriseError.textContent = "";
+  const authType = credentialProfileAuthInput.value === "privateKey" ? "privateKey" : "password";
+  const input: CredentialProfileInput = {
+    id: credentialProfileIdInput.value || undefined,
+    name: credentialProfileNameInput.value.trim(),
+    username: credentialProfileUsernameInput.value.trim(),
+    domain: credentialProfileDomainInput.value.trim() || undefined,
+    authType,
+    password: authType === "password" ? credentialProfilePasswordInput.value || undefined : undefined,
+    privateKeyPath: authType === "privateKey" ? credentialProfileKeyInput.value.trim() || undefined : undefined,
+    passphrase: authType === "privateKey" ? credentialProfilePassphraseInput.value || undefined : undefined,
+  };
+  try {
+    await window.cybergrid.vault.saveCredentialProfile(input);
+    resetCredentialProfileForm();
+    await refreshVaultContent();
+    enterpriseError.textContent = `Credential profile "${input.name}" saved in the encrypted vault.`;
+  } catch (error) {
+    enterpriseError.textContent = errorMessage(error);
+  }
 });
 
 externalToolResetButton.addEventListener("click", resetExternalToolForm);
@@ -3476,13 +3831,6 @@ folderDefaultsForm.addEventListener("submit", async (event) => {
 folderDefaultsModal.addEventListener("click", (event) => {
   if (event.target === folderDefaultsModal) folderDefaultsModal.close();
 });
-migrationButton.addEventListener("click", () => {
-  migrationStatus.textContent = "";
-  migrationError.textContent = "";
-  migrationPassphrase.value = "";
-  if (!migrationModal.open) migrationModal.showModal();
-});
-
 migrationImportButton.addEventListener("click", async () => {
   migrationStatus.textContent = "Choose an import file...";
   migrationError.textContent = "";
@@ -3539,13 +3887,7 @@ migrationModal.addEventListener("click", (event) => {
   if (event.target === migrationModal) migrationModal.close();
 });
 
-scanButton.addEventListener("click", () => {
-  scanError.textContent = "";
-  if (!scanModal.open) {
-    scanModal.showModal();
-  }
-  requestAnimationFrame(() => scanTargetInput.focus());
-});
+scanButton.addEventListener("click", openScanModal);
 scanListViewButton.addEventListener("click", () => setScanView("list"));
 scanIpamViewButton.addEventListener("click", () => setScanView("ipam"));
 scanTargetInput.addEventListener("input", scheduleIpamRender);
@@ -3738,14 +4080,7 @@ assetModal.addEventListener("click", (event) => {
   }
 });
 
-lockButton.addEventListener("click", async () => {
-  try {
-    await window.cybergrid.vault.lock();
-    applyLockedRendererState();
-  } catch (error) {
-    window.alert(errorMessage(error));
-  }
-});
+lockButton.addEventListener("click", () => void lockVaultFromUi());
 
 serverProtocolInput.addEventListener("change", () => updateProfileFields(true));
 for (const button of categoryButtons) {
@@ -3758,6 +4093,7 @@ for (const button of categoryButtons) {
 }
 serverKeepaliveEnabledInput.addEventListener("change", () => updateProfileFields(false));
 serverInheritFolderInput.addEventListener("change", () => updateProfileFields(false));
+serverCredentialProfileInput.addEventListener("change", () => updateProfileFields(false));
 authTypeInput.addEventListener("change", () => updateProfileFields(false));
 cancelServerButton.addEventListener("click", () => serverModal.close());
 browseKeyButton.addEventListener("click", async () => {
@@ -3771,11 +4107,15 @@ serverModal.addEventListener("click", (event) => {
     serverModal.close();
   }
 });
+serverModal.addEventListener("close", () => {
+  editingProfileId = null;
+});
 serverForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   serverFormError.textContent = "";
   const protocol = serverProtocolInput.value as ConnectionProtocol;
-  const authType = authTypeInput.value as ServerAuthType;
+  const credentialProfileId = serverCredentialProfileInput.value || undefined;
+  const authType = credentialProfileId ? "none" : authTypeInput.value as ServerAuthType;
   const terminalOverrides: TerminalAppearanceOverrides = {
     theme: (serverTerminalThemeInput.value || undefined) as TerminalAppearanceOverrides["theme"],
     fontFamily: serverTerminalFontInput.value.trim() || undefined,
@@ -3786,6 +4126,7 @@ serverForm.addEventListener("submit", async (event) => {
     cursor: serverTerminalThemeInput.value === "custom" ? serverTerminalCursorInput.value : undefined,
   };
   const profile: ServerProfileInput = {
+    id: editingProfileId ?? undefined,
     category: connectionCategory,
     protocol,
     name: serverNameInput.value.trim(),
@@ -3794,6 +4135,7 @@ serverForm.addEventListener("submit", async (event) => {
     username: serverUsernameInput.value.trim(),
     group: serverGroupInput.value.trim() || "Ungrouped",
     authType,
+    credentialProfileId,
     password: authType === "password" ? serverPasswordInput.value : undefined,
     privateKeyPath: authType === "privateKey" ? serverKeyPathInput.value.trim() : undefined,
     passphrase: authType === "privateKey" ? serverPassphraseInput.value : undefined,
@@ -3827,6 +4169,7 @@ serverForm.addEventListener("submit", async (event) => {
 
   try {
     await window.cybergrid.vault.saveProfile(profile);
+    editingProfileId = null;
     serverPasswordInput.value = "";
     serverPassphraseInput.value = "";
     serverTotpSecretInput.value = "";
@@ -3837,7 +4180,6 @@ serverForm.addEventListener("submit", async (event) => {
   }
 });
 
-settingsButton.addEventListener("click", openSettingsModal);
 for (const button of settingsModal.querySelectorAll<HTMLButtonElement>("[data-settings-tab]")) {
   button.addEventListener("click", () => selectSettingsPanel(button.dataset.settingsTab ?? "general"));
 }
@@ -3939,14 +4281,6 @@ settingsForm.addEventListener("submit", async (event) => {
   }
 });
 
-layoutButton.addEventListener("click", () => {
-  layoutMode = layoutMode === "grid" ? "single" : "grid";
-  renderWorkspaceLayout();
-  tabs.get(activeTabId ?? "")?.terminal?.focus();
-  scheduleWorkspaceSave();
-});
-
-helpButton.addEventListener("click", openHelp);
 helpCloseButton.addEventListener("click", () => helpModal.close());
 for (const button of helpTopicButtons) {
   button.addEventListener("click", () => selectHelpTopic(button.dataset.helpTopic ?? "quick-start"));
@@ -3956,7 +4290,6 @@ shortcutsCloseButton.addEventListener("click", () => shortcutsModal.close());
 helpModal.addEventListener("click", (event) => { if (event.target === helpModal) helpModal.close(); });
 shortcutsModal.addEventListener("click", (event) => { if (event.target === shortcutsModal) shortcutsModal.close(); });
 
-commandPaletteButton.addEventListener("click", openCommandPalette);
 commandPaletteInput.addEventListener("input", () => {
   paletteSelectionIndex = 0;
   renderCommandPalette();
@@ -3978,17 +4311,7 @@ commandPalette.addEventListener("click", (event) => {
 });
 
 document.addEventListener("keydown", (event) => {
-  if (event.key === "F1") {
-    event.preventDefault();
-    if (helpModal.open) helpModal.close(); else openHelp();
-  } else if (event.ctrlKey && !event.altKey && !event.shiftKey && event.key === "/") {
-    event.preventDefault();
-    if (shortcutsModal.open) shortcutsModal.close(); else openShortcuts();
-  } else if (event.ctrlKey && !event.altKey && !event.shiftKey && event.key.toLocaleLowerCase() === "k") {
-    event.preventDefault();
-    if (commandPalette.open) commandPalette.close();
-    else openCommandPalette();
-  } else if (event.key === "Escape") {
+  if (event.key === "Escape") {
     closeServerContextMenu();
   }
 });
@@ -4015,6 +4338,11 @@ window.cybergrid.discovery.onResult(handleDiscoveryResult);
 window.cybergrid.discovery.onComplete(handleDiscoveryComplete);
 window.cybergrid.system.onUpdateAvailable((event) => showUpdateToast("available", event));
 window.cybergrid.system.onUpdateDownloaded((event) => showUpdateToast("downloaded", event));
+window.cybergrid.system.onMenuCommand((command) => {
+  void handleAppMenuCommand(command).catch((error: unknown) => {
+    connectionState.textContent = errorMessage(error);
+  });
+});
 window.cybergrid.system.onVaultLocked((reason) => applyLockedRendererState(reason));
 window.cybergrid.system.onTrayQuickConnect((profileId) => {
   if (!vaultUnlocked) return;

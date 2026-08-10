@@ -31,6 +31,9 @@ export const IPC_CHANNELS = {
   vaultListSnippets: "cybergrid:vault:list-snippets",
   vaultSaveSnippet: "cybergrid:vault:save-snippet",
   vaultDeleteSnippet: "cybergrid:vault:delete-snippet",
+  vaultListCredentialProfiles: "cybergrid:vault:list-credential-profiles",
+  vaultSaveCredentialProfile: "cybergrid:vault:save-credential-profile",
+  vaultDeleteCredentialProfile: "cybergrid:vault:delete-credential-profile",
   vaultSetFavorite: "cybergrid:vault:set-favorite",
   vaultListFolderDefaults: "cybergrid:vault:list-folder-defaults",
   vaultSaveFolderDefaults: "cybergrid:vault:save-folder-defaults",
@@ -95,6 +98,7 @@ export const IPC_CHANNELS = {
   appUpdateAvailable: "cybergrid:update:available",
   appUpdateDownloaded: "cybergrid:update:downloaded",
   appUpdateInstall: "cybergrid:update:install",
+  appMenuCommand: "cybergrid:app:menu-command",
 } as const;
 
 export interface SshConnectionConfig {
@@ -186,6 +190,32 @@ export type ConnectionProtocol =
   | "serial";
 
 export type ServerAuthType = "none" | "password" | "privateKey";
+export type CredentialProfileAuthType = Exclude<ServerAuthType, "none">;
+
+export type AppMenuCommand =
+  | "new-connection"
+  | "focus-quick-connect"
+  | "lock-vault"
+  | "import-export"
+  | "command-palette"
+  | "clear-terminal"
+  | "toggle-sidebar"
+  | "toggle-grid"
+  | "toggle-broadcast"
+  | "broadcast-targets"
+  | "toggle-sftp"
+  | "node-workspace"
+  | "external-tools"
+  | "enterprise"
+  | "credential-profiles"
+  | "subnet-scanner"
+  | "toggle-quick-snippets"
+  | "settings"
+  | "close-tab"
+  | "reopen-tab"
+  | "next-tab"
+  | "help"
+  | "shortcuts";
 export type SerialParity = "none" | "even" | "odd" | "mark" | "space";
 
 export type ConnectionCategory = "server" | "network" | "web" | "desktop";
@@ -211,6 +241,7 @@ export interface ConfigBackupRecord extends ConfigBackupInput {
 }
 
 export interface ServerProfileInput {
+  id?: string;
   category?: ConnectionCategory;
   protocol: ConnectionProtocol;
   name: string;
@@ -219,6 +250,7 @@ export interface ServerProfileInput {
   username: string;
   group: string;
   authType: ServerAuthType;
+  credentialProfileId?: string;
   password?: string;
   privateKeyPath?: string;
   passphrase?: string;
@@ -261,6 +293,10 @@ export interface ServerProfileSummary {
   username: string;
   group: string;
   authType: ServerAuthType;
+  credentialProfileId?: string;
+  hasPassword: boolean;
+  privateKeyPath?: string;
+  hasPassphrase: boolean;
   protocol: ConnectionProtocol;
   baudRate?: number;
   dataBits?: 5 | 6 | 7 | 8;
@@ -659,10 +695,36 @@ export interface SnippetInput {
   language: SnippetLanguage;
   tags: string[];
   body: string;
+  pinned?: boolean;
 }
 
-export interface SnippetRecord extends Omit<SnippetInput, "id"> {
+export interface SnippetRecord extends Omit<SnippetInput, "id" | "pinned"> {
   id: string;
+  pinned: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CredentialProfileInput {
+  id?: string;
+  name: string;
+  username: string;
+  domain?: string;
+  authType: CredentialProfileAuthType;
+  password?: string;
+  privateKeyPath?: string;
+  passphrase?: string;
+}
+
+export interface CredentialProfileSummary {
+  id: string;
+  name: string;
+  username: string;
+  domain?: string;
+  authType: CredentialProfileAuthType;
+  hasPassword: boolean;
+  privateKeyPath?: string;
+  hasPassphrase: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -799,6 +861,9 @@ export interface CyberGridApi {
     listSnippets(): Promise<SnippetRecord[]>;
     saveSnippet(snippet: SnippetInput): Promise<SnippetRecord>;
     deleteSnippet(snippetId: string): Promise<void>;
+    listCredentialProfiles(): Promise<CredentialProfileSummary[]>;
+    saveCredentialProfile(input: CredentialProfileInput): Promise<CredentialProfileSummary>;
+    deleteCredentialProfile(credentialProfileId: string): Promise<void>;
     setFavorite(profileId: string, favorite: boolean): Promise<ServerProfileSummary>;
     listFolderDefaults(): Promise<FolderDefaultsSummary[]>;
     saveFolderDefaults(input: FolderDefaultsInput): Promise<FolderDefaultsSummary>;
@@ -859,5 +924,6 @@ export interface CyberGridApi {
     installUpdate(): Promise<void>;
     onUpdateAvailable(listener: (event: AppUpdateEvent) => void): Unsubscribe;
     onUpdateDownloaded(listener: (event: AppUpdateEvent) => void): Unsubscribe;
+    onMenuCommand(listener: (command: AppMenuCommand) => void): Unsubscribe;
   };
 }
