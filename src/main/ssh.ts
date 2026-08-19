@@ -117,7 +117,11 @@ export class SshController {
     });
 
     client.on("error", (error) => {
-      this.closeSession(session, "error", error.message);
+      const legacyDhFailure = config.enableLegacyAlgorithms && /(?:unknown|invalid|unsupported).*dh group|dh group.*(?:unknown|invalid|unsupported)|key exchange/i.test(error.message);
+      const message = legacyDhFailure
+        ? `Legacy SSH key exchange failed safely: ${error.message}. CyberGrid offered fixed Oakley groups before group-exchange algorithms.`
+        : error.message;
+      this.closeSession(session, "error", message);
     });
 
     client.on("close", () => {
@@ -146,11 +150,14 @@ export class SshController {
       algorithms: config.enableLegacyAlgorithms
         ? {
             kex: [
-              "diffie-hellman-group1-sha1",
+              "diffie-hellman-group14-sha256",
               "diffie-hellman-group14-sha1",
-              "diffie-hellman-group-exchange-sha1",
+              "diffie-hellman-group1-sha1",
               "diffie-hellman-group-exchange-sha256",
+              "diffie-hellman-group-exchange-sha1",
               "ecdh-sha2-nistp256",
+              "ecdh-sha2-nistp384",
+              "ecdh-sha2-nistp521",
               "curve25519-sha256",
             ],
             cipher: [

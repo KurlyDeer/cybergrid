@@ -1127,6 +1127,32 @@ export class VaultController {
     }
   }
 
+  async deleteProfiles(profileIds: string[], folderPaths: string[] = []): Promise<number> {
+    const payload = this.requirePayload();
+    const requestedIds = new Set(profileIds);
+    if (requestedIds.size === 0) return 0;
+
+    const previousProfiles = payload.profiles;
+    const previousFolderDefaults = payload.folderDefaults;
+    const remainingProfiles = previousProfiles.filter((profile) => !requestedIds.has(profile.id));
+    const remainingFolderDefaults = previousFolderDefaults.filter((defaults) => !folderPaths.some(
+      (path) => defaults.path === path || defaults.path.startsWith(`${path}/`),
+    ));
+    const deletedCount = previousProfiles.length - remainingProfiles.length;
+    if (deletedCount === 0) throw new Error("None of the selected server profiles were found.");
+
+    payload.profiles = remainingProfiles;
+    payload.folderDefaults = remainingFolderDefaults;
+    try {
+      await this.persist();
+    } catch (error) {
+      payload.profiles = previousProfiles;
+      payload.folderDefaults = previousFolderDefaults;
+      throw error;
+    }
+    return deletedCount;
+  }
+
   async updateProfileNotes(profileId: string, notes: string): Promise<ServerProfileSummary> {
     const profile = this.requirePayload().profiles.find((candidate) => candidate.id === profileId);
     if (!profile) throw new Error("Server profile was not found.");

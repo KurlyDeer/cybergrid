@@ -26,6 +26,7 @@ export const IPC_CHANNELS = {
   vaultSaveProfile: "cybergrid:vault:save-profile",
   vaultMoveProfile: "cybergrid:vault:move-profile",
   vaultDeleteProfile: "cybergrid:vault:delete-profile",
+  vaultDeleteProfiles: "cybergrid:vault:delete-profiles",
   vaultUpdateProfileNotes: "cybergrid:vault:update-profile-notes",
   vaultAddConfigBackup: "cybergrid:vault:add-config-backup",
   vaultDeleteConfigBackup: "cybergrid:vault:delete-config-backup",
@@ -980,6 +981,7 @@ export interface CyberGridApi {
     saveProfile(profile: ServerProfileInput): Promise<ServerProfileSummary>;
     moveProfile(profileId: string, group: string): Promise<ServerProfileSummary>;
     deleteProfile(profileId: string): Promise<void>;
+    deleteProfiles(profileIds: string[], folderPaths?: string[]): Promise<number>;
     updateProfileNotes(profileId: string, notes: string): Promise<ServerProfileSummary>;
     addConfigBackup(profileId: string, input: ConfigBackupInput): Promise<ServerProfileSummary>;
     deleteConfigBackup(profileId: string, backupId: string): Promise<ServerProfileSummary>;

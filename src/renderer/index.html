@@ -2113,6 +2113,11 @@
       }
       .node-badge { margin-left: auto; padding: 1px 5px; border-radius: 999px; background: var(--node-color, var(--accent)); color: #07110e; font-size: 8px; font-weight: 900; }
       .server-item.selected { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); background: var(--accent-soft); }
+      .folder-header.selected { background: var(--accent-soft); color: var(--accent); }
+      .essentials-credentials { display: grid; gap: 8px; }
+      .password-input { display: grid; grid-template-columns: minmax(0, 1fr) 30px; gap: 4px; }
+      .password-input .password-visibility-toggle { width: 30px; min-height: 28px; padding: 0; border: 1px solid var(--border); border-radius: 4px; background: var(--panel-raised); color: var(--muted); cursor: pointer; }
+      .password-input .password-visibility-toggle:hover { border-color: var(--accent); color: var(--accent); }
       .connection-dialog { width: min(840px, calc(100vw - 32px)); }
       .category-picker { display: grid; grid-column: 1 / -1; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
       .category-card { min-height: 72px; padding: 10px; border: 1px solid var(--border); border-radius: 9px; background: var(--panel-raised); color: var(--muted); cursor: pointer; text-align: left; }
@@ -2266,6 +2271,21 @@
       .terminal-stack.tiled-layout { gap: 1px; padding: 0; }
       .terminal-pane, .terminal-stack.tiled-layout .terminal-pane, .vnc-pane { padding: 0; }
       .terminal-pane .xterm, .vnc-screen, .rdp-viewport { width: 100%; height: 100%; }
+      .terminal-pane.switch-tools-open { padding-right: min(292px, 42%); }
+      .switch-tools-toggle { position: absolute; z-index: 10; top: 5px; right: 6px; min-height: 25px; padding: 0 8px; border: 1px solid var(--border); border-radius: 4px; background: color-mix(in srgb, var(--panel-raised) 94%, transparent); color: var(--text); cursor: pointer; font-size: 10px; font-weight: 800; }
+      .switch-tools-toggle:hover { border-color: var(--accent); color: var(--accent); }
+      .switch-tools-drawer { position: absolute; z-index: 9; inset: 0 0 0 auto; display: flex; width: min(292px, 42%); min-width: 228px; flex-direction: column; overflow: auto; border-left: 1px solid var(--border); background: color-mix(in srgb, var(--panel) 97%, #000); box-shadow: -10px 0 28px rgba(0, 0, 0, .22); }
+      .switch-tools-drawer[hidden] { display: none; }
+      .switch-tools-header { position: sticky; z-index: 1; top: 0; display: flex; min-height: 36px; align-items: center; justify-content: space-between; padding: 6px 8px; border-bottom: 1px solid var(--border); background: var(--panel); }
+      .switch-tools-header strong { font-size: 11px; }
+      .switch-tools-body { display: grid; gap: 12px; padding: 10px; }
+      .switch-tools-section { display: grid; gap: 6px; }
+      .switch-tools-section > strong { color: var(--muted); font-size: 9px; letter-spacing: .09em; text-transform: uppercase; }
+      .switch-tools-command-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; }
+      .switch-tools-drawer button { min-height: 27px; padding: 0 7px; border: 1px solid var(--border); border-radius: 4px; background: var(--panel-raised); color: var(--text); cursor: pointer; font-size: 10px; text-align: left; }
+      .switch-tools-drawer button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+      .switch-tools-drawer button:disabled { cursor: not-allowed; opacity: .45; }
+      .switch-tools-status { margin: 0; color: var(--muted); font-size: 10px; line-height: 1.45; overflow-wrap: anywhere; white-space: pre-wrap; }
       .quick-snippet-toolbar { min-height: 34px; gap: 5px; padding: 3px 5px; }
       .quick-snippet-button { min-height: 24px; padding: 0 7px; border-radius: 3px; }
       .connection-dialog { width: min(720px, calc(100vw - 20px)); }
@@ -2499,20 +2519,20 @@
             <button class="category-card" type="button" data-connection-category="web"><strong>+ Web Console</strong><span>HTTPS for iDRAC, iLO, and firewalls</span></button>
           </div>
           <div class="connection-section-title">Essentials</div>
-          <div class="field"><label for="server-name">Connection name</label><input id="server-name" required maxlength="100" placeholder="ERP-PROD-01" autocomplete="off" /></div>
+          <div class="field"><label for="server-name">Connection name (optional)</label><input id="server-name" maxlength="100" placeholder="Defaults to hostname / IP" autocomplete="off" /></div>
           <div class="field" id="server-host-field"><label for="server-host" id="server-host-label">IP / Hostname</label><input id="server-host" required maxlength="2048" placeholder="admin@server.example.net:22" autocomplete="off" /></div>
           <div class="field" id="server-serial-port-field" hidden><label for="server-serial-port">COM port</label><div class="serial-port-picker"><select id="server-serial-port"></select><button class="secondary-button" id="refresh-serial-ports" type="button">Refresh</button></div><span class="field-hint" id="server-serial-port-status">Local ports are detected on demand.</span></div>
           <div class="field" id="server-local-shell-field" hidden><label for="server-local-shell">Local shell</label><select id="server-local-shell"><option value="powershell">PowerShell</option><option value="cmd">Command Prompt</option><option value="wsl">WSL</option></select></div>
           <div class="field"><label for="server-protocol">Protocol</label><select id="server-protocol"><option value="ssh">SSH</option><option value="rdp">Windows RDP</option><option value="telnet">Telnet</option><option value="raw">RAW TCP</option><option value="vnc">VNC Desktop</option><option value="https">HTTPS Web</option><option value="http">HTTP Web</option><option value="serial">Serial / COM</option><option value="local">Local Terminal</option></select></div>
-          <div class="field" id="server-username-field"><label for="server-username">Username</label><input id="server-username" maxlength="256" autocomplete="username" /></div>
+          <div class="essentials-credentials">
+            <div class="field" id="server-username-field"><label for="server-username">Username</label><input id="server-username" maxlength="256" autocomplete="username" /></div>
+            <div class="field" id="server-password-section"><label for="server-password">Password</label><div class="password-input"><input id="server-password" type="password" maxlength="4096" autocomplete="new-password" /><button class="password-visibility-toggle" id="server-password-toggle" type="button" aria-label="Show password" title="Show password">&#128065;</button></div></div>
+          </div>
           <div class="auth-section" id="server-serial-section" hidden>
             <div class="field"><label for="server-baud-rate">Baud rate</label><select id="server-baud-rate"><option value="9600">9600</option><option value="19200">19200</option><option value="38400">38400</option><option value="115200">115200</option></select></div>
             <div class="field"><label for="server-data-bits">Data bits</label><select id="server-data-bits"><option>8</option><option>7</option><option>6</option><option>5</option></select></div>
             <div class="field"><label for="server-stop-bits">Stop bits</label><select id="server-stop-bits"><option>1</option><option>2</option></select></div>
             <div class="field"><label for="server-parity">Parity</label><select id="server-parity"><option value="none">None</option><option value="even">Even</option><option value="odd">Odd</option><option value="mark">Mark</option><option value="space">Space</option></select></div>
-          </div>
-          <div class="auth-section" id="server-password-section">
-            <div class="field full-width"><label for="server-password">Password</label><input id="server-password" type="password" maxlength="4096" required autocomplete="new-password" /></div>
           </div>
           <div class="auth-section" id="server-key-section" hidden>
             <div class="field full-width"><label for="server-key-path">Private key path</label><div class="path-picker"><input id="server-key-path" maxlength="2048" autocomplete="off" /><button class="secondary-button" id="browse-key-button" type="button">Browse</button></div></div>

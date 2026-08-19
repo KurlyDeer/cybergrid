@@ -110,6 +110,7 @@ process.on("uncaughtException", (error) => reportFatalError("uncaught exception"
 process.on("unhandledRejection", (reason) => reportFatalError("unhandled promise rejection", reason));
 
 app.commandLine.appendSwitch("disable-gpu-process-crash-limit");
+app.commandLine.appendSwitch("openssl-legacy-provider");
 
 const auditController = new AuditController();
 const streamController = new StreamController(auditController);
@@ -1053,7 +1054,7 @@ function normalizeProfileInput(value: unknown): ServerProfileInput {
     id: profileId,
     category,
     protocol,
-    name: readString(value.name, "Display name", { required: true, maxLength: 100 }) as string,
+    name: readString(value.name, "Display name", { maxLength: 100 }) ?? host,
     host,
     port,
     username,
@@ -2444,6 +2445,23 @@ function registerIpcHandlers(): void {
     assertTrustedSender(event);
     await requireVault().deleteProfile(readUuid(profileId, "server profile ID"));
     await refreshTrayMenu();
+  });
+
+  ipcMain.handle(IPC_CHANNELS.vaultDeleteProfiles, async (event, profileIds: unknown, folderPaths: unknown) => {
+    assertTrustedSender(event);
+    if (!Array.isArray(profileIds) || profileIds.length === 0 || profileIds.length > 10_000) {
+      throw new Error("Select between 1 and 10,000 saved connection profiles to delete.");
+    }
+    const normalizedIds = [...new Set(profileIds.map((profileId) => readUuid(profileId, "server profile ID")))];
+    if (folderPaths !== undefined && (!Array.isArray(folderPaths) || folderPaths.length > 10_000)) {
+      throw new Error("Invalid selected folder paths.");
+    }
+    const normalizedFolderPaths = folderPaths === undefined
+      ? []
+      : [...new Set(folderPaths.map((path) => normalizeFolderPath(path)))];
+    const deletedCount = await requireVault().deleteProfiles(normalizedIds, normalizedFolderPaths);
+    await refreshTrayMenu();
+    return deletedCount;
   });
 
   ipcMain.handle(IPC_CHANNELS.vaultUpdateProfileNotes, async (event, profileId: unknown, notes: unknown) => {

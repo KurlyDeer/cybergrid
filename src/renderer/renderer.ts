@@ -126,6 +126,7 @@ interface WorkspaceTab {
   reconnectTimer?: number;
   quickBackupButton?: HTMLButtonElement;
   quickBackupStatus?: HTMLSpanElement;
+  switchCommandButtons?: HTMLButtonElement[];
 }
 
 const DEFAULT_SETTINGS: AppPreferences = {
@@ -195,6 +196,9 @@ let vaultMode: "create" | "unlock" = "unlock";
 let sftpDrawerOpen = false;
 let snippetsDrawerOpen = false;
 let selectedProfileId: string | null = null;
+const selectedTreeKeys = new Set<string>();
+let treeSelectionAnchor: string | null = null;
+let treeSelectionOrder: string[] = [];
 let editingProfileId: string | null = null;
 let connectionCategory: ConnectionCategory = "server";
 let broadcastMode = false;
@@ -365,6 +369,7 @@ const serverStopBitsInput = elementById<HTMLSelectElement>("server-stop-bits");
 const serverParityInput = elementById<HTMLSelectElement>("server-parity");
 const serverPasswordSection = elementById<HTMLDivElement>("server-password-section");
 const serverPasswordInput = elementById<HTMLInputElement>("server-password");
+const serverPasswordToggle = elementById<HTMLButtonElement>("server-password-toggle");
 const serverKeySection = elementById<HTMLDivElement>("server-key-section");
 const serverKeyPathInput = elementById<HTMLInputElement>("server-key-path");
 const serverPassphraseInput = elementById<HTMLInputElement>("server-passphrase");
@@ -840,7 +845,7 @@ function showUpdateStatusToast(event: AppUpdateStatusEvent): void {
     updateStatusToastTimer = window.setTimeout(() => {
       toast.remove();
       updateStatusToastTimer = null;
-    }, event.stage === "error" ? 10_000 : 8_000);
+    }, event.stage === "checking" ? 3_000 : event.stage === "error" ? 10_000 : 8_000);
   }
 }
 
@@ -1180,6 +1185,7 @@ function createTerminalTab(
   kind: "ssh" | "telnet" | "raw" | "serial" | "local" | "welcome" = "ssh",
   context?: Partial<SessionVariableContext>,
   appearance?: TerminalAppearanceOverrides,
+  profile?: ServerProfileSummary,
 ): WorkspaceTab {
   const requestedLayout = layoutMode;
   const tab = createWorkspaceTab(kind, label, context);
@@ -1224,6 +1230,7 @@ function createTerminalTab(
   });
   layoutMode = requestedLayout;
   rememberTerminalTab(tab);
+  installSwitchToolsDrawer(tab, profile);
   renderWorkspaceLayout();
   return tab;
 }
@@ -1604,6 +1611,9 @@ function updateTabStatus(tab: WorkspaceTab, status: WorkspaceStatus, message?: s
   tab.statusElement.classList.toggle("connected", status === "connected" || status === "running" || status === "ready");
   tab.statusElement.classList.toggle("error", status === "error");
   if (tab.quickBackupButton) tab.quickBackupButton.disabled = status !== "connected";
+  for (const button of tab.switchCommandButtons ?? []) {
+    button.disabled = status !== "connected" && status !== "running" && status !== "ready";
+  }
   if (status === "error") tab.terminal?.writeln(`\r\n\x1b[31mConnection error: ${message ?? "Unknown error"}\x1b[0m`);
   else if (status === "disconnected" || status === "closed") tab.terminal?.writeln(`\r\n\x1b[90m${message ?? "Disconnected."}\x1b[0m`);
   if (activeTabId === tab.id) {
@@ -1825,33 +1835,125 @@ function handleWebStatus(event: WebStatusEvent): void {
   if (tab) updateTabStatus(tab, event.status, event.message); else queuedWebStatus.set(event.sessionId, event);
 }
 
-function installSwitchBackupAction(tab: WorkspaceTab, profile: ServerProfileSummary): void {
-  if (profile.protocol !== "ssh" || profile.category !== "network") return;
-  const actions = document.createElement("div");
-  actions.className = "terminal-quick-actions";
-  const button = document.createElement("button");
-  button.type = "button";
-  button.disabled = true;
-  button.textContent = "Quick Backup Snapshot";
-  button.title = "Detect the switch vendor and save its running configuration";
-  const status = createTextElement("span", "terminal-quick-action-status", "") as HTMLSpanElement;
-  button.addEventListener("click", async () => {
-    if (!tab.sessionId) return;
+function installSwitchToolsDrawer(tab: WorkspaceTab, profile?: ServerProfileSummary): void {
+  if (!tab.terminal || tab.kind === "welcome") return;
+  const supportedTerminal = tab.kind === "ssh" || tab.kind === "telnet" || tab.kind === "raw" || tab.kind === "serial";
+  if (!supportedTerminal) return;
+
+  const toggle = document.createElement("button");
+  toggle.className = "switch-tools-toggle";
+  toggle.type = "button";
+  toggle.textContent = "[ 🛠️ Tools ]";
+  toggle.setAttribute("aria-expanded", "false");
+  toggle.title = "Open switch tools";
+
+  const drawer = document.createElement("aside");
+  drawer.className = "switch-tools-drawer";
+  drawer.hidden = true;
+  drawer.setAttribute("aria-label", "Switch tools");
+  const header = createTextElement("header", "switch-tools-header", "");
+  const title = createTextElement("strong", "", "Switch Tools");
+  const close = document.createElement("button");
+  close.type = "button";
+  close.textContent = "×";
+  close.title = "Close switch tools";
+  close.setAttribute("aria-label", "Close switch tools");
+  header.append(title, close);
+  const body = createTextElement("div", "switch-tools-body", "");
+  const status = createTextElement("p", "switch-tools-status", profile
+    ? `Target: ${profile.host}`
+    : "Save this connection to enable backup snapshots and diagnostics.") as HTMLParagraphElement;
+
+  const setOpen = (open: boolean): void => {
+    drawer.hidden = !open;
+    tab.paneElement.classList.toggle("switch-tools-open", open);
+    toggle.hidden = open;
+    toggle.setAttribute("aria-expanded", String(open));
+    requestAnimationFrame(() => {
+      tab.fitAddon?.fit();
+      tab.terminal?.focus();
+    });
+  };
+  toggle.addEventListener("click", () => setOpen(true));
+  close.addEventListener("click", () => setOpen(false));
+
+  if (profile?.protocol === "ssh" && profile.category === "network") {
+    const backupSection = createTextElement("section", "switch-tools-section", "");
+    backupSection.append(createTextElement("strong", "", "Configuration backup"));
+    const backupButton = document.createElement("button");
+    backupButton.type = "button";
+    backupButton.disabled = true;
+    backupButton.textContent = "One-Click Backup Snapshot";
+    backupButton.title = "Detect the vendor and save the running configuration as a timestamped .cfg file";
+    backupButton.addEventListener("click", async () => {
+      if (!tab.sessionId) return;
+      backupButton.disabled = true;
+      status.textContent = "Detecting vendor and capturing the running configuration...";
+      try {
+        const result = await window.cybergrid.ssh.quickBackup(tab.sessionId, profile.id);
+        status.textContent = `${result.vendor.toUpperCase()} backup saved:\n${result.path}`;
+      } catch (error) {
+        status.textContent = errorMessage(error);
+      } finally {
+        backupButton.disabled = !tab.sessionId || tab.status !== "connected";
+      }
+    });
+    backupSection.append(backupButton);
+    body.append(backupSection);
+    tab.quickBackupButton = backupButton;
+    tab.quickBackupStatus = status;
+  }
+
+  const commandSection = createTextElement("section", "switch-tools-section", "");
+  commandSection.append(createTextElement("strong", "", "Quick command snippets"));
+  const commandGrid = createTextElement("div", "switch-tools-command-grid", "");
+  const commandButtons: HTMLButtonElement[] = [];
+  for (const command of ["show ip int brief", "show log", "show vlan", "show arp"]) {
+    const button = document.createElement("button");
+    button.type = "button";
     button.disabled = true;
-    status.textContent = "Capturing configuration...";
-    try {
-      const result = await window.cybergrid.ssh.quickBackup(tab.sessionId, profile.id);
-      status.textContent = `${result.vendor.toUpperCase()} backup saved: ${result.path}`;
-    } catch (error) {
-      status.textContent = errorMessage(error);
-    } finally {
-      button.disabled = !tab.sessionId || tab.status !== "connected";
+    button.textContent = command;
+    button.addEventListener("click", () => {
+      writeTerminalInput(tab, commandForTerminal(command));
+      status.textContent = `Sent: ${command}`;
+      tab.terminal?.focus();
+    });
+    commandButtons.push(button);
+    commandGrid.append(button);
+  }
+  commandSection.append(commandGrid);
+  body.append(commandSection);
+  tab.switchCommandButtons = commandButtons;
+
+  if (profile && profile.protocol !== "serial" && profile.protocol !== "local") {
+    const diagnosticsSection = createTextElement("section", "switch-tools-section", "");
+    diagnosticsSection.append(createTextElement("strong", "", "Diagnostics"));
+    const diagnosticsGrid = createTextElement("div", "switch-tools-command-grid", "");
+    for (const [label, kind] of [["Ping", "ping"], ["Traceroute", "traceroute"]] as const) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = label;
+      button.addEventListener("click", async () => {
+        button.disabled = true;
+        status.textContent = `${label} running against ${profile.host}...`;
+        try {
+          const result = await window.cybergrid.diagnostics.run(profile.id, kind);
+          status.textContent = `${result.summary}\n${result.output}`;
+        } catch (error) {
+          status.textContent = errorMessage(error);
+        } finally {
+          button.disabled = false;
+        }
+      });
+      diagnosticsGrid.append(button);
     }
-  });
-  actions.append(button, status);
-  tab.paneElement.append(actions);
-  tab.quickBackupButton = button;
-  tab.quickBackupStatus = status;
+    diagnosticsSection.append(diagnosticsGrid);
+    body.append(diagnosticsSection);
+  }
+
+  body.append(status);
+  drawer.append(header, body);
+  tab.paneElement.append(toggle, drawer);
 }
 
 function createTabForProfile(profile: ServerProfileSummary): WorkspaceTab {
@@ -1862,13 +1964,12 @@ function createTabForProfile(profile: ServerProfileSummary): WorkspaceTab {
   else tab = createTerminalTab(profile.name, profile.protocol, {
     displayName: profile.name, host: profile.host, ip: profile.host, username: profile.username,
     group: profile.group, port: profile.port, profileId: profile.id,
-  }, profile.terminalOverrides);
+  }, profile.terminalOverrides, profile);
   tab.context = tabContext(profile.name, {
     displayName: profile.name, host: profile.host, ip: profile.host, username: profile.username,
     group: profile.group, port: profile.port, profileId: profile.id,
   });
   tab.duplicate = () => connectSavedProfile(profile);
-  installSwitchBackupAction(tab, profile);
   return tab;
 }
 
@@ -2047,7 +2148,11 @@ function parseQuickConnect(value: string): QuickConnection {
   return { protocol, config: { protocol, host, port: Number(url.port || 23) } };
 }
 
-function createTextElement(tag: "span" | "div" | "strong", className: string, text: string): HTMLElement {
+function createTextElement(
+  tag: "span" | "div" | "strong" | "p" | "header" | "section",
+  className: string,
+  text: string,
+): HTMLElement {
   const element = document.createElement(tag);
   element.className = className;
   element.textContent = text;
@@ -2901,9 +3006,113 @@ async function launchProfileExternalDiagnostic(
   }
 }
 
+function profileTreeKey(profileId: string): string {
+  return `profile:${profileId}`;
+}
+
+function folderTreeKey(path: string): string {
+  return `folder:${path}`;
+}
+
+function selectedProfileIdsForTree(): string[] {
+  const profileIds = new Set<string>();
+  const folderPaths = [...selectedTreeKeys]
+    .filter((key) => key.startsWith("folder:"))
+    .map((key) => key.slice("folder:".length));
+  for (const key of selectedTreeKeys) {
+    if (key.startsWith("profile:")) profileIds.add(key.slice("profile:".length));
+  }
+  for (const profile of savedProfiles) {
+    if (folderPaths.some((path) => profile.group === path || profile.group.startsWith(`${path}/`))) {
+      profileIds.add(profile.id);
+    }
+  }
+  return [...profileIds];
+}
+
+function applyTreeSelectionVisuals(): void {
+  for (const element of profileTree.querySelectorAll<HTMLElement>("[data-tree-key]")) {
+    element.classList.toggle("selected", selectedTreeKeys.has(element.dataset.treeKey ?? ""));
+  }
+}
+
+function updatePrimaryProfileSelection(key: string): void {
+  if (key.startsWith("profile:") && selectedTreeKeys.has(key)) {
+    const profileId = key.slice("profile:".length);
+    const profile = savedProfiles.find((candidate) => candidate.id === profileId);
+    selectedProfileId = profile?.id ?? null;
+    if (profile) populateQuickConnect(profile);
+  } else {
+    const fallbackKey = [...selectedTreeKeys].reverse().find((candidate) => candidate.startsWith("profile:"));
+    selectedProfileId = fallbackKey?.slice("profile:".length) ?? null;
+  }
+  if (snippetsDrawerOpen) renderNodeWorkspace();
+}
+
+function selectTreeItem(key: string, event: Pick<MouseEvent, "ctrlKey" | "metaKey" | "shiftKey">): void {
+  if (event.shiftKey && treeSelectionAnchor) {
+    const anchorIndex = treeSelectionOrder.indexOf(treeSelectionAnchor);
+    const targetIndex = treeSelectionOrder.indexOf(key);
+    if (anchorIndex >= 0 && targetIndex >= 0) {
+      if (!event.ctrlKey && !event.metaKey) selectedTreeKeys.clear();
+      const start = Math.min(anchorIndex, targetIndex);
+      const end = Math.max(anchorIndex, targetIndex);
+      for (const selectedKey of treeSelectionOrder.slice(start, end + 1)) selectedTreeKeys.add(selectedKey);
+    }
+  } else if (event.ctrlKey || event.metaKey) {
+    if (selectedTreeKeys.has(key)) selectedTreeKeys.delete(key); else selectedTreeKeys.add(key);
+    treeSelectionAnchor = key;
+  } else {
+    selectedTreeKeys.clear();
+    selectedTreeKeys.add(key);
+    treeSelectionAnchor = key;
+  }
+  updatePrimaryProfileSelection(key);
+  applyTreeSelectionVisuals();
+}
+
+function ensureTreeContextSelection(key: string): void {
+  if (selectedTreeKeys.has(key)) return;
+  selectedTreeKeys.clear();
+  selectedTreeKeys.add(key);
+  treeSelectionAnchor = key;
+  updatePrimaryProfileSelection(key);
+  applyTreeSelectionVisuals();
+}
+
+async function deleteSelectedTreeItems(): Promise<void> {
+  const profileIds = selectedProfileIdsForTree();
+  if (profileIds.length === 0) {
+    window.alert("The selection does not contain any saved connections.");
+    return;
+  }
+  const folderPaths = [...selectedTreeKeys]
+    .filter((key) => key.startsWith("folder:"))
+    .map((key) => key.slice("folder:".length));
+  const folderCount = folderPaths.length;
+  const description = folderCount > 0
+    ? `${profileIds.length} connection${profileIds.length === 1 ? "" : "s"} in the selected tree items`
+    : `${profileIds.length} selected connection${profileIds.length === 1 ? "" : "s"}`;
+  if (!window.confirm(`Delete ${description}? This cannot be undone.`)) return;
+
+  try {
+    const deletedCount = await window.cybergrid.vault.deleteProfiles(profileIds, folderPaths);
+    selectedTreeKeys.clear();
+    treeSelectionAnchor = null;
+    selectedProfileId = null;
+    closeServerContextMenu();
+    await refreshProfiles();
+    renderNodeWorkspace();
+    connectionState.textContent = `Deleted ${deletedCount} saved connection${deletedCount === 1 ? "" : "s"}.`;
+  } catch (error) {
+    window.alert(errorMessage(error));
+  }
+}
+
 function openServerContextMenu(event: MouseEvent, profile: ServerProfileSummary): void {
   event.preventDefault();
   event.stopPropagation();
+  ensureTreeContextSelection(profileTreeKey(profile.id));
   serverContextMenu.replaceChildren();
   const addAction = (label: string, action: () => void, disabled = false): void => {
     const button = document.createElement("button");
@@ -2921,6 +3130,8 @@ function openServerContextMenu(event: MouseEvent, profile: ServerProfileSummary)
     closeServerContextMenu();
     openServerModal(profile);
   });
+  const selectedCount = selectedProfileIdsForTree().length;
+  addAction(`Delete Selected (${selectedCount})`, () => void deleteSelectedTreeItems(), selectedCount === 0);
   addAction(profile.favorite ? "Remove from favorites" : "Add to favorites", () => {
     closeServerContextMenu();
     void window.cybergrid.vault.setFavorite(profile.id, !profile.favorite)
@@ -3006,6 +3217,8 @@ function renderProfiles(): void {
   const previousScrollTop = sidebarScroll.scrollTop;
   profileTree.replaceChildren();
   groupOptions.replaceChildren();
+  treeSelectionOrder = [];
+  if (selectedTreeKeys.size === 0 && selectedProfileId) selectedTreeKeys.add(profileTreeKey(selectedProfileId));
   profileTree.ondragover = (event) => {
     if (!draggedProfileId) return;
     event.preventDefault();
@@ -3058,10 +3271,13 @@ function renderProfiles(): void {
     const row = document.createElement("div");
     row.className = "server-row";
     const button = document.createElement("button");
+    const treeKey = profileTreeKey(profile.id);
+    treeSelectionOrder.push(treeKey);
     button.className = "server-item";
-    button.classList.toggle("selected", selectedProfileId === profile.id);
+    button.classList.toggle("selected", selectedTreeKeys.has(treeKey));
     button.type = "button";
     button.draggable = true;
+    button.dataset.treeKey = treeKey;
     button.dataset.profileGroup = profile.group;
     button.title = `Select for notes; double-click to connect${profile.inheritFolderDefaults ? " · inherited defaults" : ""}`;
     button.style.setProperty("--node-color", profile.indicatorColor ?? "var(--accent)");
@@ -3078,13 +3294,7 @@ function renderProfiles(): void {
     applyHealthStatus(health, healthStatuses.get(profile.id));
     button.append(health, createTextElement("span", "node-icon", DEVICE_ICON_LABELS[profile.icon]), meta);
     if (profile.applicationBadge) button.append(createTextElement("span", "node-badge", profile.applicationBadge));
-    button.addEventListener("click", () => {
-      selectedProfileId = profile.id;
-      populateQuickConnect(profile);
-      for (const item of profileTree.querySelectorAll(".server-item.selected")) item.classList.remove("selected");
-      button.classList.add("selected");
-      if (snippetsDrawerOpen) renderNodeWorkspace();
-    });
+    button.addEventListener("click", (event) => selectTreeItem(treeKey, event));
     button.addEventListener("dragstart", (event) => {
       draggedProfileId = profile.id;
       row.classList.add("dragging");
@@ -3106,14 +3316,14 @@ function renderProfiles(): void {
     remove.title = `Delete ${profile.name}`;
     remove.setAttribute("aria-label", `Delete ${profile.name}`);
     remove.textContent = "\u00d7";
-    remove.addEventListener("click", async () => {
-      if (!window.confirm(`Delete the saved server "${profile.name}"?`)) return;
-      try {
-        await window.cybergrid.vault.deleteProfile(profile.id);
-        if (selectedProfileId === profile.id) selectedProfileId = null;
-        await refreshProfiles();
-        renderNodeWorkspace();
-      } catch (error) { window.alert(errorMessage(error)); }
+    remove.addEventListener("click", (event) => {
+      event.stopPropagation();
+      selectedTreeKeys.clear();
+      selectedTreeKeys.add(treeKey);
+      treeSelectionAnchor = treeKey;
+      updatePrimaryProfileSelection(treeKey);
+      applyTreeSelectionVisuals();
+      void deleteSelectedTreeItems();
     });
     row.append(button, remove);
     list.append(row);
@@ -3127,8 +3337,12 @@ function renderProfiles(): void {
     section.classList.toggle("collapsed", collapsedGroups.has(node.path));
     const defaults = folderDefaults.find((item) => item.path === node.path);
     const folder = document.createElement("button");
+    const treeKey = folderTreeKey(node.path);
+    treeSelectionOrder.push(treeKey);
     folder.className = "folder-header";
+    folder.classList.toggle("selected", selectedTreeKeys.has(treeKey));
     folder.type = "button";
+    folder.dataset.treeKey = treeKey;
     folder.style.setProperty("--node-color", defaults?.indicatorColor ?? "var(--accent)");
     folder.setAttribute("aria-expanded", String(!collapsedGroups.has(node.path)));
     folder.append(
@@ -3136,7 +3350,8 @@ function renderProfiles(): void {
       createTextElement("span", "folder-name", `${defaults?.icon ? `${DEVICE_ICON_LABELS[defaults.icon]} · ` : ""}${node.name}`),
       createTextElement("span", "folder-count", String(count(node))),
     );
-    folder.addEventListener("click", () => {
+    folder.addEventListener("click", (event) => selectTreeItem(treeKey, event));
+    folder.addEventListener("dblclick", () => {
       if (collapsedGroups.has(node.path)) collapsedGroups.delete(node.path); else collapsedGroups.add(node.path);
       renderProfiles();
     });
@@ -3161,7 +3376,11 @@ function renderProfiles(): void {
     folder.addEventListener("contextmenu", (event) => {
       event.preventDefault();
       event.stopPropagation();
+      ensureTreeContextSelection(treeKey);
       serverContextMenu.replaceChildren();
+      const selectedCount = selectedProfileIdsForTree().length;
+      appendContextAction(`Delete Selected (${selectedCount})`, () => void deleteSelectedTreeItems(), selectedCount === 0);
+      appendContextSeparator();
       appendContextAction("Edit inherited properties...", () => { closeServerContextMenu(); openFolderDefaultsModal(node.path); });
       appendContextAction("Clear inherited properties", () => {
         closeServerContextMenu();
@@ -3178,6 +3397,9 @@ function renderProfiles(): void {
     parent.append(section);
   };
   for (const node of [...root.children.values()].sort((left, right) => left.name.localeCompare(right.name))) renderFolder(node, profileTree);
+  const validKeys = new Set(treeSelectionOrder);
+  for (const key of [...selectedTreeKeys]) if (!validKeys.has(key)) selectedTreeKeys.delete(key);
+  applyTreeSelectionVisuals();
   sidebarScroll.scrollTop = previousScrollTop;
 }
 
@@ -3244,6 +3466,10 @@ function selectOperationsPanel(panel: "commands" | "notes" | "backups"): void {
 
 function openNodeWorkspace(profile: ServerProfileSummary, panel: "notes" | "backups" = "notes"): void {
   selectedProfileId = profile.id;
+  selectedTreeKeys.clear();
+  selectedTreeKeys.add(profileTreeKey(profile.id));
+  treeSelectionAnchor = profileTreeKey(profile.id);
+  applyTreeSelectionVisuals();
   setSnippetsDrawerOpen(true);
   selectOperationsPanel(panel);
 }
@@ -3897,6 +4123,10 @@ function openServerModal(profile?: ServerProfileSummary): void {
   serverIndicatorColorInput.value = profile?.indicatorColor ?? currentSettings.accent;
   renderTaskOptions();
   serverFormError.textContent = "";
+  serverPasswordInput.type = "password";
+  serverPasswordToggle.textContent = "👁";
+  serverPasswordToggle.setAttribute("aria-label", "Show password");
+  serverPasswordToggle.title = "Show password";
   selectConnectionCategory(profile?.category ?? "server", false);
   if (profile) {
     serverProtocolInput.value = profile.protocol;
@@ -4754,6 +4984,16 @@ serverModal.addEventListener("click", (event) => {
 });
 serverModal.addEventListener("close", () => {
   editingProfileId = null;
+  serverPasswordInput.type = "password";
+  serverPasswordInput.value = "";
+});
+serverPasswordToggle.addEventListener("click", () => {
+  const reveal = serverPasswordInput.type === "password";
+  serverPasswordInput.type = reveal ? "text" : "password";
+  serverPasswordToggle.textContent = reveal ? "◉" : "👁";
+  serverPasswordToggle.setAttribute("aria-label", reveal ? "Hide password" : "Show password");
+  serverPasswordToggle.title = reveal ? "Hide password" : "Show password";
+  serverPasswordInput.focus();
 });
 serverForm.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -4794,7 +5034,7 @@ serverForm.addEventListener("submit", async (event) => {
     id: editingProfileId ?? undefined,
     category: connectionCategory,
     protocol,
-    name: serverNameInput.value.trim(),
+    name: serverNameInput.value.trim() || connectionTarget.host,
     host: connectionTarget.host,
     port: protocol === "serial" || protocol === "local" ? 0 : connectionTarget.port ?? Number(serverPortInput.value),
     username: connectionTarget.username ?? serverUsernameInput.value.trim(),
@@ -4994,6 +5234,9 @@ commandPalette.addEventListener("click", (event) => {
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
     closeServerContextMenu();
+  } else if (event.key === "Delete" && selectedTreeKeys.size > 0 && profileTree.contains(document.activeElement)) {
+    event.preventDefault();
+    void deleteSelectedTreeItems();
   }
 });
 document.addEventListener("pointerdown", (event) => {

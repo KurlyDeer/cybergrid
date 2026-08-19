@@ -78,6 +78,7 @@ const IPC_CHANNELS: typeof import("../shared/ipc").IPC_CHANNELS = {
   vaultListProfiles: "cybergrid:vault:list-profiles",
   vaultSaveProfile: "cybergrid:vault:save-profile",
   vaultDeleteProfile: "cybergrid:vault:delete-profile",
+  vaultDeleteProfiles: "cybergrid:vault:delete-profiles",
   vaultUpdateProfileNotes: "cybergrid:vault:update-profile-notes",
   vaultAddConfigBackup: "cybergrid:vault:add-config-backup",
   vaultDeleteConfigBackup: "cybergrid:vault:delete-config-backup",
@@ -309,6 +310,8 @@ const api: CyberGridApi = {
       ipcRenderer.invoke(IPC_CHANNELS.vaultSaveProfile, profile),
     deleteProfile: (profileId) =>
       ipcRenderer.invoke(IPC_CHANNELS.vaultDeleteProfile, profileId),
+    deleteProfiles: (profileIds, folderPaths) =>
+      ipcRenderer.invoke(IPC_CHANNELS.vaultDeleteProfiles, profileIds, folderPaths),
     updateProfileNotes: (profileId, notes) =>
       ipcRenderer.invoke(IPC_CHANNELS.vaultUpdateProfileNotes, profileId, notes),
     addConfigBackup: (profileId, input: ConfigBackupInput) =>
