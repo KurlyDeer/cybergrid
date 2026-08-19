@@ -12,6 +12,7 @@ import type {
   DiscoveryProgressEvent,
   DiscoveryResultEvent,
   ConnectionTaskInput,
+  ExternalDiagnosticKind,
   ExternalToolInput,
   FolderDefaultsInput,
   HealthStatusEvent,
@@ -108,6 +109,7 @@ const IPC_CHANNELS: typeof import("../shared/ipc").IPC_CHANNELS = {
   preferencesUpdate: "cybergrid:preferences:update",
   preferencesActivity: "cybergrid:preferences:activity",
   diagnosticsRun: "cybergrid:diagnostics:run",
+  diagnosticsLaunch: "cybergrid:diagnostics:launch",
   vaultLocked: "cybergrid:app:vault-locked",
   trayQuickConnect: "cybergrid:app:tray-quick-connect",
   discoveryStart: "cybergrid:discovery:start",
@@ -335,6 +337,8 @@ const api: CyberGridApi = {
   diagnostics: {
     run: (profileId, kind: DiagnosticKind) =>
       ipcRenderer.invoke(IPC_CHANNELS.diagnosticsRun, profileId, kind),
+    launch: (profileId, action: ExternalDiagnosticKind) =>
+      ipcRenderer.invoke(IPC_CHANNELS.diagnosticsLaunch, profileId, action),
   },
   discovery: {
     start: (target) => ipcRenderer.invoke(IPC_CHANNELS.discoveryStart, target),

@@ -32,6 +32,7 @@ import {
   type DeviceIcon,
   type DeviceOsFamily,
   type DiagnosticKind,
+  type ExternalDiagnosticKind,
   type ExternalToolInput,
   type FolderDefaultsInput,
   type HealthTarget,
@@ -58,9 +59,10 @@ import {
   type WebConnectionConfig,
   type WorkspaceSnapshot,
 } from "../shared/ipc";
+import { parseConnectionTarget } from "../shared/connection";
 import { AuditController, type AuditSessionContext } from "./audit";
 import type { AutoUnlockController } from "./auto-unlock";
-import { runDiagnostic } from "./diagnostics";
+import { launchExternalDiagnostic, runDiagnostic } from "./diagnostics";
 import { launchExternalTool, runConnectionTasks } from "./enterprise";
 import { HealthController } from "./health";
 import { discoverInventory } from "./inventory-sync";
@@ -768,12 +770,18 @@ function normalizeConnectionConfig(value: unknown): SshConnectionConfig {
     throw new Error("Invalid SSH connection configuration.");
   }
 
-  const host = readString(value.host, "Host", {
+  const rawTarget = readString(value.host, "Host", {
+    required: true,
+    maxLength: 512,
+    singleLine: true,
+  }) as string;
+  const target = parseConnectionTarget(rawTarget);
+  const host = readString(target.host, "Host", {
     required: true,
     maxLength: 253,
     singleLine: true,
-  });
-  const username = readString(value.username, "Username", {
+  }) as string;
+  const username = readString(target.username ?? value.username, "Username", {
     maxLength: 128,
     singleLine: true,
   });
@@ -791,8 +799,8 @@ function normalizeConnectionConfig(value: unknown): SshConnectionConfig {
   });
 
   return {
-    host: host as string,
-    port: readPort(value.port),
+    host,
+    port: target.port ?? readPort(value.port),
     username: username ?? "",
     password,
     privateKey,
@@ -826,19 +834,25 @@ function normalizeRdpConfig(value: unknown): RdpConnectionConfig {
   if (!isRecord(value)) {
     throw new Error("Invalid RDP connection configuration.");
   }
-  const host = readString(value.host, "Host", {
+  const rawTarget = readString(value.host, "Host", {
+    required: true,
+    maxLength: 512,
+    singleLine: true,
+  }) as string;
+  const target = parseConnectionTarget(rawTarget);
+  const host = readString(target.host, "Host", {
     required: true,
     maxLength: 253,
     singleLine: true,
-  });
-  const username = readString(value.username, "Username", {
+  }) as string;
+  const username = readString(target.username ?? value.username, "Username", {
     required: true,
     maxLength: 256,
     singleLine: true,
   });
   return {
-    host: host as string,
-    port: readPort(value.port, 3389),
+    host,
+    port: target.port ?? readPort(value.port, 3389),
     username: username as string,
   };
 }
@@ -848,9 +862,9 @@ function normalizeProfileInput(value: unknown): ServerProfileInput {
     throw new Error("Invalid server profile.");
   }
   const protocol = readConnectionProtocol(value.protocol ?? "ssh");
-  const host = readString(value.host, protocol === "serial" ? "Serial port" : "Host", {
+  const rawHost = readString(value.host, protocol === "serial" ? "Serial port" : "Host", {
     required: true,
-    maxLength: protocol === "serial" ? 2_048 : 253,
+    maxLength: protocol === "serial" ? 2_048 : 512,
     singleLine: true,
   }) as string;
   const authType = value.authType === "password" || value.authType === "privateKey"
@@ -875,7 +889,22 @@ function normalizeProfileInput(value: unknown): ServerProfileInput {
     ssh: 22, rdp: 3389, telnet: 23, raw: 23, vnc: 5900,
     http: 80, https: 443, serial: 0,
   };
-  const port = protocol === "serial" ? 0 : readPort(value.port, defaultPorts[protocol]);
+  const rawUsername = readString(value.username, "Username", {
+    maxLength: 256,
+    singleLine: true,
+  }) ?? "";
+  const target = protocol === "serial" ? { host: rawHost } : parseConnectionTarget(rawHost);
+  const host = readString(target.host, protocol === "serial" ? "Serial port" : "Host", {
+    required: true,
+    maxLength: protocol === "serial" ? 2_048 : 253,
+    singleLine: true,
+  }) as string;
+  const port = protocol === "serial"
+    ? 0
+    : target.port ?? readPort(value.port, defaultPorts[protocol]);
+  const username = target.username === undefined
+    ? rawUsername
+    : readString(target.username, "Username", { maxLength: 256, singleLine: true }) ?? "";
   const category: ConnectionCategory = value.category === "network" || value.category === "web" || value.category === "desktop"
     ? value.category : "server";
   const profile: ServerProfileInput = {
@@ -885,10 +914,7 @@ function normalizeProfileInput(value: unknown): ServerProfileInput {
     name: readString(value.name, "Display name", { required: true, maxLength: 100 }) as string,
     host,
     port,
-    username: readString(value.username, "Username", {
-      maxLength: 256,
-      singleLine: true,
-    }) ?? "",
+    username,
     group: value.group === undefined || value.group === ""
       ? "Ungrouped" : normalizeFolderPath(value.group),
     authType,
@@ -1273,10 +1299,15 @@ function normalizeStreamConfig(value: unknown): StreamConnectionConfig {
   if (!isRecord(value) || (value.protocol !== "telnet" && value.protocol !== "raw")) {
     throw new Error("Invalid Telnet/RAW connection configuration.");
   }
+  const target = parseConnectionTarget(readString(value.host, "Host", {
+    required: true,
+    maxLength: 512,
+    singleLine: true,
+  }) as string);
   return {
     protocol: value.protocol,
-    host: readString(value.host, "Host", { required: true, maxLength: 253, singleLine: true }) as string,
-    port: readPort(value.port, value.protocol === "telnet" ? 23 : 23),
+    host: readString(target.host, "Host", { required: true, maxLength: 253, singleLine: true }) as string,
+    port: target.port ?? readPort(value.port, 23),
   };
 }
 
@@ -1309,9 +1340,14 @@ function normalizeVncConfig(value: unknown): VncConnectionConfig {
   if (!isRecord(value)) {
     throw new Error("Invalid VNC connection configuration.");
   }
+  const target = parseConnectionTarget(readString(value.host, "Host", {
+    required: true,
+    maxLength: 512,
+    singleLine: true,
+  }) as string);
   return {
-    host: readString(value.host, "Host", { required: true, maxLength: 253, singleLine: true }) as string,
-    port: readPort(value.port, 5900),
+    host: readString(target.host, "Host", { required: true, maxLength: 253, singleLine: true }) as string,
+    port: target.port ?? readPort(value.port, 5900),
     password: readString(value.password, "VNC password", { maxLength: 4_096, trim: false }),
   };
 }
@@ -1447,6 +1483,13 @@ function readDiagnosticKind(value: unknown): DiagnosticKind {
     return value;
   }
   throw new Error("Unsupported diagnostic operation.");
+}
+
+function readExternalDiagnosticKind(value: unknown): ExternalDiagnosticKind {
+  if (value === "continuous-ping" || value === "traceroute" || value === "wireshark") {
+    return value;
+  }
+  throw new Error("Unsupported external diagnostic operation.");
 }
 
 function readHexColor(value: unknown, field: string): string {
@@ -1779,10 +1822,11 @@ async function connectionConfigForProfile(
   if (profile.protocol !== "ssh") {
     throw new Error("Selected profile is not an SSH connection.");
   }
+  const target = parseConnectionTarget(resolveEnvironmentTokens(profile.host, "Host") as string);
   const baseConfig: SshConnectionConfig = {
-    host: resolveEnvironmentTokens(profile.host, "Host") as string,
-    port: profile.port,
-    username: interactiveCredentials?.username ?? resolveEnvironmentTokens(profile.username, "Username") ?? "",
+    host: target.host,
+    port: target.port ?? profile.port,
+    username: interactiveCredentials?.username ?? target.username ?? resolveEnvironmentTokens(profile.username, "Username") ?? "",
     readyTimeout: (profile.readyTimeoutSeconds ?? 15) * 1_000,
     keepaliveInterval: profile.keepAliveEnabled === false ? 0 : (profile.keepaliveSeconds ?? 10) * 1_000,
     totpCode: profile.totpSecret ? generateTotp(profile.totpSecret, {
@@ -1830,15 +1874,18 @@ async function connectProfile(
   interactiveCredentials?: ProfileConnectionCredentials,
 ): Promise<ProfileConnectionResult> {
   const profile = requireVault().getConnectionProfile(profileId);
-  const host = resolveEnvironmentTokens(profile.host, profile.protocol === "serial" ? "Serial port" : "Host") as string;
-  const username = interactiveCredentials?.username ?? resolveEnvironmentTokens(profile.username, "Username") ?? "";
+  const rawHost = resolveEnvironmentTokens(profile.host, profile.protocol === "serial" ? "Serial port" : "Host") as string;
+  const target = profile.protocol === "serial" ? { host: rawHost } : parseConnectionTarget(rawHost);
+  const host = target.host;
+  const port = target.port ?? profile.port;
+  const username = interactiveCredentials?.username ?? target.username ?? resolveEnvironmentTokens(profile.username, "Username") ?? "";
   const context = {
     displayName: profile.name,
     host,
     ip: host,
     username,
     group: profile.group,
-    port: profile.port,
+    port,
     profileId,
   };
   await runConnectionTasks(
@@ -1859,7 +1906,7 @@ async function connectProfile(
         sessionId: await ssh.connect(
           await connectionConfigForProfile(profileId, interactiveCredentials),
           sender,
-          auditContext("ssh", profile.name, `${host}:${profile.port}`, username, profile.group),
+          auditContext("ssh", profile.name, `${host}:${port}`, username, profile.group),
         ),
         context,
         policy,
@@ -1870,7 +1917,7 @@ async function connectProfile(
         protocol: "rdp",
         sessionId: await requireRdp().connect({
           host,
-          port: profile.port,
+          port,
           username: formatRdpUsername(username, profile.domain),
         }, sender),
         context,
@@ -1881,9 +1928,9 @@ async function connectProfile(
       return {
         protocol: profile.protocol,
         sessionId: streamController.connect(
-          { protocol: profile.protocol, host, port: profile.port },
+          { protocol: profile.protocol, host, port },
           sender,
-          auditContext(profile.protocol, profile.name, `${host}:${profile.port}`, username, profile.group),
+          auditContext(profile.protocol, profile.name, `${host}:${port}`, username, profile.group),
         ),
         context,
         policy,
@@ -1910,7 +1957,7 @@ async function connectProfile(
     case "vnc": {
       const result = await (await getVncController()).connect({
         host,
-        port: profile.port,
+        port,
         password: resolveEnvironmentTokens(profile.password, "VNC password"),
       }, sender);
       return { protocol: "vnc", ...result, context, policy };
@@ -1919,9 +1966,9 @@ async function connectProfile(
     case "https": {
       const defaultPort = profile.protocol === "https" ? 443 : 80;
       const normalizedHost = host.replace(/^https?:\/\//i, "").replace(/\/$/, "");
-      const port = profile.port === defaultPort ? "" : `:${profile.port}`;
+      const urlPort = port === defaultPort ? "" : `:${port}`;
       const sessionId = await requireWeb().connect({
-        url: `${profile.protocol}://${normalizedHost}${port}/`,
+        url: `${profile.protocol}://${normalizedHost}${urlPort}/`,
         username,
         password: profile.authType === "password"
           ? resolveEnvironmentTokens(profile.password, "Web password")
@@ -2491,11 +2538,27 @@ function registerIpcHandlers(): void {
     if (profile.protocol === "serial") {
       throw new Error("Network diagnostics are unavailable for serial profiles.");
     }
+    const target = parseConnectionTarget(resolveEnvironmentTokens(profile.host, "Diagnostic host") as string);
     return runDiagnostic(
       id,
       readDiagnosticKind(kind),
-      resolveEnvironmentTokens(profile.host, "Diagnostic host") as string,
-      profile.port,
+      target.host,
+      target.port ?? profile.port,
+    );
+  });
+
+  ipcMain.handle(IPC_CHANNELS.diagnosticsLaunch, async (event, profileId: unknown, action: unknown) => {
+    assertTrustedSender(event);
+    const id = readUuid(profileId, "server profile ID");
+    const profile = requireVault().getConnectionProfile(id);
+    if (profile.protocol === "serial") {
+      throw new Error("Network diagnostics are unavailable for serial profiles.");
+    }
+    const target = parseConnectionTarget(resolveEnvironmentTokens(profile.host, "Diagnostic host") as string);
+    return launchExternalDiagnostic(
+      target.host,
+      readExternalDiagnosticKind(action),
+      requirePreferences().get().externalToolPaths.wireshark,
     );
   });
 

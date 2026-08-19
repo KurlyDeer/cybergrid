@@ -1,5 +1,6 @@
 import { Terminal, type ITheme } from "xterm";
 import { FitAddon } from "xterm-addon-fit";
+import { parseConnectionTarget } from "../shared/connection";
 
 type XtermTerminal = Terminal;
 type XtermFitAddon = FitAddon;
@@ -20,6 +21,7 @@ type DiscoveryProgressEvent = import("../shared/ipc").DiscoveryProgressEvent;
 type DiscoveryResultEvent = import("../shared/ipc").DiscoveryResultEvent;
 type DiagnosticKind = import("../shared/ipc").DiagnosticKind;
 type DiagnosticResult = import("../shared/ipc").DiagnosticResult;
+type ExternalDiagnosticKind = import("../shared/ipc").ExternalDiagnosticKind;
 type ConnectionTaskInput = import("../shared/ipc").ConnectionTaskInput;
 type ConnectionTaskRecord = import("../shared/ipc").ConnectionTaskRecord;
 type CredentialProfileInput = import("../shared/ipc").CredentialProfileInput;
@@ -296,8 +298,13 @@ const serverModalTitle = elementById<HTMLHeadingElement>("server-modal-title");
 const serverForm = elementById<HTMLFormElement>("server-form");
 const serverNameInput = elementById<HTMLInputElement>("server-name");
 const serverProtocolInput = elementById<HTMLSelectElement>("server-protocol");
+const serverHostField = elementById<HTMLDivElement>("server-host-field");
 const serverHostInput = elementById<HTMLInputElement>("server-host");
 const serverHostLabel = elementById<HTMLLabelElement>("server-host-label");
+const serverSerialPortField = elementById<HTMLDivElement>("server-serial-port-field");
+const serverSerialPortInput = elementById<HTMLSelectElement>("server-serial-port");
+const refreshSerialPortsButton = elementById<HTMLButtonElement>("refresh-serial-ports");
+const serverSerialPortStatus = elementById<HTMLSpanElement>("server-serial-port-status");
 const serverPortInput = elementById<HTMLInputElement>("server-port");
 const serverCredentialProfileField = elementById<HTMLDivElement>("server-credential-profile-field");
 const serverCredentialProfileInput = elementById<HTMLSelectElement>("server-credential-profile");
@@ -337,7 +344,7 @@ const authTypeInput = elementById<HTMLSelectElement>("auth-type");
 const serverUsernameField = elementById<HTMLDivElement>("server-username-field");
 const serverAuthField = elementById<HTMLDivElement>("server-auth-field");
 const serverSerialSection = elementById<HTMLDivElement>("server-serial-section");
-const serverBaudRateInput = elementById<HTMLInputElement>("server-baud-rate");
+const serverBaudRateInput = elementById<HTMLSelectElement>("server-baud-rate");
 const serverDataBitsInput = elementById<HTMLSelectElement>("server-data-bits");
 const serverStopBitsInput = elementById<HTMLSelectElement>("server-stop-bits");
 const serverParityInput = elementById<HTMLSelectElement>("server-parity");
@@ -2738,6 +2745,23 @@ async function executeProfileDiagnostic(profile: ServerProfileSummary, kind: Dia
   renderProfiles();
 }
 
+async function launchProfileExternalDiagnostic(
+  profile: ServerProfileSummary,
+  action: ExternalDiagnosticKind,
+): Promise<void> {
+  closeServerContextMenu();
+  connectionState.textContent = action === "wireshark"
+    ? `Starting Wireshark capture for ${profile.host}...`
+    : `Launching ${action === "continuous-ping" ? "continuous ping" : "traceroute"}...`;
+  try {
+    const result = await window.cybergrid.diagnostics.launch(profile.id, action);
+    connectionState.textContent = result.message;
+  } catch (error) {
+    connectionState.textContent = "External diagnostic failed";
+    window.alert(errorMessage(error));
+  }
+}
+
 function openServerContextMenu(event: MouseEvent, profile: ServerProfileSummary): void {
   event.preventDefault();
   event.stopPropagation();
@@ -2774,11 +2798,14 @@ function openServerContextMenu(event: MouseEvent, profile: ServerProfileSummary)
   separator.className = "context-separator";
   serverContextMenu.append(separator);
   const serial = profile.protocol === "serial";
-  addAction("Ping test", () => void executeProfileDiagnostic(profile, "ping"), serial);
-  addAction("Traceroute", () => void executeProfileDiagnostic(profile, "traceroute"), serial);
+  addAction("Ping (Continuous)", () => void launchProfileExternalDiagnostic(profile, "continuous-ping"), serial);
+  addAction("Traceroute", () => void launchProfileExternalDiagnostic(profile, "traceroute"), serial);
+  addAction("Launch Wireshark (Capture IP)", () => void launchProfileExternalDiagnostic(profile, "wireshark"), serial);
+  appendContextSeparator();
+  addAction("Ping test (single)", () => void executeProfileDiagnostic(profile, "ping"), serial);
   addAction("DNS lookup", () => void executeProfileDiagnostic(profile, "dns"), serial);
   addAction(`Port check (${profile.port})`, () => void executeProfileDiagnostic(profile, "port"), serial);
-  positionContextMenu(event.clientX, event.clientY, Math.min(520, 258 + externalTools.length * 34));
+  positionContextMenu(event.clientX, event.clientY, Math.min(620, 360 + externalTools.length * 34));
 }
 
 function diagnosticElement(profileId: string): HTMLElement | undefined {
@@ -3581,6 +3608,62 @@ const CATEGORY_DEFAULT_PROTOCOL: Record<ConnectionCategory, ConnectionProtocol> 
   desktop: "vnc",
 };
 
+async function refreshSerialPortOptions(preferredPath = ""): Promise<void> {
+  const preferred = preferredPath.trim() || serverSerialPortInput.value;
+  refreshSerialPortsButton.disabled = true;
+  serverSerialPortStatus.textContent = "Detecting local serial ports...";
+  try {
+    const ports = await window.cybergrid.serial.list();
+    serverSerialPortInput.replaceChildren();
+    if (preferred && !ports.some((port) => port.path.toLowerCase() === preferred.toLowerCase())) {
+      const savedOption = document.createElement("option");
+      savedOption.value = preferred;
+      savedOption.textContent = `${preferred} (saved; currently unavailable)`;
+      serverSerialPortInput.append(savedOption);
+    }
+    for (const port of ports) {
+      const option = document.createElement("option");
+      option.value = port.path;
+      const descriptor = [port.manufacturer, port.vendorId && port.productId
+        ? `${port.vendorId}:${port.productId}` : ""].filter(Boolean).join(" · ");
+      option.textContent = descriptor ? `${port.path} — ${descriptor}` : port.path;
+      serverSerialPortInput.append(option);
+    }
+    if (serverSerialPortInput.options.length === 0) {
+      const emptyOption = document.createElement("option");
+      emptyOption.value = "";
+      emptyOption.textContent = "No serial ports detected";
+      emptyOption.disabled = true;
+      emptyOption.selected = true;
+      serverSerialPortInput.append(emptyOption);
+    } else if (preferred) {
+      serverSerialPortInput.value = preferred;
+    }
+    serverSerialPortStatus.textContent = ports.length === 1
+      ? "1 local serial port detected."
+      : `${ports.length} local serial ports detected.`;
+  } catch (error) {
+    serverSerialPortInput.replaceChildren();
+    if (preferred) {
+      const option = document.createElement("option");
+      option.value = preferred;
+      option.textContent = `${preferred} (saved)`;
+      serverSerialPortInput.append(option);
+    }
+    serverSerialPortStatus.textContent = `Port detection failed: ${errorMessage(error)}`;
+  } finally {
+    refreshSerialPortsButton.disabled = false;
+  }
+}
+
+function applySmartEndpointFields(): void {
+  if (serverProtocolInput.value === "serial" || !serverHostInput.value.trim()) return;
+  const target = parseConnectionTarget(serverHostInput.value);
+  serverHostInput.value = target.host;
+  if (target.port !== undefined) serverPortInput.value = String(target.port);
+  if (target.username !== undefined) serverUsernameInput.value = target.username;
+}
+
 function selectConnectionCategory(category: ConnectionCategory, resetProtocol = true): void {
   const normalizedCategory: ConnectionCategory = category === "desktop" ? "server" : category;
   connectionCategory = normalizedCategory;
@@ -3611,8 +3694,14 @@ function updateProfileFields(resetDefaults = false): void {
   if (!usesAuthentication) serverCredentialProfileInput.value = "";
   const linkedCredential = Boolean(serverCredentialProfileInput.value);
 
-  serverHostLabel.textContent = serial ? "COM port or device path" : "Hostname or IP";
-  serverHostInput.placeholder = serial ? "COM3 or /dev/ttyUSB0" : "server.example.net";
+  serverHostLabel.textContent = "IP / Hostname";
+  serverHostInput.placeholder = "admin@server.example.net:22";
+  serverHostField.hidden = serial;
+  serverHostInput.disabled = serial;
+  serverHostInput.required = !serial;
+  serverSerialPortField.hidden = !serial;
+  serverSerialPortInput.disabled = !serial;
+  serverSerialPortInput.required = serial;
   serverPortInput.closest<HTMLElement>(".field")?.toggleAttribute("hidden", serial);
   serverPortInput.disabled = serial;
   serverPortInput.required = !serial;
@@ -3644,6 +3733,9 @@ function updateProfileFields(resetDefaults = false): void {
   serverKeepaliveInput.disabled = !serverKeepaliveEnabledInput.checked || protocol !== "ssh";
   serverLegacySshField.hidden = protocol !== "ssh";
   serverLegacySshInput.disabled = protocol !== "ssh";
+  if (serial && serverSerialPortInput.options.length === 0) {
+    void refreshSerialPortOptions(serverHostInput.value);
+  }
 }
 
 function openServerModal(profile?: ServerProfileSummary): void {
@@ -3700,11 +3792,15 @@ function openServerModal(profile?: ServerProfileSummary): void {
     for (const option of serverPostTasksInput.options) option.selected = profile.postConnectTaskIds.includes(option.value);
   } else {
     serverCredentialProfileInput.value = "";
+    authTypeInput.value = "password";
     serverPasswordInput.placeholder = "";
     serverPassphraseInput.placeholder = "";
     serverLegacySshInput.checked = connectionCategory === "network";
   }
   updateProfileFields(false);
+  if (profile?.protocol === "serial" && serverSerialPortInput.options.length > 0) {
+    void refreshSerialPortOptions(profile.host);
+  }
   if (!serverModal.open) {
     serverModal.showModal();
   }
@@ -4464,6 +4560,17 @@ assetModal.addEventListener("click", (event) => {
 lockButton.addEventListener("click", () => void lockVaultFromUi());
 
 serverProtocolInput.addEventListener("change", () => updateProfileFields(true));
+refreshSerialPortsButton.addEventListener("click", () => {
+  void refreshSerialPortOptions(serverSerialPortInput.value || serverHostInput.value);
+});
+serverHostInput.addEventListener("blur", () => {
+  try {
+    applySmartEndpointFields();
+    serverFormError.textContent = "";
+  } catch (error) {
+    serverFormError.textContent = errorMessage(error);
+  }
+});
 for (const button of categoryButtons) {
   button.addEventListener("click", () => {
     const category = button.dataset.connectionCategory;
@@ -4497,6 +4604,22 @@ serverForm.addEventListener("submit", async (event) => {
   const protocol = serverProtocolInput.value as ConnectionProtocol;
   const credentialProfileId = serverCredentialProfileInput.value || undefined;
   const authType = credentialProfileId ? "none" : authTypeInput.value as ServerAuthType;
+  let connectionTarget: ReturnType<typeof parseConnectionTarget>;
+  try {
+    if (protocol === "serial") {
+      const path = serverSerialPortInput.value.trim();
+      if (!path) throw new Error("Select an available COM or serial port.");
+      connectionTarget = { host: path };
+    } else {
+      connectionTarget = parseConnectionTarget(serverHostInput.value);
+      serverHostInput.value = connectionTarget.host;
+      if (connectionTarget.port !== undefined) serverPortInput.value = String(connectionTarget.port);
+      if (connectionTarget.username !== undefined) serverUsernameInput.value = connectionTarget.username;
+    }
+  } catch (error) {
+    serverFormError.textContent = errorMessage(error);
+    return;
+  }
   const terminalOverrides: TerminalAppearanceOverrides = {
     theme: (serverTerminalThemeInput.value || undefined) as TerminalAppearanceOverrides["theme"],
     fontFamily: serverTerminalFontInput.value.trim() || undefined,
@@ -4511,9 +4634,9 @@ serverForm.addEventListener("submit", async (event) => {
     category: connectionCategory,
     protocol,
     name: serverNameInput.value.trim(),
-    host: serverHostInput.value.trim(),
-    port: protocol === "serial" ? 0 : Number(serverPortInput.value),
-    username: serverUsernameInput.value.trim(),
+    host: connectionTarget.host,
+    port: protocol === "serial" ? 0 : connectionTarget.port ?? Number(serverPortInput.value),
+    username: connectionTarget.username ?? serverUsernameInput.value.trim(),
     group: serverGroupInput.value.trim() || "Ungrouped",
     authType,
     credentialProfileId,

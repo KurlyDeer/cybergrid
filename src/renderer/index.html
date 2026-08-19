@@ -2224,6 +2224,65 @@
       .update-download-progress::-webkit-progress-value { border-radius: 999px; background: var(--accent); }
       .update-toast-actions { display: flex; justify-content: flex-end; gap: 8px; padding: 0 14px 14px; }
       @keyframes update-toast-in { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: translateY(0); } }
+
+      /* High-density sysadmin workspace: keep controls legible while giving sessions the canvas. */
+      .app-shell { grid-template-columns: 238px minmax(0, 1fr); }
+      .brand { height: 42px; gap: 7px; padding: 0 9px; font-size: 12px; }
+      .brand-mark { width: 24px; height: 24px; border-radius: 5px; font-size: 10px; }
+      .sidebar-toolbar { min-height: 30px; padding: 3px 5px 2px 8px; }
+      .sidebar-toolbar-actions { gap: 3px; }
+      .sidebar-toolbar h1 { font-size: 9px; }
+      .sidebar-toolbar .icon-button { width: 24px; height: 24px; border-radius: 4px; font-size: 15px; }
+      .server-tree { padding: 2px 3px 8px; }
+      .server-group { margin-bottom: 0; }
+      .server-list .server-group { margin-left: 9px; }
+      .folder-header { min-height: 22px; grid-template-columns: 10px minmax(0, 1fr) auto; gap: 4px; padding: 1px 4px; border-radius: 2px; }
+      .folder-name { font-size: 10px; letter-spacing: .035em; }
+      .folder-count { min-width: 14px; padding: 0 3px; background: transparent; font-size: 9px; }
+      .server-row { min-height: 22px; grid-template-columns: minmax(0, 1fr) 18px; }
+      .server-item { min-height: 22px; gap: 4px; padding: 1px 4px; border: 0; border-radius: 2px; }
+      .server-item:hover, .server-item:focus-visible, .server-item.selected { border: 0; }
+      .server-name { font-size: 13px; line-height: 20px; }
+      .server-host { display: none; }
+      .server-dot { width: 5px; height: 5px; box-shadow: none; }
+      .node-icon { width: 14px; height: 14px; border: 0; border-radius: 2px; background: transparent; font-size: 6px; }
+      .node-badge { padding: 0 3px; background: transparent; color: var(--node-color, var(--accent)); }
+      .server-delete { width: 18px; height: 18px; }
+      .sidebar-footer { padding: 5px; }
+      .lock-button { padding: 4px 6px; font-size: 10px; }
+      .sidebar-hint { margin-top: 4px; font-size: 9px; }
+      .quick-connect-bar { grid-template-columns: auto minmax(220px, 1fr) minmax(110px, 180px) auto; gap: 5px; padding: 4px 7px; }
+      .quick-connect-bar input, .field input, .field select, .sftp-path-input { height: 28px; padding: 0 7px; border-radius: 4px; }
+      .primary-button, .secondary-button { min-height: 28px; padding: 0 9px; border-radius: 4px; font-size: 11px; }
+      .tabs-row { min-height: 30px; }
+      .tab { min-width: 126px; max-width: 210px; gap: 4px; padding: 0 5px 0 7px; border-bottom-width: 1px; }
+      .tab-label { padding: 6px 0; font-size: 11px; }
+      .tab-protocol { padding: 0 3px; border: 0; font-size: 7px; }
+      .tab-status { width: 5px; height: 5px; }
+      .tab-close { width: 18px; height: 18px; border-radius: 3px; }
+      .connection-state { max-width: 190px; padding: 0 7px; font-size: 9px; }
+      .terminal-stack.tiled-layout { gap: 1px; padding: 0; }
+      .terminal-pane, .terminal-stack.tiled-layout .terminal-pane, .vnc-pane { padding: 0; }
+      .terminal-pane .xterm, .vnc-screen, .rdp-viewport { width: 100%; height: 100%; }
+      .quick-snippet-toolbar { min-height: 34px; gap: 5px; padding: 3px 5px; }
+      .quick-snippet-button { min-height: 24px; padding: 0 7px; border-radius: 3px; }
+      .connection-dialog { width: min(720px, calc(100vw - 20px)); }
+      .connection-dialog .modal-header { padding: 10px 12px 8px; }
+      .connection-dialog .modal-header h2 { font-size: 16px; }
+      .connection-dialog .modal-header p { margin-top: 3px; font-size: 10px; }
+      .connection-dialog .modal-body { gap: 8px; padding: 8px 12px; }
+      .connection-dialog .modal-actions { padding: 7px 12px; }
+      .category-picker { gap: 5px; }
+      .category-card { min-height: 48px; padding: 6px 8px; border-radius: 4px; }
+      .category-card strong { margin-bottom: 2px; font-size: 11px; }
+      .category-card span { font-size: 9px; }
+      .connection-section-title { margin: 3px 0 -1px; font-size: 9px; }
+      .advanced-settings { border-radius: 4px; }
+      .advanced-settings > summary { padding: 8px 10px; font-size: 10px; }
+      .advanced-grid { gap: 8px; padding: 0 10px 10px; }
+      .compact-check { min-height: 30px; padding: 4px 6px; border-radius: 4px; }
+      .serial-port-picker { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 5px; }
+      .serial-port-picker .secondary-button { white-space: nowrap; }
       @media (max-width: 1040px) {
         .category-picker { grid-template-columns: repeat(2, minmax(0, 1fr)); }
         .session-toggles { grid-template-columns: 1fr; }
@@ -2439,15 +2498,12 @@
           </div>
           <div class="connection-section-title">Essentials</div>
           <div class="field"><label for="server-name">Connection name</label><input id="server-name" required maxlength="100" placeholder="ERP-PROD-01" autocomplete="off" /></div>
-          <div class="field"><label for="server-group">Stack / location</label><input id="server-group" list="group-options" maxlength="100" placeholder="Charlotte DC / ERP Stack" autocomplete="off" /><datalist id="group-options"></datalist></div>
-          <div class="field"><label for="server-host" id="server-host-label">Hostname or IP</label><input id="server-host" required maxlength="2048" placeholder="server.example.net" autocomplete="off" /></div>
+          <div class="field" id="server-host-field"><label for="server-host" id="server-host-label">IP / Hostname</label><input id="server-host" required maxlength="2048" placeholder="admin@server.example.net:22" autocomplete="off" /></div>
+          <div class="field" id="server-serial-port-field" hidden><label for="server-serial-port">COM port</label><div class="serial-port-picker"><select id="server-serial-port"></select><button class="secondary-button" id="refresh-serial-ports" type="button">Refresh</button></div><span class="field-hint" id="server-serial-port-status">Local ports are detected on demand.</span></div>
           <div class="field"><label for="server-protocol">Protocol</label><select id="server-protocol"><option value="ssh">SSH</option><option value="rdp">Windows RDP</option><option value="telnet">Telnet</option><option value="raw">RAW TCP</option><option value="vnc">VNC Desktop</option><option value="https">HTTPS Web</option><option value="http">HTTP Web</option><option value="serial">Serial / COM</option></select></div>
-          <div class="field" id="server-credential-profile-field"><label for="server-credential-profile">Vault credential profile</label><select id="server-credential-profile"><option value="">Connection-specific / inherited</option></select><span class="field-hint">Reusable credentials are managed from Tools → Credential Profiles.</span></div>
           <div class="field" id="server-username-field"><label for="server-username">Username</label><input id="server-username" maxlength="256" autocomplete="username" /></div>
-          <div class="field" id="server-domain-field"><label for="server-domain">Domain</label><input id="server-domain" maxlength="256" placeholder="CORP" autocomplete="off" /></div>
-          <div class="field" id="server-auth-field"><label for="auth-type">Credentials</label><select id="auth-type"><option value="none">Interactive / inherited</option><option value="password">Password</option><option value="privateKey">SSH private key</option></select></div>
           <div class="auth-section" id="server-serial-section" hidden>
-            <div class="field"><label for="server-baud-rate">Baud rate</label><input id="server-baud-rate" type="number" min="50" max="4000000" value="9600" /></div>
+            <div class="field"><label for="server-baud-rate">Baud rate</label><select id="server-baud-rate"><option value="9600">9600</option><option value="19200">19200</option><option value="38400">38400</option><option value="115200">115200</option></select></div>
             <div class="field"><label for="server-data-bits">Data bits</label><select id="server-data-bits"><option>8</option><option>7</option><option>6</option><option>5</option></select></div>
             <div class="field"><label for="server-stop-bits">Stop bits</label><select id="server-stop-bits"><option>1</option><option>2</option></select></div>
             <div class="field"><label for="server-parity">Parity</label><select id="server-parity"><option value="none">None</option><option value="even">Even</option><option value="odd">Odd</option><option value="mark">Mark</option><option value="space">Space</option></select></div>
@@ -2462,6 +2518,11 @@
           <details class="advanced-settings">
             <summary>Advanced Settings</summary>
             <div class="advanced-grid">
+              <div class="subsection-label">Organization &amp; authentication</div>
+              <div class="field"><label for="server-group">Stack / location</label><input id="server-group" list="group-options" maxlength="100" placeholder="Charlotte DC / ERP Stack" autocomplete="off" /><datalist id="group-options"></datalist></div>
+              <div class="field" id="server-credential-profile-field"><label for="server-credential-profile">Vault credential profile</label><select id="server-credential-profile"><option value="">Connection-specific / inherited</option></select><span class="field-hint">Reusable credentials are managed from Tools → Credential Profiles.</span></div>
+              <div class="field" id="server-domain-field"><label for="server-domain">Domain</label><input id="server-domain" maxlength="256" placeholder="CORP" autocomplete="off" /></div>
+              <div class="field" id="server-auth-field"><label for="auth-type">Credential mode</label><select id="auth-type"><option value="none">Interactive / inherited</option><option value="password">Password</option><option value="privateKey">SSH private key</option></select></div>
               <div class="field"><label for="server-port">Port override</label><input id="server-port" type="number" min="1" max="65535" value="22" required /></div>
               <div class="field"><label for="server-timeout">Connection timeout (seconds)</label><input id="server-timeout" type="number" min="1" max="300" placeholder="Inherited / 15" /></div>
               <div class="field"><label for="server-jump-host">Jump host / bastion</label><input id="server-jump-host" maxlength="253" placeholder="bastion.example.net" /></div>

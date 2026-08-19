@@ -1,7 +1,12 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { lookup, reverse } from "node:dns/promises";
 import { Socket } from "node:net";
-import type { DiagnosticKind, DiagnosticResult } from "../shared/ipc";
+import type {
+  DiagnosticKind,
+  DiagnosticResult,
+  ExternalDiagnosticKind,
+  ExternalDiagnosticLaunchResult,
+} from "../shared/ipc";
 
 const MAX_OUTPUT_LENGTH = 64 * 1024;
 
@@ -38,6 +43,58 @@ function runCommand(command: string, args: string[], timeout: number): Promise<C
       },
     );
   });
+}
+
+function spawnDetached(command: string, args: string[]): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      detached: true,
+      stdio: "ignore",
+      windowsHide: false,
+    });
+    child.once("error", reject);
+    child.once("spawn", () => {
+      child.unref();
+      resolve();
+    });
+  });
+}
+
+export async function launchExternalDiagnostic(
+  rawHost: string,
+  action: ExternalDiagnosticKind,
+  configuredWiresharkPath = "",
+): Promise<ExternalDiagnosticLaunchResult> {
+  const host = normalizeDiagnosticHost(rawHost);
+  if (action === "wireshark") {
+    const executable = configuredWiresharkPath.trim() || (
+      process.platform === "win32"
+        ? "wireshark.exe"
+        : process.platform === "darwin"
+          ? "/Applications/Wireshark.app/Contents/MacOS/Wireshark"
+          : "wireshark"
+    );
+    const captureInterface = process.platform === "win32" ? "1" : "any";
+    await spawnDetached(executable, ["-k", "-i", captureInterface, "-f", `host ${host}`]);
+    return { action, message: `Wireshark capture started for ${host} on interface ${captureInterface}.` };
+  }
+
+  if (process.platform === "win32") {
+    const command = action === "continuous-ping" ? "ping.exe" : "tracert.exe";
+    const args = action === "continuous-ping" ? ["-t", host] : ["-d", host];
+    await spawnDetached(command, args);
+  } else if (process.platform === "darwin") {
+    const command = action === "continuous-ping" ? "ping" : "traceroute";
+    await spawnDetached("open", ["-a", "Terminal", "--args", command, host]);
+  } else {
+    const command = action === "continuous-ping" ? "ping" : "traceroute";
+    await spawnDetached("x-terminal-emulator", ["-e", command, host]);
+  }
+
+  return {
+    action,
+    message: `${action === "continuous-ping" ? "Continuous ping" : "Traceroute"} launched for ${host}.`,
+  };
 }
 
 async function ping(host: string): Promise<CommandResult> {

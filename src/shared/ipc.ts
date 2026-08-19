@@ -59,6 +59,7 @@ export const IPC_CHANNELS = {
   preferencesUpdate: "cybergrid:preferences:update",
   preferencesActivity: "cybergrid:preferences:activity",
   diagnosticsRun: "cybergrid:diagnostics:run",
+  diagnosticsLaunch: "cybergrid:diagnostics:launch",
   vaultLocked: "cybergrid:app:vault-locked",
   trayQuickConnect: "cybergrid:app:tray-quick-connect",
   discoveryStart: "cybergrid:discovery:start",
@@ -834,6 +835,12 @@ export interface TrayStateSnapshot {
 }
 
 export type DiagnosticKind = "ping" | "traceroute" | "dns" | "port";
+export type ExternalDiagnosticKind = "continuous-ping" | "traceroute" | "wireshark";
+
+export interface ExternalDiagnosticLaunchResult {
+  action: ExternalDiagnosticKind;
+  message: string;
+}
 
 export interface DiagnosticResult {
   profileId: string;
@@ -952,6 +959,7 @@ export interface CyberGridApi {
   };
   diagnostics: {
     run(profileId: string, kind: DiagnosticKind): Promise<DiagnosticResult>;
+    launch(profileId: string, action: ExternalDiagnosticKind): Promise<ExternalDiagnosticLaunchResult>;
   };
   discovery: {
     start(target: string): Promise<string>;
