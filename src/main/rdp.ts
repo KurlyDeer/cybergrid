@@ -102,6 +102,11 @@ try {
         }
         'SHOW' { [CyberGridRdpHost]::SetVisible($windowHandle, $true) }
         'HIDE' { [CyberGridRdpHost]::SetVisible($windowHandle, $false) }
+        'PARENT' {
+          if ($parts.Length -eq 2) {
+            [CyberGridRdpHost]::Dock($windowHandle, [IntPtr]::new([Int64]$parts[1]))
+          }
+        }
         'CLOSE' { break }
       }
       if ($parts[0] -eq 'CLOSE') { break }
@@ -218,6 +223,19 @@ export class RdpController {
     if (!session || session.closed) return;
     session.visible = visible;
     this.applyGeometry(session);
+  }
+
+  attachRenderer(sessionId: string, sender: WebContents): boolean {
+    const session = this.sessions.get(sessionId);
+    const parentWindow = BrowserWindow.fromWebContents(sender);
+    if (!session || session.closed || !parentWindow || parentWindow.isDestroyed()) return false;
+    session.sender = sender;
+    if (session.hostReady && session.hostProcess?.stdin?.writable) {
+      session.hostProcess.stdin.write(`PARENT ${this.nativeHandle(parentWindow)}\n`);
+    }
+    this.applyGeometry(session);
+    this.emitStatus(session, session.hostReady ? "running" : "launching", "RDP session moved to a detached window.");
+    return true;
   }
 
   disconnect(sessionId: string): void {

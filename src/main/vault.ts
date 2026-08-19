@@ -201,7 +201,8 @@ function parseConnectionProtocol(value: unknown): ConnectionProtocol {
   }
   if (
     value === "ssh" || value === "rdp" || value === "telnet" || value === "raw" ||
-    value === "vnc" || value === "http" || value === "https" || value === "serial"
+    value === "vnc" || value === "http" || value === "https" || value === "serial" ||
+    value === "local"
   ) {
     return value;
   }
@@ -218,6 +219,20 @@ function parseSerialParity(value: unknown): SerialParity | undefined {
   throw new Error("Vault profile serial parity is invalid.");
 }
 
+function parseSshPortForward(value: unknown): ServerProfileInput["portForward"] {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) throw new Error("Vault profile SSH port forwarding is invalid.");
+  const localPort = Number(value.localPort);
+  const remotePort = Number(value.remotePort);
+  const remoteHost = requireString(value.remoteHost, "profile.portForward.remoteHost");
+  if (!Number.isInteger(localPort) || localPort < 1 || localPort > 65_535 ||
+      !Number.isInteger(remotePort) || remotePort < 1 || remotePort > 65_535 ||
+      remoteHost.length > 253) {
+    throw new Error("Vault profile SSH port forwarding is invalid.");
+  }
+  return { localPort, remoteHost, remotePort };
+}
+
 function parseProfile(value: unknown): DecryptedServerProfile {
   if (!isRecord(value)) {
     throw new Error("Vault profile is invalid.");
@@ -225,7 +240,7 @@ function parseProfile(value: unknown): DecryptedServerProfile {
 
   const protocol = parseConnectionProtocol(value.protocol);
   const port = Number(value.port);
-  if (!Number.isInteger(port) || port < (protocol === "serial" ? 0 : 1) || port > 65_535) {
+  if (!Number.isInteger(port) || port < (protocol === "serial" || protocol === "local" ? 0 : 1) || port > 65_535) {
     throw new Error("Vault profile port is invalid.");
   }
 
@@ -270,6 +285,7 @@ function parseProfile(value: unknown): DecryptedServerProfile {
       value.enableLegacySshAlgorithms === undefined
         ? undefined
         : value.enableLegacySshAlgorithms === true,
+    portForward: parseSshPortForward(value.portForward),
     jumpHost: optionalString(value.jumpHost, "profile.jumpHost"),
     proxyOverride: optionalString(value.proxyOverride, "profile.proxyOverride"),
     icon: value.icon === undefined ? undefined : parseDeviceIcon(value.icon, "profile.icon"),
@@ -307,6 +323,9 @@ function parseProfile(value: unknown): DecryptedServerProfile {
     profile.dataBits = dataBits;
     profile.stopBits = stopBits;
     profile.parity = parseSerialParity(value.parity) ?? "none";
+  }
+  if (protocol === "local") {
+    profile.localShell = value.localShell === "cmd" || value.localShell === "wsl" ? value.localShell : "powershell";
   }
 
   if (authType === "password") {
@@ -736,6 +755,8 @@ function summarizeProfile(profile: DecryptedServerProfile): ServerProfileSummary
     dataBits: profile.dataBits,
     stopBits: profile.stopBits,
     parity: profile.parity,
+    localShell: profile.localShell,
+    portForward: profile.portForward ? { ...profile.portForward } : undefined,
     tags: [...(profile.tags ?? [])],
     favorite: profile.favorite ?? false,
     inheritFolderDefaults: profile.inheritFolderDefaults !== false,
@@ -1021,6 +1042,8 @@ export class VaultController {
       dataBits: profile.dataBits,
       stopBits: profile.stopBits,
       parity: profile.parity,
+      localShell: profile.localShell,
+      portForward: profile.portForward ? { ...profile.portForward } : undefined,
       tags: [...(profile.tags ?? [])],
       favorite: profile.favorite ?? false,
       inheritFolderDefaults: profile.inheritFolderDefaults !== false,
@@ -1618,7 +1641,7 @@ export class VaultController {
         resolved.privateKeyPath = inherited.privateKeyPath;
         resolved.passphrase = inherited.passphrase;
       }
-      if (inherited.port && resolved.protocol !== "serial") resolved.port = inherited.port;
+      if (inherited.port && resolved.protocol !== "serial" && resolved.protocol !== "local") resolved.port = inherited.port;
       resolved.readyTimeoutSeconds ??= inherited.readyTimeoutSeconds;
       resolved.keepaliveSeconds ??= inherited.keepaliveSeconds;
       resolved.keepAliveEnabled ??= inherited.keepAliveEnabled;

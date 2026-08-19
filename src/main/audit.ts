@@ -1,7 +1,7 @@
 import { appendFile, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-export type AuditedTerminalProtocol = "ssh" | "serial" | "telnet" | "raw";
+export type AuditedTerminalProtocol = "ssh" | "serial" | "telnet" | "raw" | "local";
 
 export interface AuditSessionContext {
   protocol: AuditedTerminalProtocol;

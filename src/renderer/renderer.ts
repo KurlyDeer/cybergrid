@@ -1,5 +1,6 @@
 import { Terminal, type ITheme } from "xterm";
 import { FitAddon } from "xterm-addon-fit";
+import { WebglAddon } from "xterm-addon-webgl";
 import { parseConnectionTarget } from "../shared/connection";
 
 type XtermTerminal = Terminal;
@@ -34,6 +35,10 @@ type HealthStatusEvent = import("../shared/ipc").HealthStatusEvent;
 type MigrationFormat = import("../shared/ipc").MigrationFormat;
 type InventorySyncSourceInput = import("../shared/ipc").InventorySyncSourceInput;
 type InventorySyncSourceSummary = import("../shared/ipc").InventorySyncSourceSummary;
+type LocalShell = import("../shared/ipc").LocalShell;
+type LocalTerminalConfig = import("../shared/ipc").LocalTerminalConfig;
+type LocalTerminalDataEvent = import("../shared/ipc").LocalTerminalDataEvent;
+type LocalTerminalStatusEvent = import("../shared/ipc").LocalTerminalStatusEvent;
 type ProfileConnectionCredentials = import("../shared/ipc").ProfileConnectionCredentials;
 type ProfileConnectionResult = import("../shared/ipc").ProfileConnectionResult;
 type RdpConnectionConfig = import("../shared/ipc").RdpConnectionConfig;
@@ -100,6 +105,7 @@ interface WorkspaceTab {
   rdpSessionId?: string;
   streamSessionId?: string;
   serialSessionId?: string;
+  localSessionId?: string;
   vncSessionId?: string;
   webSessionId?: string;
   vncClient?: NoVncRfbInstance;
@@ -152,6 +158,7 @@ const sshSessions = new Map<string, WorkspaceTab>();
 const rdpSessions = new Map<string, WorkspaceTab>();
 const streamSessions = new Map<string, WorkspaceTab>();
 const serialSessions = new Map<string, WorkspaceTab>();
+const localSessions = new Map<string, WorkspaceTab>();
 const vncSessions = new Map<string, WorkspaceTab>();
 const webSessions = new Map<string, WorkspaceTab>();
 const queuedSshData = new Map<string, string[]>();
@@ -161,6 +168,8 @@ const queuedStreamData = new Map<string, string[]>();
 const queuedStreamStatus = new Map<string, StreamStatusEvent>();
 const queuedSerialData = new Map<string, string[]>();
 const queuedSerialStatus = new Map<string, SerialStatusEvent>();
+const queuedLocalData = new Map<string, string[]>();
+const queuedLocalStatus = new Map<string, LocalTerminalStatusEvent>();
 const queuedVncStatus = new Map<string, VncStatusEvent>();
 const queuedWebStatus = new Map<string, WebStatusEvent>();
 const healthStatuses = new Map<string, HealthStatusEvent>();
@@ -305,6 +314,8 @@ const serverSerialPortField = elementById<HTMLDivElement>("server-serial-port-fi
 const serverSerialPortInput = elementById<HTMLSelectElement>("server-serial-port");
 const refreshSerialPortsButton = elementById<HTMLButtonElement>("refresh-serial-ports");
 const serverSerialPortStatus = elementById<HTMLSpanElement>("server-serial-port-status");
+const serverLocalShellField = elementById<HTMLDivElement>("server-local-shell-field");
+const serverLocalShellInput = elementById<HTMLSelectElement>("server-local-shell");
 const serverPortInput = elementById<HTMLInputElement>("server-port");
 const serverCredentialProfileField = elementById<HTMLDivElement>("server-credential-profile-field");
 const serverCredentialProfileInput = elementById<HTMLSelectElement>("server-credential-profile");
@@ -321,6 +332,10 @@ const serverPersistInput = elementById<HTMLInputElement>("server-persist");
 const serverAutoReconnectInput = elementById<HTMLInputElement>("server-auto-reconnect");
 const serverLegacySshField = elementById<HTMLDivElement>("server-legacy-ssh-field");
 const serverLegacySshInput = elementById<HTMLInputElement>("server-legacy-ssh");
+const serverPortForwardingSection = elementById<HTMLDivElement>("server-port-forwarding-section");
+const serverForwardLocalPortInput = elementById<HTMLInputElement>("server-forward-local-port");
+const serverForwardRemoteHostInput = elementById<HTMLInputElement>("server-forward-remote-host");
+const serverForwardRemotePortInput = elementById<HTMLInputElement>("server-forward-remote-port");
 const serverJumpHostInput = elementById<HTMLInputElement>("server-jump-host");
 const serverProxyOverrideInput = elementById<HTMLInputElement>("server-proxy-override");
 const serverIconInput = elementById<HTMLSelectElement>("server-icon");
@@ -956,7 +971,7 @@ function openShortcuts(): void {
 
 const PROTOCOL_LABELS: Record<WorkspaceTabKind, string> = {
   ssh: "SSH", rdp: "RDP", telnet: "TEL", raw: "RAW", vnc: "VNC",
-  http: "WEB", https: "WEB", serial: "COM", welcome: "CG",
+  http: "WEB", https: "WEB", serial: "COM", local: "LOC", welcome: "CG",
 };
 
 function currentWorkspaceSnapshot(): WorkspaceSnapshot {
@@ -1055,6 +1070,7 @@ function createWorkspaceTab(
   tabElement.className = "tab";
   tabElement.type = "button";
   tabElement.role = "tab";
+  tabElement.draggable = kind !== "welcome";
   tabElement.setAttribute("aria-selected", "false");
   const statusElement = createTextElement("span", "tab-status", "") as HTMLSpanElement;
   statusElement.setAttribute("aria-hidden", "true");
@@ -1090,13 +1106,78 @@ function createWorkspaceTab(
     else activateTab(id);
   });
   tabElement.addEventListener("contextmenu", (event) => openTabContextMenu(event, tab));
+  tabElement.addEventListener("dragstart", (event) => {
+    if (!detachedSessionReference(tab) || !event.dataTransfer) {
+      event.preventDefault();
+      return;
+    }
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("application/x-cybergrid-session", tab.id);
+    tabElement.classList.add("dragging");
+  });
+  tabElement.addEventListener("dragend", (event) => {
+    tabElement.classList.remove("dragging");
+    if (event.screenX === 0 && event.screenY === 0) return;
+    void detachWorkspaceTab(tab, event.screenX, event.screenY);
+  });
   activateTab(id);
   return tab;
 }
 
+function detachedSessionReference(tab: WorkspaceTab): { protocol: import("../shared/ipc").DetachableProtocol; sessionId: string } | undefined {
+  if (tab.kind === "ssh" && tab.sessionId) return { protocol: "ssh", sessionId: tab.sessionId };
+  if (tab.kind === "rdp" && tab.rdpSessionId) return { protocol: "rdp", sessionId: tab.rdpSessionId };
+  if ((tab.kind === "telnet" || tab.kind === "raw") && tab.streamSessionId) return { protocol: tab.kind, sessionId: tab.streamSessionId };
+  if (tab.kind === "serial" && tab.serialSessionId) return { protocol: "serial", sessionId: tab.serialSessionId };
+  if (tab.kind === "local" && tab.localSessionId) return { protocol: "local", sessionId: tab.localSessionId };
+  return undefined;
+}
+
+async function detachWorkspaceTab(tab: WorkspaceTab, screenX: number, screenY: number): Promise<void> {
+  const session = detachedSessionReference(tab);
+  if (!session || !tabs.has(tab.id)) return;
+  try {
+    const detached = await window.cybergrid.system.detachSession({
+      ...session,
+      label: tab.label,
+      context: tab.context,
+      screenX,
+      screenY,
+    });
+    if (detached) removeDetachedTabView(tab);
+  } catch (error) {
+    connectionState.textContent = `Could not detach tab: ${errorMessage(error)}`;
+  }
+}
+
+function removeDetachedTabView(tab: WorkspaceTab): void {
+  const order = [...tabs.keys()];
+  const index = order.indexOf(tab.id);
+  tabs.delete(tab.id);
+  recentTerminalTabIds = recentTerminalTabIds.filter((id) => id !== tab.id);
+  if (tab.sessionId) sshSessions.delete(tab.sessionId);
+  if (tab.rdpSessionId) rdpSessions.delete(tab.rdpSessionId);
+  if (tab.streamSessionId) streamSessions.delete(tab.streamSessionId);
+  if (tab.serialSessionId) serialSessions.delete(tab.serialSessionId);
+  if (tab.localSessionId) localSessions.delete(tab.localSessionId);
+  tab.terminal?.dispose();
+  tab.tabElement.remove();
+  tab.paneElement.remove();
+  if (activeTabId === tab.id) {
+    const ids = [...tabs.keys()];
+    const next = ids[Math.min(index, ids.length - 1)];
+    activeTabId = null;
+    if (next) activateTab(next);
+  }
+  connectionState.textContent = `${tab.label} moved to a detached window`;
+  updateBroadcastControls();
+  renderWorkspaceLayout();
+  scheduleWorkspaceSave();
+}
+
 function createTerminalTab(
   label: string,
-  kind: "ssh" | "telnet" | "raw" | "serial" | "welcome" = "ssh",
+  kind: "ssh" | "telnet" | "raw" | "serial" | "local" | "welcome" = "ssh",
   context?: Partial<SessionVariableContext>,
   appearance?: TerminalAppearanceOverrides,
 ): WorkspaceTab {
@@ -1117,6 +1198,13 @@ function createTerminalTab(
   const fitAddon = new FitAddon();
   terminal.loadAddon(fitAddon);
   terminal.open(tab.paneElement);
+  try {
+    const webglAddon = new WebglAddon();
+    terminal.loadAddon(webglAddon);
+    webglAddon.onContextLoss(() => webglAddon.dispose());
+  } catch {
+    // Canvas rendering remains available when WebGL is unsupported or blocked.
+  }
   tab.terminal = terminal;
   tab.fitAddon = fitAddon;
   terminal.onData((data) => {
@@ -1132,6 +1220,7 @@ function createTerminalTab(
   });
   terminal.onResize(({ cols, rows }) => {
     if (tab.kind === "ssh" && tab.sessionId) window.cybergrid.ssh.resize(tab.sessionId, cols, rows);
+    if (tab.kind === "local" && tab.localSessionId) window.cybergrid.local.resize(tab.localSessionId, cols, rows);
   });
   layoutMode = requestedLayout;
   rememberTerminalTab(tab);
@@ -1220,6 +1309,8 @@ function writeTerminalInput(tab: WorkspaceTab, data: string): void {
     window.cybergrid.stream.write(tab.streamSessionId, data);
   } else if (tab.kind === "serial" && tab.serialSessionId) {
     window.cybergrid.serial.write(tab.serialSessionId, data);
+  } else if (tab.kind === "local" && tab.localSessionId) {
+    window.cybergrid.local.write(tab.localSessionId, data);
   }
 }
 
@@ -1232,7 +1323,7 @@ function scheduleTrayStateSync(): void {
     const inactive = new Set<WorkspaceStatus>(["idle", "disconnected", "closed", "error"]);
     const sessions = [...tabs.values()]
       .filter((tab) => tab.kind !== "welcome" && !inactive.has(tab.status) && Boolean(
-        tab.sessionId || tab.rdpSessionId || tab.streamSessionId || tab.serialSessionId ||
+        tab.sessionId || tab.rdpSessionId || tab.streamSessionId || tab.serialSessionId || tab.localSessionId ||
         tab.vncSessionId || tab.webSessionId,
       ))
       .map((tab) => ({
@@ -1423,6 +1514,12 @@ async function closeTab(id: string): Promise<void> {
     queuedSerialData.delete(tab.serialSessionId);
     queuedSerialStatus.delete(tab.serialSessionId);
   }
+  if (tab.localSessionId) {
+    localSessions.delete(tab.localSessionId);
+    await window.cybergrid.local.disconnect(tab.localSessionId).catch(() => undefined);
+    queuedLocalData.delete(tab.localSessionId);
+    queuedLocalStatus.delete(tab.localSessionId);
+  }
   if (tab.vncSessionId) {
     vncSessions.delete(tab.vncSessionId);
     tab.vncClient?.disconnect();
@@ -1611,6 +1708,17 @@ function attachSerialSession(tab: WorkspaceTab, sessionId: string): void {
   updateBroadcastControls();
 }
 
+function attachLocalSession(tab: WorkspaceTab, sessionId: string): void {
+  tab.localSessionId = sessionId;
+  localSessions.set(sessionId, tab);
+  replayBufferedData(tab, sessionId, queuedLocalData);
+  const status = queuedLocalStatus.get(sessionId);
+  if (status) updateTabStatus(tab, status.status, status.message);
+  queuedLocalStatus.delete(sessionId);
+  tab.fitAddon?.fit();
+  if (tab.terminal) window.cybergrid.local.resize(sessionId, tab.terminal.cols, tab.terminal.rows);
+}
+
 let noVncLoadPromise: Promise<void> | undefined;
 
 function loadNoVnc(): Promise<void> {
@@ -1686,6 +1794,7 @@ function queueData(event: { sessionId: string; data: string }, sessions: Map<str
 function handleSshData(event: SshDataEvent): void { queueData(event, sshSessions, queuedSshData); }
 function handleStreamData(event: StreamDataEvent): void { queueData(event, streamSessions, queuedStreamData); }
 function handleSerialData(event: SerialDataEvent): void { queueData(event, serialSessions, queuedSerialData); }
+function handleLocalData(event: LocalTerminalDataEvent): void { queueData(event, localSessions, queuedLocalData); }
 
 function handleSshStatus(event: SshStatusEvent): void {
   const tab = sshSessions.get(event.sessionId);
@@ -1702,6 +1811,10 @@ function handleStreamStatus(event: StreamStatusEvent): void {
 function handleSerialStatus(event: SerialStatusEvent): void {
   const tab = serialSessions.get(event.sessionId);
   if (tab) updateTabStatus(tab, event.status, event.message); else queuedSerialStatus.set(event.sessionId, event);
+}
+function handleLocalStatus(event: LocalTerminalStatusEvent): void {
+  const tab = localSessions.get(event.sessionId);
+  if (tab) updateTabStatus(tab, event.status, event.message); else queuedLocalStatus.set(event.sessionId, event);
 }
 function handleVncStatus(event: VncStatusEvent): void {
   const tab = vncSessions.get(event.sessionId);
@@ -1767,6 +1880,7 @@ async function attachProfileResult(tab: WorkspaceTab, result: ProfileConnectionR
   else if (result.protocol === "rdp") attachRdpSession(tab, result.sessionId);
   else if (result.protocol === "telnet" || result.protocol === "raw") attachStreamSession(tab, result.sessionId);
   else if (result.protocol === "serial") attachSerialSession(tab, result.sessionId);
+  else if (result.protocol === "local") attachLocalSession(tab, result.sessionId);
   else if (result.protocol === "vnc") await attachVncSession(tab, result);
   else attachWebSession(tab, result.sessionId);
 }
@@ -1836,6 +1950,21 @@ async function connectQuickSerial(config: SerialConnectionConfig): Promise<void>
   catch (error) { handleConnectionFailure(tab, error); }
 }
 
+async function connectQuickLocal(config: LocalTerminalConfig): Promise<void> {
+  const tab = createTerminalTab(config.shell, "local", {
+    host: config.shell, ip: "127.0.0.1", group: "Local",
+  });
+  tab.duplicate = () => connectQuickLocal({ ...config });
+  setTabConnecting(tab, `starting local ${config.shell} shell...`);
+  try {
+    attachLocalSession(tab, await window.cybergrid.local.connect({
+      ...config,
+      cols: tab.terminal?.cols,
+      rows: tab.terminal?.rows,
+    }));
+  } catch (error) { handleConnectionFailure(tab, error); }
+}
+
 async function connectQuickVnc(config: VncConnectionConfig): Promise<void> {
   const tab = createVncTab(config.host);
   tab.context = tabContext(config.host, { host: config.host, ip: config.host, port: config.port });
@@ -1871,6 +2000,7 @@ type QuickConnection =
   | { protocol: "rdp"; config: RdpConnectionConfig }
   | { protocol: "telnet" | "raw"; config: StreamConnectionConfig }
   | { protocol: "serial"; config: SerialConnectionConfig }
+  | { protocol: "local"; config: LocalTerminalConfig }
   | { protocol: "vnc"; config: VncConnectionConfig }
   | { protocol: "http" | "https"; url: string };
 
@@ -1878,9 +2008,9 @@ function parseQuickConnect(value: string): QuickConnection {
   const raw = value.trim();
   let url: URL;
   try { url = new URL(raw); }
-  catch { throw new Error("Use protocol://user@host:port, serial://COM3?baud=9600, or an HTTP(S) URL."); }
+  catch { throw new Error("Use protocol://user@host:port, serial://COM3?baud=9600, local://powershell, or an HTTP(S) URL."); }
   const protocol = url.protocol.replace(":", "") as ConnectionProtocol;
-  if (!(["ssh", "rdp", "telnet", "raw", "vnc", "http", "https", "serial"] as string[]).includes(protocol)) {
+  if (!(["ssh", "rdp", "telnet", "raw", "vnc", "http", "https", "serial", "local"] as string[]).includes(protocol)) {
     throw new Error("Unsupported Quick Connect protocol.");
   }
   if (protocol === "http" || protocol === "https") return { protocol, url: url.toString() };
@@ -1895,6 +2025,13 @@ function parseQuickConnect(value: string): QuickConnection {
       stopBits: Number(url.searchParams.get("stopBits") ?? 1) as 1 | 2,
       parity: (url.searchParams.get("parity") ?? "none") as SerialConnectionConfig["parity"],
     } };
+  }
+  if (protocol === "local") {
+    const shell = (url.hostname || "powershell").toLowerCase();
+    if (shell !== "powershell" && shell !== "cmd" && shell !== "wsl") {
+      throw new Error("Local Quick Connect supports powershell, cmd, or wsl.");
+    }
+    return { protocol, config: { shell } };
   }
   const host = url.hostname.replace(/^\[|\]$/g, "");
   if (!host) throw new Error("Quick Connect requires a host.");
@@ -2560,6 +2697,8 @@ function handleDiscoveryComplete(event: DiscoveryCompleteEvent): void {
 function populateQuickConnect(profile: ServerProfileSummary): void {
   if (profile.protocol === "serial") {
     quickConnectInput.value = `serial://${profile.host}?baud=${profile.baudRate ?? 9_600}`;
+  } else if (profile.protocol === "local") {
+    quickConnectInput.value = `local://${profile.localShell ?? profile.host}`;
   } else if (profile.protocol === "http" || profile.protocol === "https") {
     quickConnectInput.value = `${profile.protocol}://${profile.host}:${profile.port}`;
   } else {
@@ -2797,14 +2936,14 @@ function openServerContextMenu(event: MouseEvent, profile: ServerProfileSummary)
   const separator = document.createElement("div");
   separator.className = "context-separator";
   serverContextMenu.append(separator);
-  const serial = profile.protocol === "serial";
-  addAction("Ping (Continuous)", () => void launchProfileExternalDiagnostic(profile, "continuous-ping"), serial);
-  addAction("Traceroute", () => void launchProfileExternalDiagnostic(profile, "traceroute"), serial);
-  addAction("Launch Wireshark (Capture IP)", () => void launchProfileExternalDiagnostic(profile, "wireshark"), serial);
+  const nonNetwork = profile.protocol === "serial" || profile.protocol === "local";
+  addAction("Ping (Continuous)", () => void launchProfileExternalDiagnostic(profile, "continuous-ping"), nonNetwork);
+  addAction("Traceroute", () => void launchProfileExternalDiagnostic(profile, "traceroute"), nonNetwork);
+  addAction("Launch Wireshark (Capture IP)", () => void launchProfileExternalDiagnostic(profile, "wireshark"), nonNetwork);
   appendContextSeparator();
-  addAction("Ping test (single)", () => void executeProfileDiagnostic(profile, "ping"), serial);
-  addAction("DNS lookup", () => void executeProfileDiagnostic(profile, "dns"), serial);
-  addAction(`Port check (${profile.port})`, () => void executeProfileDiagnostic(profile, "port"), serial);
+  addAction("Ping test (single)", () => void executeProfileDiagnostic(profile, "ping"), nonNetwork);
+  addAction("DNS lookup", () => void executeProfileDiagnostic(profile, "dns"), nonNetwork);
+  addAction(`Port check (${profile.port})`, () => void executeProfileDiagnostic(profile, "port"), nonNetwork);
   positionContextMenu(event.clientX, event.clientY, Math.min(620, 360 + externalTools.length * 34));
 }
 
@@ -3215,6 +3354,7 @@ function activeSnippetTab(): WorkspaceTab | undefined {
   if (tab.kind === "ssh" && tab.sessionId) return tab;
   if ((tab.kind === "telnet" || tab.kind === "raw") && tab.streamSessionId) return tab;
   if (tab.kind === "serial" && tab.serialSessionId) return tab;
+  if (tab.kind === "local" && tab.localSessionId) return tab;
   return undefined;
 }
 
@@ -3225,7 +3365,7 @@ function executeSnippet(snippet: SnippetRecord): void {
   if (targets.length === 0) {
     snippetStatus.textContent = broadcastMode
       ? "No selected broadcast targets are connected."
-      : "Select a connected SSH, Telnet, RAW, or serial tab first.";
+      : "Select a connected SSH, Telnet, RAW, serial, or local terminal tab first.";
     return;
   }
   try {
@@ -3584,7 +3724,7 @@ async function initializeVault(): Promise<void> {
   }
 }
 
-const DEFAULT_PROTOCOL_PORTS: Record<Exclude<ConnectionProtocol, "serial">, number> = {
+const DEFAULT_PROTOCOL_PORTS: Record<Exclude<ConnectionProtocol, "serial" | "local">, number> = {
   ssh: 22,
   rdp: 3389,
   telnet: 23,
@@ -3595,7 +3735,7 @@ const DEFAULT_PROTOCOL_PORTS: Record<Exclude<ConnectionProtocol, "serial">, numb
 };
 
 const CATEGORY_PROTOCOLS: Record<ConnectionCategory, ConnectionProtocol[]> = {
-  server: ["rdp", "ssh", "vnc"],
+  server: ["rdp", "ssh", "vnc", "local"],
   network: ["ssh", "telnet", "raw", "serial"],
   web: ["https", "http"],
   desktop: ["vnc", "rdp"],
@@ -3657,7 +3797,7 @@ async function refreshSerialPortOptions(preferredPath = ""): Promise<void> {
 }
 
 function applySmartEndpointFields(): void {
-  if (serverProtocolInput.value === "serial" || !serverHostInput.value.trim()) return;
+  if (serverProtocolInput.value === "serial" || serverProtocolInput.value === "local" || !serverHostInput.value.trim()) return;
   const target = parseConnectionTarget(serverHostInput.value);
   serverHostInput.value = target.host;
   if (target.port !== undefined) serverPortInput.value = String(target.port);
@@ -3686,6 +3826,7 @@ function selectConnectionCategory(category: ConnectionCategory, resetProtocol = 
 function updateProfileFields(resetDefaults = false): void {
   const protocol = serverProtocolInput.value as ConnectionProtocol;
   const serial = protocol === "serial";
+  const local = protocol === "local";
   const webProtocol = protocol === "http" || protocol === "https";
   const usesUsername = protocol === "ssh" || protocol === "rdp" || webProtocol;
   const usesAuthentication = protocol === "ssh" || protocol === "rdp" || protocol === "vnc" || webProtocol;
@@ -3696,15 +3837,18 @@ function updateProfileFields(resetDefaults = false): void {
 
   serverHostLabel.textContent = "IP / Hostname";
   serverHostInput.placeholder = "admin@server.example.net:22";
-  serverHostField.hidden = serial;
-  serverHostInput.disabled = serial;
-  serverHostInput.required = !serial;
+  serverHostField.hidden = serial || local;
+  serverHostInput.disabled = serial || local;
+  serverHostInput.required = !serial && !local;
   serverSerialPortField.hidden = !serial;
   serverSerialPortInput.disabled = !serial;
   serverSerialPortInput.required = serial;
-  serverPortInput.closest<HTMLElement>(".field")?.toggleAttribute("hidden", serial);
-  serverPortInput.disabled = serial;
-  serverPortInput.required = !serial;
+  serverLocalShellField.hidden = !local;
+  serverLocalShellInput.disabled = !local;
+  serverLocalShellInput.required = local;
+  serverPortInput.closest<HTMLElement>(".field")?.toggleAttribute("hidden", serial || local);
+  serverPortInput.disabled = serial || local;
+  serverPortInput.required = !serial && !local;
   serverSerialSection.hidden = !serial;
   serverBaudRateInput.required = serial;
   serverCredentialProfileField.hidden = !usesAuthentication;
@@ -3715,7 +3859,7 @@ function updateProfileFields(resetDefaults = false): void {
   privateKeyOption?.toggleAttribute("disabled", protocol !== "ssh");
 
   if (resetDefaults) {
-    if (!serial) serverPortInput.value = String(DEFAULT_PROTOCOL_PORTS[protocol]);
+    if (!serial && !local) serverPortInput.value = String(DEFAULT_PROTOCOL_PORTS[protocol]);
     authTypeInput.value = usesAuthentication && !serverInheritFolderInput.checked ? "password" : "none";
   } else if (protocol !== "ssh" && authTypeInput.value === "privateKey") {
     authTypeInput.value = usesAuthentication ? "password" : "none";
@@ -3733,6 +3877,10 @@ function updateProfileFields(resetDefaults = false): void {
   serverKeepaliveInput.disabled = !serverKeepaliveEnabledInput.checked || protocol !== "ssh";
   serverLegacySshField.hidden = protocol !== "ssh";
   serverLegacySshInput.disabled = protocol !== "ssh";
+  serverPortForwardingSection.hidden = protocol !== "ssh";
+  for (const input of [serverForwardLocalPortInput, serverForwardRemoteHostInput, serverForwardRemotePortInput]) {
+    input.disabled = protocol !== "ssh";
+  }
   if (serial && serverSerialPortInput.options.length === 0) {
     void refreshSerialPortOptions(serverHostInput.value);
   }
@@ -3772,6 +3920,10 @@ function openServerModal(profile?: ServerProfileSummary): void {
     serverDataBitsInput.value = String(profile.dataBits ?? 8);
     serverStopBitsInput.value = String(profile.stopBits ?? 1);
     serverParityInput.value = profile.parity ?? "none";
+    serverLocalShellInput.value = profile.localShell ?? "powershell";
+    serverForwardLocalPortInput.value = profile.portForward ? String(profile.portForward.localPort) : "";
+    serverForwardRemoteHostInput.value = profile.portForward?.remoteHost ?? "";
+    serverForwardRemotePortInput.value = profile.portForward ? String(profile.portForward.remotePort) : "";
     serverTimeoutInput.value = profile.readyTimeoutSeconds ? String(profile.readyTimeoutSeconds) : "";
     serverKeepaliveInput.value = profile.keepaliveSeconds ? String(profile.keepaliveSeconds) : "";
     serverPersistInput.checked = profile.persistUntilAppCloses;
@@ -3796,6 +3948,10 @@ function openServerModal(profile?: ServerProfileSummary): void {
     serverPasswordInput.placeholder = "";
     serverPassphraseInput.placeholder = "";
     serverLegacySshInput.checked = connectionCategory === "network";
+    serverLocalShellInput.value = "powershell";
+    serverForwardLocalPortInput.value = "";
+    serverForwardRemoteHostInput.value = "";
+    serverForwardRemotePortInput.value = "";
   }
   updateProfileFields(false);
   if (profile?.protocol === "serial" && serverSerialPortInput.options.length > 0) {
@@ -3981,6 +4137,7 @@ quickConnectForm.addEventListener("submit", async (event) => {
     else if (parsed.protocol === "rdp") await connectQuickRdp(parsed.config);
     else if (parsed.protocol === "telnet" || parsed.protocol === "raw") await connectQuickStream(parsed.config);
     else if (parsed.protocol === "serial") await connectQuickSerial(parsed.config);
+    else if (parsed.protocol === "local") await connectQuickLocal(parsed.config);
     else if (parsed.protocol === "vnc") await connectQuickVnc(parsed.config);
     else if (parsed.protocol === "http" || parsed.protocol === "https") await connectQuickWeb(parsed.url);
   } catch (error) {
@@ -4610,6 +4767,10 @@ serverForm.addEventListener("submit", async (event) => {
       const path = serverSerialPortInput.value.trim();
       if (!path) throw new Error("Select an available COM or serial port.");
       connectionTarget = { host: path };
+    } else if (protocol === "local") {
+      const shell = serverLocalShellInput.value as LocalShell;
+      if (shell !== "powershell" && shell !== "cmd" && shell !== "wsl") throw new Error("Select a local shell.");
+      connectionTarget = { host: shell };
     } else {
       connectionTarget = parseConnectionTarget(serverHostInput.value);
       serverHostInput.value = connectionTarget.host;
@@ -4635,7 +4796,7 @@ serverForm.addEventListener("submit", async (event) => {
     protocol,
     name: serverNameInput.value.trim(),
     host: connectionTarget.host,
-    port: protocol === "serial" ? 0 : connectionTarget.port ?? Number(serverPortInput.value),
+    port: protocol === "serial" || protocol === "local" ? 0 : connectionTarget.port ?? Number(serverPortInput.value),
     username: connectionTarget.username ?? serverUsernameInput.value.trim(),
     group: serverGroupInput.value.trim() || "Ungrouped",
     authType,
@@ -4647,6 +4808,14 @@ serverForm.addEventListener("submit", async (event) => {
     dataBits: protocol === "serial" ? Number(serverDataBitsInput.value) as 5 | 6 | 7 | 8 : undefined,
     stopBits: protocol === "serial" ? Number(serverStopBitsInput.value) as 1 | 2 : undefined,
     parity: protocol === "serial" ? serverParityInput.value as ServerProfileInput["parity"] : undefined,
+    localShell: protocol === "local" ? serverLocalShellInput.value as LocalShell : undefined,
+    portForward: protocol === "ssh" && (
+      serverForwardLocalPortInput.value || serverForwardRemoteHostInput.value || serverForwardRemotePortInput.value
+    ) ? {
+        localPort: Number(serverForwardLocalPortInput.value),
+        remoteHost: serverForwardRemoteHostInput.value.trim(),
+        remotePort: Number(serverForwardRemotePortInput.value),
+      } : undefined,
     tags: [...new Set(serverTagsInput.value.split(",").map((tag) => tag.trim()).filter(Boolean))],
     favorite: serverFavoriteInput.checked,
     inheritFolderDefaults: serverInheritFolderInput.checked,
@@ -4842,6 +5011,8 @@ window.cybergrid.stream.onData(handleStreamData);
 window.cybergrid.stream.onStatus(handleStreamStatus);
 window.cybergrid.serial.onData(handleSerialData);
 window.cybergrid.serial.onStatus(handleSerialStatus);
+window.cybergrid.local.onData(handleLocalData);
+window.cybergrid.local.onStatus(handleLocalStatus);
 window.cybergrid.vnc.onStatus(handleVncStatus);
 window.cybergrid.web.onStatus(handleWebStatus);
 window.cybergrid.health.onStatus(handleHealthStatus);
@@ -4932,7 +5103,7 @@ async function initializeApplication(): Promise<void> {
   applySettings(currentSettings);
   const welcomeTab = createTerminalTab("Welcome", "welcome");
   welcomeTab.terminal?.writeln("\x1b[36mCyberGrid\x1b[0m");
-  welcomeTab.terminal?.writeln("SSH, SFTP, RDP, VNC, Telnet, RAW TCP, serial, and web management in one workspace.\r\n");
+  welcomeTab.terminal?.writeln("SSH, SFTP, RDP, VNC, Telnet, RAW TCP, serial, local shells, and web management in one workspace.\r\n");
   welcomeTab.terminal?.writeln("Press Ctrl+K to search saved servers. Use Grid 2x2 to tile up to four terminal sessions.");
   welcomeTab.terminal?.writeln("Right-click a saved server for ping, traceroute, DNS, port checks, and tray favorites.");
   updateSftpAvailability();

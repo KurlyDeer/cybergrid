@@ -776,6 +776,8 @@
         background: var(--panel-raised);
       }
 
+      .tab.dragging { opacity: 0.45; }
+
       .tab-label {
         overflow: hidden;
         flex: 1;
@@ -2346,7 +2348,7 @@
             required
             autocomplete="off"
             spellcheck="false"
-            placeholder="ssh://, telnet://, raw://, vnc://, serial://, or https://"
+            placeholder="ssh://, local://powershell, serial://, rdp://, or https://"
             aria-label="Quick Connect URL"
           />
           <input
@@ -2500,7 +2502,8 @@
           <div class="field"><label for="server-name">Connection name</label><input id="server-name" required maxlength="100" placeholder="ERP-PROD-01" autocomplete="off" /></div>
           <div class="field" id="server-host-field"><label for="server-host" id="server-host-label">IP / Hostname</label><input id="server-host" required maxlength="2048" placeholder="admin@server.example.net:22" autocomplete="off" /></div>
           <div class="field" id="server-serial-port-field" hidden><label for="server-serial-port">COM port</label><div class="serial-port-picker"><select id="server-serial-port"></select><button class="secondary-button" id="refresh-serial-ports" type="button">Refresh</button></div><span class="field-hint" id="server-serial-port-status">Local ports are detected on demand.</span></div>
-          <div class="field"><label for="server-protocol">Protocol</label><select id="server-protocol"><option value="ssh">SSH</option><option value="rdp">Windows RDP</option><option value="telnet">Telnet</option><option value="raw">RAW TCP</option><option value="vnc">VNC Desktop</option><option value="https">HTTPS Web</option><option value="http">HTTP Web</option><option value="serial">Serial / COM</option></select></div>
+          <div class="field" id="server-local-shell-field" hidden><label for="server-local-shell">Local shell</label><select id="server-local-shell"><option value="powershell">PowerShell</option><option value="cmd">Command Prompt</option><option value="wsl">WSL</option></select></div>
+          <div class="field"><label for="server-protocol">Protocol</label><select id="server-protocol"><option value="ssh">SSH</option><option value="rdp">Windows RDP</option><option value="telnet">Telnet</option><option value="raw">RAW TCP</option><option value="vnc">VNC Desktop</option><option value="https">HTTPS Web</option><option value="http">HTTP Web</option><option value="serial">Serial / COM</option><option value="local">Local Terminal</option></select></div>
           <div class="field" id="server-username-field"><label for="server-username">Username</label><input id="server-username" maxlength="256" autocomplete="username" /></div>
           <div class="auth-section" id="server-serial-section" hidden>
             <div class="field"><label for="server-baud-rate">Baud rate</label><select id="server-baud-rate"><option value="9600">9600</option><option value="19200">19200</option><option value="38400">38400</option><option value="115200">115200</option></select></div>
@@ -2527,6 +2530,13 @@
               <div class="field"><label for="server-timeout">Connection timeout (seconds)</label><input id="server-timeout" type="number" min="1" max="300" placeholder="Inherited / 15" /></div>
               <div class="field"><label for="server-jump-host">Jump host / bastion</label><input id="server-jump-host" maxlength="253" placeholder="bastion.example.net" /></div>
               <div class="field"><label for="server-proxy-override">Proxy override</label><input id="server-proxy-override" maxlength="2048" placeholder="socks5://proxy.example.net:1080" /></div>
+              <div class="auth-section full-width" id="server-port-forwarding-section">
+                <div class="subsection-label">SSH local port forwarding</div>
+                <div class="field"><label for="server-forward-local-port">Local port</label><input id="server-forward-local-port" type="number" min="1" max="65535" placeholder="8080" /></div>
+                <div class="field"><label for="server-forward-remote-host">Remote host</label><input id="server-forward-remote-host" maxlength="253" placeholder="127.0.0.1" /></div>
+                <div class="field"><label for="server-forward-remote-port">Remote port</label><input id="server-forward-remote-port" type="number" min="1" max="65535" placeholder="80" /></div>
+                <span class="field-hint full-width">Binds only to 127.0.0.1, then tunnels through this SSH session.</span>
+              </div>
               <div class="session-toggles">
                 <div class="checkbox-field compact-check"><input id="server-keepalive-enabled" type="checkbox" checked /><label class="checkbox-label" for="server-keepalive-enabled">SSH keep-alive</label></div>
                 <div class="checkbox-field compact-check"><input id="server-persist" type="checkbox" /><label class="checkbox-label" for="server-persist">Keep until app closes</label></div>

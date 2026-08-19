@@ -80,6 +80,12 @@ export const IPC_CHANNELS = {
   serialWrite: "cybergrid:serial:write",
   serialData: "cybergrid:serial:data",
   serialStatus: "cybergrid:serial:status",
+  localConnect: "cybergrid:local:connect",
+  localDisconnect: "cybergrid:local:disconnect",
+  localWrite: "cybergrid:local:write",
+  localResize: "cybergrid:local:resize",
+  localData: "cybergrid:local:data",
+  localStatus: "cybergrid:local:status",
   vncConnect: "cybergrid:vnc:connect",
   vncDisconnect: "cybergrid:vnc:disconnect",
   vncStatus: "cybergrid:vnc:status",
@@ -107,7 +113,15 @@ export const IPC_CHANNELS = {
   appUpdateInstall: "cybergrid:update:install",
   trayStateUpdate: "cybergrid:tray:state-update",
   appMenuCommand: "cybergrid:app:menu-command",
+  sessionDetach: "cybergrid:session:detach",
+  sessionDetached: "cybergrid:session:detached",
 } as const;
+
+export interface SshPortForwardConfig {
+  localPort: number;
+  remoteHost: string;
+  remotePort: number;
+}
 
 export interface SshConnectionConfig {
   host: string;
@@ -120,6 +134,7 @@ export interface SshConnectionConfig {
   keepaliveInterval?: number;
   totpCode?: string;
   enableLegacyAlgorithms?: boolean;
+  portForward?: SshPortForwardConfig;
 }
 
 export interface SwitchBackupResult {
@@ -210,7 +225,8 @@ export type ConnectionProtocol =
   | "vnc"
   | "http"
   | "https"
-  | "serial";
+  | "serial"
+  | "local";
 
 export type ServerAuthType = "none" | "password" | "privateKey";
 export type CredentialProfileAuthType = Exclude<ServerAuthType, "none">;
@@ -283,6 +299,8 @@ export interface ServerProfileInput {
   dataBits?: 5 | 6 | 7 | 8;
   stopBits?: 1 | 2;
   parity?: SerialParity;
+  localShell?: LocalShell;
+  portForward?: SshPortForwardConfig;
   tags?: string[];
   favorite?: boolean;
   inheritFolderDefaults?: boolean;
@@ -328,6 +346,8 @@ export interface ServerProfileSummary {
   dataBits?: 5 | 6 | 7 | 8;
   stopBits?: 1 | 2;
   parity?: SerialParity;
+  localShell?: LocalShell;
+  portForward?: SshPortForwardConfig;
   tags: string[];
   favorite: boolean;
   inheritFolderDefaults: boolean;
@@ -384,6 +404,25 @@ export interface SerialPortInfo {
   serialNumber?: string;
   vendorId?: string;
   productId?: string;
+}
+
+export type LocalShell = "powershell" | "cmd" | "wsl";
+
+export interface LocalTerminalConfig {
+  shell: LocalShell;
+  cols?: number;
+  rows?: number;
+}
+
+export interface LocalTerminalDataEvent {
+  sessionId: string;
+  data: string;
+}
+
+export interface LocalTerminalStatusEvent {
+  sessionId: string;
+  status: "launching" | "connected" | "disconnected" | "error";
+  message?: string;
 }
 
 export interface SerialDataEvent {
@@ -619,6 +658,7 @@ export type ProfileConnectionResult = { context: SessionVariableContext; policy:
   | { protocol: "rdp"; sessionId: string }
   | { protocol: "telnet" | "raw"; sessionId: string }
   | { protocol: "serial"; sessionId: string }
+  | { protocol: "local"; sessionId: string }
   | ({ protocol: "vnc" } & VncConnectionResult)
   | { protocol: "http" | "https"; sessionId: string }
 );
@@ -834,6 +874,19 @@ export interface TrayStateSnapshot {
   broadcastMode: boolean;
 }
 
+export type DetachableProtocol = "ssh" | "rdp" | "telnet" | "raw" | "serial" | "local";
+
+export interface DetachSessionRequest {
+  protocol: DetachableProtocol;
+  sessionId: string;
+  label: string;
+  context: SessionVariableContext;
+  screenX: number;
+  screenY: number;
+}
+
+export interface DetachedSessionDescriptor extends Omit<DetachSessionRequest, "screenX" | "screenY"> {}
+
 export type DiagnosticKind = "ping" | "traceroute" | "dns" | "port";
 export type ExternalDiagnosticKind = "continuous-ping" | "traceroute" | "wireshark";
 
@@ -897,6 +950,14 @@ export interface CyberGridApi {
     write(sessionId: string, data: string): void;
     onData(listener: (event: SerialDataEvent) => void): Unsubscribe;
     onStatus(listener: (event: SerialStatusEvent) => void): Unsubscribe;
+  };
+  local: {
+    connect(config: LocalTerminalConfig): Promise<string>;
+    disconnect(sessionId: string): Promise<void>;
+    write(sessionId: string, data: string): void;
+    resize(sessionId: string, cols: number, rows: number): void;
+    onData(listener: (event: LocalTerminalDataEvent) => void): Unsubscribe;
+    onStatus(listener: (event: LocalTerminalStatusEvent) => void): Unsubscribe;
   };
   vnc: {
     connect(config: VncConnectionConfig): Promise<VncConnectionResult>;
@@ -996,5 +1057,7 @@ export interface CyberGridApi {
     onUpdateDownloaded(listener: (event: AppUpdateEvent) => void): Unsubscribe;
     onUpdateStatus(listener: (event: AppUpdateStatusEvent) => void): Unsubscribe;
     onMenuCommand(listener: (command: AppMenuCommand) => void): Unsubscribe;
+    detachSession(request: DetachSessionRequest): Promise<boolean>;
+    onDetachedSession(listener: (descriptor: DetachedSessionDescriptor) => void): Unsubscribe;
   };
 }

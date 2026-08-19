@@ -44,7 +44,7 @@ function text(value: unknown): string {
 }
 
 function defaultPort(protocol: ConnectionProtocol): number {
-  return { ssh: 22, rdp: 3389, telnet: 23, raw: 23, vnc: 5900, http: 80, https: 443, serial: 0 }[
+  return { ssh: 22, rdp: 3389, telnet: 23, raw: 23, vnc: 5900, http: 80, https: 443, serial: 0, local: 0 }[
     protocol
   ];
 }
@@ -251,11 +251,11 @@ function xmlEscape(value: string): string {
 function exportMRemoteNg(profiles: ServerProfileInput[]): ExportPayload {
   const protocolNames: Record<ConnectionProtocol, string> = {
     ssh: "SSH2", rdp: "RDP", telnet: "Telnet", raw: "RAW", vnc: "VNC",
-    http: "HTTP", https: "HTTPS", serial: "RAW",
+    http: "HTTP", https: "HTTPS", serial: "RAW", local: "RAW",
   };
   interface GroupNode { groups: Map<string, GroupNode>; profiles: ServerProfileInput[] }
   const root: GroupNode = { groups: new Map(), profiles: [] };
-  const supported = profiles.filter((profile) => profile.protocol !== "serial");
+  const supported = profiles.filter((profile) => profile.protocol !== "serial" && profile.protocol !== "local");
   for (const profile of supported) {
     const segments = profile.group.split(/\s*\/\s*/).map((segment) => segment.trim()).filter(Boolean);
     let group = root;

@@ -20,6 +20,9 @@ import type {
   DiagnosticKind,
   MigrationRequest,
   InventorySyncSourceInput,
+  LocalTerminalConfig,
+  LocalTerminalDataEvent,
+  LocalTerminalStatusEvent,
   ProfileConnectionCredentials,
   RdpBounds,
   RdpStatusEvent,
@@ -130,6 +133,12 @@ const IPC_CHANNELS: typeof import("../shared/ipc").IPC_CHANNELS = {
   serialWrite: "cybergrid:serial:write",
   serialData: "cybergrid:serial:data",
   serialStatus: "cybergrid:serial:status",
+  localConnect: "cybergrid:local:connect",
+  localDisconnect: "cybergrid:local:disconnect",
+  localWrite: "cybergrid:local:write",
+  localResize: "cybergrid:local:resize",
+  localData: "cybergrid:local:data",
+  localStatus: "cybergrid:local:status",
   vncConnect: "cybergrid:vnc:connect",
   vncDisconnect: "cybergrid:vnc:disconnect",
   vncStatus: "cybergrid:vnc:status",
@@ -157,6 +166,8 @@ const IPC_CHANNELS: typeof import("../shared/ipc").IPC_CHANNELS = {
   appUpdateInstall: "cybergrid:update:install",
   trayStateUpdate: "cybergrid:tray:state-update",
   appMenuCommand: "cybergrid:app:menu-command",
+  sessionDetach: "cybergrid:session:detach",
+  sessionDetached: "cybergrid:session:detached",
 };
 
 const api: CyberGridApi = {
@@ -248,6 +259,22 @@ const api: CyberGridApi = {
       const handler = (_event: IpcRendererEvent, payload: SerialStatusEvent) => listener(payload);
       ipcRenderer.on(IPC_CHANNELS.serialStatus, handler);
       return () => ipcRenderer.removeListener(IPC_CHANNELS.serialStatus, handler);
+    },
+  },
+  local: {
+    connect: (config: LocalTerminalConfig) => ipcRenderer.invoke(IPC_CHANNELS.localConnect, config),
+    disconnect: (sessionId) => ipcRenderer.invoke(IPC_CHANNELS.localDisconnect, sessionId),
+    write: (sessionId, data) => ipcRenderer.send(IPC_CHANNELS.localWrite, { sessionId, data }),
+    resize: (sessionId, cols, rows) => ipcRenderer.send(IPC_CHANNELS.localResize, { sessionId, cols, rows }),
+    onData: (listener) => {
+      const handler = (_event: IpcRendererEvent, payload: LocalTerminalDataEvent) => listener(payload);
+      ipcRenderer.on(IPC_CHANNELS.localData, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.localData, handler);
+    },
+    onStatus: (listener) => {
+      const handler = (_event: IpcRendererEvent, payload: LocalTerminalStatusEvent) => listener(payload);
+      ipcRenderer.on(IPC_CHANNELS.localStatus, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.localStatus, handler);
     },
   },
   vnc: {
@@ -410,6 +437,12 @@ const api: CyberGridApi = {
       const handler = (_event: IpcRendererEvent, command: AppMenuCommand) => listener(command);
       ipcRenderer.on(IPC_CHANNELS.appMenuCommand, handler);
       return () => ipcRenderer.removeListener(IPC_CHANNELS.appMenuCommand, handler);
+    },
+    detachSession: (request) => ipcRenderer.invoke(IPC_CHANNELS.sessionDetach, request),
+    onDetachedSession: (listener) => {
+      const handler = (_event: IpcRendererEvent, descriptor: import("../shared/ipc").DetachedSessionDescriptor) => listener(descriptor);
+      ipcRenderer.on(IPC_CHANNELS.sessionDetached, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.sessionDetached, handler);
     },
     onVaultLocked: (listener) => {
       const handler = (_event: IpcRendererEvent, reason: string) => listener(reason);

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { createServer, type Server } from "node:net";
 import type { WebContents } from "electron";
 import { AuditController, type AuditSessionContext } from "./audit";
 import {
@@ -26,7 +27,9 @@ interface SshSession {
   stream?: ClientChannel;
   sftp?: SFTPWrapper;
   sftpPromise?: Promise<SFTPWrapper>;
+  forwardServer?: Server;
   closed: boolean;
+  history: string;
 }
 
 let ssh2ModulePromise: Promise<typeof import("ssh2")> | undefined;
@@ -61,6 +64,7 @@ export class SshController {
       client,
       sender,
       closed: false,
+      history: "",
     };
 
     this.sessions.set(sessionId, session);
@@ -68,6 +72,11 @@ export class SshController {
     this.emitStatus(session, "connecting", `Connecting to ${config.host}...`);
 
     client.on("ready", () => {
+      if (config.portForward) {
+        void this.startPortForward(session, config.portForward).catch((error: unknown) => {
+          this.closeSession(session, "error", error instanceof Error ? error.message : String(error));
+        });
+      }
       client.shell(
         {
           term: "xterm-256color",
@@ -77,6 +86,10 @@ export class SshController {
         (error, stream) => {
           if (error) {
             this.closeSession(session, "error", error.message);
+            return;
+          }
+          if (session.closed) {
+            stream.close();
             return;
           }
 
@@ -174,6 +187,15 @@ export class SshController {
 
   resize(sessionId: string, cols: number, rows: number): void {
     this.getOpenSession(sessionId).stream?.setWindow(rows, cols, 0, 0);
+  }
+
+  attachRenderer(sessionId: string, sender: WebContents): boolean {
+    const session = this.sessions.get(sessionId);
+    if (!session || session.closed) return false;
+    session.sender = sender;
+    if (session.history) sender.send(IPC_CHANNELS.sshData, { sessionId, data: session.history });
+    this.emitStatus(session, session.stream ? "connected" : "connecting", "Session moved to a detached window.");
+    return true;
   }
 
   async quickBackup(sessionId: string, displayName: string): Promise<SwitchBackupResult> {
@@ -351,6 +373,43 @@ export class SshController {
     return session.sftpPromise;
   }
 
+  private startPortForward(
+    session: SshSession,
+    config: NonNullable<SshConnectionConfig["portForward"]>,
+  ): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      const server = createServer((socket) => {
+        session.client.forwardOut(
+          socket.remoteAddress ?? "127.0.0.1",
+          socket.remotePort ?? 0,
+          config.remoteHost,
+          config.remotePort,
+          (error, channel) => {
+            if (error) {
+              socket.destroy(error);
+              return;
+            }
+            socket.pipe(channel).pipe(socket);
+            channel.on("error", () => socket.destroy());
+            socket.on("error", () => channel.close());
+          },
+        );
+      });
+      session.forwardServer = server;
+      server.once("error", reject);
+      server.listen(config.localPort, "127.0.0.1", () => {
+        server.off("error", reject);
+        server.on("error", (error) => this.emitStatus(session, "error", `SSH tunnel error: ${error.message}`));
+        this.emitStatus(
+          session,
+          "connected",
+          `SSH tunnel listening on 127.0.0.1:${config.localPort} → ${config.remoteHost}:${config.remotePort}.`,
+        );
+        resolve();
+      });
+    });
+  }
+
   private captureCommand(
     session: SshSession,
     command: string,
@@ -407,10 +466,12 @@ export class SshController {
 
   private emitData(session: SshSession, data: string | Buffer): void {
     this.audit.recordOutput(session.id, data);
+    const text = Buffer.isBuffer(data) ? data.toString("utf8") : data;
+    session.history = `${session.history}${text}`.slice(-2_000_000);
     if (!session.closed && !session.sender.isDestroyed()) {
       session.sender.send(IPC_CHANNELS.sshData, {
         sessionId: session.id,
-        data: Buffer.isBuffer(data) ? data.toString("utf8") : data,
+        data: text,
       });
     }
   }
@@ -467,6 +528,7 @@ export class SshController {
     this.audit.endSession(session.id, `${status}: ${message}`);
 
     session.sftp?.end();
+    if (session.forwardServer?.listening) session.forwardServer.close();
     if (session.stream && !session.stream.destroyed) {
       session.stream.close();
     }

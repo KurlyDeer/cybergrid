@@ -18,6 +18,7 @@ interface StreamSession {
   telnetState: TelnetState;
   telnetCommand?: number;
   closed: boolean;
+  history: string;
 }
 
 const IAC = 255;
@@ -42,6 +43,7 @@ export class StreamController {
       protocol: config.protocol,
       telnetState: "data",
       closed: false,
+      history: "",
     };
     this.sessions.set(sessionId, session);
     this.audit.startSession(sessionId, auditContext);
@@ -52,9 +54,10 @@ export class StreamController {
     socket.on("data", (chunk: Buffer) => {
       const data = session.protocol === "telnet" ? this.decodeTelnet(session, chunk) : chunk;
       if (data.length > 0) this.audit.recordOutput(sessionId, data);
-      if (data.length > 0 && !sender.isDestroyed()) {
+      if (data.length > 0) session.history = `${session.history}${data.toString("utf8")}`.slice(-2_000_000);
+      if (data.length > 0 && !session.sender.isDestroyed()) {
         const event: StreamDataEvent = { sessionId, data: data.toString("utf8") };
-        sender.send(IPC_CHANNELS.streamData, event);
+        session.sender.send(IPC_CHANNELS.streamData, event);
       }
     });
     socket.on("error", (error) => {
@@ -70,6 +73,15 @@ export class StreamController {
       throw new Error("Terminal socket is not writable.");
     }
     session.socket.write(data, "utf8");
+  }
+
+  attachRenderer(sessionId: string, sender: WebContents): boolean {
+    const session = this.sessions.get(sessionId);
+    if (!session || session.closed) return false;
+    session.sender = sender;
+    if (session.history) sender.send(IPC_CHANNELS.streamData, { sessionId, data: session.history });
+    this.sendStatus(sessionId, session, "connected", "Terminal session moved to a detached window.");
+    return true;
   }
 
   disconnect(sessionId: string): void {

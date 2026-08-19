@@ -15,6 +15,7 @@ interface SerialSession {
   port: SerialPort;
   sender: WebContents;
   closed: boolean;
+  history: string;
 }
 
 let serialPortModulePromise: Promise<typeof import("serialport")> | undefined;
@@ -49,16 +50,17 @@ export class SerialController {
     const { SerialPort } = await loadSerialPort();
     const sessionId = randomUUID();
     const port = new SerialPort({ ...config, autoOpen: false });
-    const session: SerialSession = { port, sender, closed: false };
+    const session: SerialSession = { port, sender, closed: false, history: "" };
     this.sessions.set(sessionId, session);
     this.audit.startSession(sessionId, auditContext);
     this.sendStatus(sessionId, session, "opening", `Opening ${config.path} at ${config.baudRate} baud...`);
 
     port.on("data", (chunk: Buffer) => {
       this.audit.recordOutput(sessionId, chunk);
-      if (!sender.isDestroyed()) {
+      session.history = `${session.history}${chunk.toString("utf8")}`.slice(-2_000_000);
+      if (!session.sender.isDestroyed()) {
         const event: SerialDataEvent = { sessionId, data: chunk.toString("utf8") };
-        sender.send(IPC_CHANNELS.serialData, event);
+        session.sender.send(IPC_CHANNELS.serialData, event);
       }
     });
     port.on("error", (error) => this.sendStatus(sessionId, session, "error", error.message));
@@ -81,6 +83,15 @@ export class SerialController {
         this.sendStatus(sessionId, session, "error", error.message);
       }
     });
+  }
+
+  attachRenderer(sessionId: string, sender: WebContents): boolean {
+    const session = this.sessions.get(sessionId);
+    if (!session || session.closed) return false;
+    session.sender = sender;
+    if (session.history) sender.send(IPC_CHANNELS.serialData, { sessionId, data: session.history });
+    this.sendStatus(sessionId, session, "connected", "Serial session moved to a detached window.");
+    return true;
   }
 
   disconnect(sessionId: string): void {

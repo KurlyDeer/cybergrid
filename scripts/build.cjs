@@ -30,6 +30,7 @@ async function bundleApplication() {
         "electron-updater",
         "ssh2",
         "serialport",
+        "node-pty",
         "@serialport/bindings-cpp",
         "better-sqlite3",
         "fast-xml-parser",
@@ -64,6 +65,13 @@ async function bundleApplication() {
     }),
     build({
       ...common,
+      entryPoints: [join(sourceRoot, "renderer", "detached.ts")],
+      format: "iife",
+      outfile: join(rendererOutput, "detached.js"),
+      platform: "browser",
+    }),
+    build({
+      ...common,
       entryPoints: [join(sourceRoot, "renderer", "vnc-bootstrap.mjs")],
       format: "esm",
       outfile: join(rendererOutput, "vnc-bootstrap.mjs"),
@@ -74,6 +82,7 @@ async function bundleApplication() {
   await Promise.all([
     copyFile(join(sourceRoot, "renderer", "index.html"), join(rendererOutput, "index.html")),
     copyFile(join(sourceRoot, "renderer", "launcher.html"), join(rendererOutput, "launcher.html")),
+    copyFile(join(sourceRoot, "renderer", "detached.html"), join(rendererOutput, "detached.html")),
     copyFile(join(sourceRoot, "renderer", "startup.js"), join(rendererOutput, "startup.js")),
     copyFile(
       join(projectRoot, "node_modules", "xterm", "css", "xterm.css"),

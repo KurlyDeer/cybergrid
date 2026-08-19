@@ -12,6 +12,7 @@ import {
   type IpcMainInvokeEvent,
   type ProxyConfig,
   type WebContents,
+  type WebPreferences,
 } from "electron";
 import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { lookup } from "node:dns/promises";
@@ -32,11 +33,14 @@ import {
   type DeviceIcon,
   type DeviceOsFamily,
   type DiagnosticKind,
+  type DetachSessionRequest,
   type ExternalDiagnosticKind,
   type ExternalToolInput,
   type FolderDefaultsInput,
   type HealthTarget,
   type InventorySyncSourceInput,
+  type LocalShell,
+  type LocalTerminalConfig,
   type MigrationRequest,
   type OpenPortInfo,
   type ProfileConnectionCredentials,
@@ -67,6 +71,7 @@ import { launchExternalTool, runConnectionTasks } from "./enterprise";
 import { HealthController } from "./health";
 import { discoverInventory } from "./inventory-sync";
 import type { MigrationController } from "./migration";
+import type { LocalTerminalController } from "./local-terminal";
 import type { PreferencesController } from "./preferences";
 import { RdpController } from "./rdp";
 import type { ScannerController } from "./scanner";
@@ -117,6 +122,8 @@ let sshController: SshController | null = null;
 let sshControllerPromise: Promise<SshController> | null = null;
 let serialController: SerialController | null = null;
 let serialControllerPromise: Promise<SerialController> | null = null;
+let localTerminalController: LocalTerminalController | null = null;
+let localTerminalControllerPromise: Promise<LocalTerminalController> | null = null;
 let rdpController: RdpController | null = null;
 let vaultController: VaultController | null = null;
 let webController: WebController | null = null;
@@ -126,6 +133,7 @@ let preferencesController: PreferencesController | null = null;
 let autoUnlockController: AutoUnlockController | null = null;
 let mainWindow: BrowserWindow | null = null;
 let quickLauncherWindow: BrowserWindow | null = null;
+const detachedWindows = new Map<number, { window: BrowserWindow; protocol: DetachSessionRequest["protocol"]; sessionId: string }>();
 const updaterController = new UpdaterController(() => mainWindow);
 let trayController: SystemTrayController | null = null;
 let trayStateSnapshot: TrayStateSnapshot = { sessions: [], broadcastMode: false };
@@ -360,6 +368,16 @@ async function getSerialController(): Promise<SerialController> {
   return serialControllerPromise;
 }
 
+async function getLocalTerminalController(): Promise<LocalTerminalController> {
+  if (localTerminalController) return localTerminalController;
+  localTerminalControllerPromise ??= import("./local-terminal.js").then(({ LocalTerminalController }) => {
+    const controller = new LocalTerminalController(auditController);
+    localTerminalController = controller;
+    return controller;
+  });
+  return localTerminalControllerPromise;
+}
+
 async function getScannerController(): Promise<ScannerController> {
   if (scannerController) return scannerController;
   scannerControllerPromise ??= import("./scanner.js").then(({ ScannerController }) => {
@@ -395,6 +413,16 @@ function applicationFile(...segments: string[]): string {
   return join(applicationRoot, "build", ...segments);
 }
 
+function hardenedWebPreferences(): WebPreferences {
+  return {
+    preload: applicationFile("main", "preload.js"),
+    contextIsolation: true,
+    nodeIntegration: false,
+    sandbox: true,
+    enableRemoteModule: false,
+  } as WebPreferences;
+}
+
 function userDataFile(...segments: string[]): string {
   const userDataRoot = resolve(app.getPath("userData"));
   const target = resolve(userDataRoot, ...segments);
@@ -420,6 +448,33 @@ function normalizeWorkspaceSnapshot(value: unknown): WorkspaceSnapshot {
     activeIndex,
     layout: value.layout === "grid" ? "grid" : "single",
     updatedAt: new Date().toISOString(),
+  };
+}
+
+function normalizeDetachSessionRequest(value: unknown): DetachSessionRequest {
+  if (!isRecord(value) || !isRecord(value.context)) throw new Error("Invalid detached session request.");
+  const protocol = readConnectionProtocol(value.protocol);
+  if (protocol === "vnc" || protocol === "http" || protocol === "https") {
+    throw new Error("This session type cannot be detached yet.");
+  }
+  const screenX = Number(value.screenX);
+  const screenY = Number(value.screenY);
+  if (!Number.isFinite(screenX) || !Number.isFinite(screenY)) throw new Error("Invalid detached window position.");
+  return {
+    protocol,
+    sessionId: readUuid(value.sessionId, "session ID"),
+    label: readString(value.label, "Session label", { required: true, maxLength: 100, singleLine: true }) as string,
+    screenX,
+    screenY,
+    context: {
+      displayName: readString(value.context.displayName, "Display name", { required: true, maxLength: 100, singleLine: true }) as string,
+      host: readString(value.context.host, "Host", { maxLength: 2_048, singleLine: true }) ?? "",
+      ip: readString(value.context.ip, "IP", { maxLength: 2_048, singleLine: true }) ?? "",
+      username: readString(value.context.username, "Username", { maxLength: 256, singleLine: true }) ?? "",
+      group: readString(value.context.group, "Group", { maxLength: 100, singleLine: true }) ?? "Quick Connect",
+      port: Number.isInteger(Number(value.context.port)) ? Number(value.context.port) : 0,
+      profileId: value.context.profileId ? readUuid(value.context.profileId, "profile ID") : undefined,
+    },
   };
 }
 
@@ -514,12 +569,7 @@ function createMainWindow(): BrowserWindow {
     autoHideMenuBar: false,
     backgroundColor: "#1e1e1e",
     title: "CyberGrid",
-    webPreferences: {
-      preload: applicationFile("main", "preload.js"),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-    },
+    webPreferences: hardenedWebPreferences(),
   });
 
   let revealed = false;
@@ -604,12 +654,7 @@ function createQuickLauncherWindow(): BrowserWindow {
     skipTaskbar: true,
     backgroundColor: "#0d1520",
     title: "CyberGrid Quick Launcher",
-    webPreferences: {
-      preload: applicationFile("main", "preload.js"),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-    },
+    webPreferences: hardenedWebPreferences(),
   });
   quickLauncherWindow = window;
   window.setAlwaysOnTop(true, "pop-up-menu");
@@ -634,6 +679,84 @@ function createQuickLauncherWindow(): BrowserWindow {
   return window;
 }
 
+function disconnectDetachedSession(protocol: DetachSessionRequest["protocol"], sessionId: string): void {
+  switch (protocol) {
+    case "ssh": sshController?.disconnect(sessionId); break;
+    case "rdp": rdpController?.disconnect(sessionId); break;
+    case "telnet":
+    case "raw": streamController.disconnect(sessionId); break;
+    case "serial": serialController?.disconnect(sessionId); break;
+    case "local": localTerminalController?.disconnect(sessionId); break;
+  }
+}
+
+async function attachDetachedSession(
+  protocol: DetachSessionRequest["protocol"],
+  sessionId: string,
+  sender: WebContents,
+): Promise<boolean> {
+  switch (protocol) {
+    case "ssh": return (await getSshController()).attachRenderer(sessionId, sender);
+    case "rdp": return requireRdp().attachRenderer(sessionId, sender);
+    case "telnet":
+    case "raw": return streamController.attachRenderer(sessionId, sender);
+    case "serial": return (await getSerialController()).attachRenderer(sessionId, sender);
+    case "local": return (await getLocalTerminalController()).attachRenderer(sessionId, sender);
+  }
+}
+
+async function createDetachedSessionWindow(
+  request: DetachSessionRequest,
+  source: BrowserWindow,
+): Promise<boolean> {
+  const bounds = source.getBounds();
+  const outside = request.screenX < bounds.x || request.screenX > bounds.x + bounds.width ||
+    request.screenY < bounds.y || request.screenY > bounds.y + bounds.height;
+  if (!outside) return false;
+  const window = new BrowserWindow({
+    width: 1080,
+    height: 720,
+    minWidth: 640,
+    minHeight: 360,
+    x: Math.round(request.screenX - 140),
+    y: Math.round(request.screenY - 28),
+    show: false,
+    autoHideMenuBar: true,
+    backgroundColor: "#080d14",
+    title: `${request.label} — CyberGrid`,
+    webPreferences: hardenedWebPreferences(),
+  });
+  let ownsSession = false;
+  detachedWindows.set(window.id, { window, protocol: request.protocol, sessionId: request.sessionId });
+  window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  window.webContents.on("will-navigate", (event, url) => {
+    if (url !== window.webContents.getURL()) event.preventDefault();
+  });
+  window.on("closed", () => {
+    detachedWindows.delete(window.id);
+    if (ownsSession) disconnectDetachedSession(request.protocol, request.sessionId);
+  });
+  try {
+    await window.loadFile(applicationFile("renderer", "detached.html"));
+    ownsSession = await attachDetachedSession(request.protocol, request.sessionId, window.webContents);
+    if (!ownsSession) {
+      window.destroy();
+      return false;
+    }
+    window.webContents.send(IPC_CHANNELS.sessionDetached, {
+      protocol: request.protocol,
+      sessionId: request.sessionId,
+      label: request.label,
+      context: request.context,
+    });
+    window.show();
+    return true;
+  } catch (error) {
+    if (!window.isDestroyed()) window.destroy();
+    throw error;
+  }
+}
+
 function toggleQuickLauncher(): void {
   if (quickLauncherWindow && !quickLauncherWindow.isDestroyed()) {
     destroyQuickLauncher();
@@ -656,7 +779,8 @@ function registerGlobalApplicationShortcuts(): void {
 function isTrustedSender(event: IpcMainEvent | IpcMainInvokeEvent): boolean {
   return Boolean(
     (mainWindow && event.sender === mainWindow.webContents) ||
-    (quickLauncherWindow && event.sender === quickLauncherWindow.webContents),
+    (quickLauncherWindow && event.sender === quickLauncherWindow.webContents) ||
+    [...detachedWindows.values()].some((entry) => event.sender === entry.window.webContents),
   );
 }
 
@@ -797,6 +921,7 @@ function normalizeConnectionConfig(value: unknown): SshConnectionConfig {
     maxLength: 4_096,
     trim: false,
   });
+  const portForward = normalizeSshPortForward(value.portForward);
 
   return {
     host,
@@ -807,6 +932,22 @@ function normalizeConnectionConfig(value: unknown): SshConnectionConfig {
     passphrase,
     readyTimeout: 15_000,
     enableLegacyAlgorithms: value.enableLegacyAlgorithms === true,
+    portForward,
+  };
+}
+
+function normalizeSshPortForward(value: unknown): SshConnectionConfig["portForward"] {
+  if (value === undefined || value === null) return undefined;
+  if (!isRecord(value)) throw new Error("Invalid SSH port forwarding configuration.");
+  if (value.localPort === undefined || value.remoteHost === undefined || value.remotePort === undefined) {
+    throw new Error("Local port, remote host, and remote port are all required for SSH forwarding.");
+  }
+  return {
+    localPort: readPort(value.localPort),
+    remoteHost: readString(value.remoteHost, "Forward target host", {
+      required: true, maxLength: 253, singleLine: true,
+    }) as string,
+    remotePort: readPort(value.remotePort),
   };
 }
 
@@ -862,7 +1003,8 @@ function normalizeProfileInput(value: unknown): ServerProfileInput {
     throw new Error("Invalid server profile.");
   }
   const protocol = readConnectionProtocol(value.protocol ?? "ssh");
-  const rawHost = readString(value.host, protocol === "serial" ? "Serial port" : "Host", {
+  const localOrSerial = protocol === "serial" || protocol === "local";
+  const rawHost = readString(value.host, protocol === "serial" ? "Serial port" : protocol === "local" ? "Local shell" : "Host", {
     required: true,
     maxLength: protocol === "serial" ? 2_048 : 512,
     singleLine: true,
@@ -887,19 +1029,19 @@ function normalizeProfileInput(value: unknown): ServerProfileInput {
   }
   const defaultPorts: Record<ConnectionProtocol, number> = {
     ssh: 22, rdp: 3389, telnet: 23, raw: 23, vnc: 5900,
-    http: 80, https: 443, serial: 0,
+    http: 80, https: 443, serial: 0, local: 0,
   };
   const rawUsername = readString(value.username, "Username", {
     maxLength: 256,
     singleLine: true,
   }) ?? "";
-  const target = protocol === "serial" ? { host: rawHost } : parseConnectionTarget(rawHost);
-  const host = readString(target.host, protocol === "serial" ? "Serial port" : "Host", {
+  const target = localOrSerial ? { host: rawHost } : parseConnectionTarget(rawHost);
+  const host = readString(target.host, protocol === "serial" ? "Serial port" : protocol === "local" ? "Local shell" : "Host", {
     required: true,
     maxLength: protocol === "serial" ? 2_048 : 253,
     singleLine: true,
   }) as string;
-  const port = protocol === "serial"
+  const port = localOrSerial
     ? 0
     : target.port ?? readPort(value.port, defaultPorts[protocol]);
   const username = target.username === undefined
@@ -931,6 +1073,8 @@ function normalizeProfileInput(value: unknown): ServerProfileInput {
     enableLegacySshAlgorithms:
       protocol === "ssh" && (value.enableLegacySshAlgorithms === true ||
         (value.enableLegacySshAlgorithms === undefined && category === "network")),
+    localShell: protocol === "local" ? readLocalShell(value.localShell ?? rawHost) : undefined,
+    portForward: protocol === "ssh" ? normalizeSshPortForward(value.portForward) : undefined,
     jumpHost: readString(value.jumpHost, "Jump host", { maxLength: 253, singleLine: true }),
     proxyOverride: readString(value.proxyOverride, "Connection proxy", { maxLength: 2_048, singleLine: true }),
     icon: readDeviceIcon(value.icon, false),
@@ -1090,7 +1234,8 @@ function normalizeScreenshotRequest(value: unknown): ScreenshotRequest {
 function readConnectionProtocol(value: unknown): ConnectionProtocol {
   if (
     value === "ssh" || value === "rdp" || value === "telnet" || value === "raw" ||
-    value === "vnc" || value === "http" || value === "https" || value === "serial"
+    value === "vnc" || value === "http" || value === "https" || value === "serial" ||
+    value === "local"
   ) {
     return value;
   }
@@ -1333,6 +1478,20 @@ function normalizeSerialConfig(value: unknown): SerialConnectionConfig {
     dataBits,
     stopBits,
     parity: readSerialParity(value.parity ?? "none"),
+  };
+}
+
+function readLocalShell(value: unknown): LocalShell {
+  if (value === "powershell" || value === "cmd" || value === "wsl") return value;
+  throw new Error("Local shell must be PowerShell, Command Prompt, or WSL.");
+}
+
+function normalizeLocalTerminalConfig(value: unknown): LocalTerminalConfig {
+  if (!isRecord(value)) throw new Error("Invalid local terminal configuration.");
+  return {
+    shell: readLocalShell(value.shell ?? "powershell"),
+    cols: readOptionalInteger(value.cols, "Terminal columns", 2, 1_000),
+    rows: readOptionalInteger(value.rows, "Terminal rows", 1, 1_000),
   };
 }
 
@@ -1804,6 +1963,7 @@ function lockApplication(reason: string, notifyRenderer: boolean): void {
   sshController?.disconnectAll(reason);
   streamController.disconnectAll();
   serialController?.disconnectAll();
+  localTerminalController?.disconnectAll();
   vncController?.disconnectAll();
   webController?.disconnectAll();
   rdpController?.disconnectAll();
@@ -1836,6 +1996,7 @@ async function connectionConfigForProfile(
     }).code : undefined,
     enableLegacyAlgorithms:
       profile.enableLegacySshAlgorithms ?? profile.category === "network",
+    portForward: profile.portForward,
   };
 
   if (interactiveCredentials?.password !== undefined) {
@@ -1874,8 +2035,9 @@ async function connectProfile(
   interactiveCredentials?: ProfileConnectionCredentials,
 ): Promise<ProfileConnectionResult> {
   const profile = requireVault().getConnectionProfile(profileId);
-  const rawHost = resolveEnvironmentTokens(profile.host, profile.protocol === "serial" ? "Serial port" : "Host") as string;
-  const target = profile.protocol === "serial" ? { host: rawHost } : parseConnectionTarget(rawHost);
+  const localOrSerial = profile.protocol === "serial" || profile.protocol === "local";
+  const rawHost = resolveEnvironmentTokens(profile.host, profile.protocol === "serial" ? "Serial port" : profile.protocol === "local" ? "Local shell" : "Host") as string;
+  const target = localOrSerial ? { host: rawHost } : parseConnectionTarget(rawHost);
   const host = target.host;
   const port = target.port ?? profile.port;
   const username = interactiveCredentials?.username ?? target.username ?? resolveEnvironmentTokens(profile.username, "Username") ?? "";
@@ -1954,6 +2116,20 @@ async function connectProfile(
         policy,
       };
     }
+    case "local": {
+      const local = await getLocalTerminalController();
+      const shell = profile.localShell ?? readLocalShell(host);
+      return {
+        protocol: "local",
+        sessionId: await local.connect(
+          { shell },
+          sender,
+          auditContext("local", profile.name, shell, username, profile.group),
+        ),
+        context,
+        policy,
+      };
+    }
     case "vnc": {
       const result = await (await getVncController()).connect({
         host,
@@ -2026,7 +2202,7 @@ function registerIpcHandlers(): void {
   ipcMain.handle(IPC_CHANNELS.profileRunPostConnect, async (event, profileId: unknown) => {
     assertTrustedSender(event);
     const profile = requireVault().getConnectionProfile(readUuid(profileId, "server profile ID"));
-    const host = resolveEnvironmentTokens(profile.host, profile.protocol === "serial" ? "Serial port" : "Host") as string;
+    const host = resolveEnvironmentTokens(profile.host, profile.protocol === "serial" ? "Serial port" : profile.protocol === "local" ? "Local shell" : "Host") as string;
     const username = resolveEnvironmentTokens(profile.username, "Username") ?? "";
     await runConnectionTasks(
       requireVault().getConnectionTasks(profile.postConnectTaskIds ?? []),
@@ -2163,6 +2339,28 @@ function registerIpcHandlers(): void {
   ipcMain.handle(IPC_CHANNELS.serialDisconnect, (event, sessionId: unknown) => {
     assertTrustedSender(event);
     serialController?.disconnect(readUuid(sessionId, "serial session ID"));
+  });
+
+  ipcMain.handle(IPC_CHANNELS.localConnect, async (event, config: unknown) => {
+    assertTrustedSender(event);
+    const normalized = normalizeLocalTerminalConfig(config);
+    return (await getLocalTerminalController()).connect(
+      normalized,
+      event.sender,
+      auditContext("local", normalized.shell, normalized.shell),
+    );
+  });
+
+  ipcMain.handle(IPC_CHANNELS.localDisconnect, (event, sessionId: unknown) => {
+    assertTrustedSender(event);
+    localTerminalController?.disconnect(readUuid(sessionId, "local terminal session ID"));
+  });
+
+  ipcMain.handle(IPC_CHANNELS.sessionDetach, async (event, value: unknown) => {
+    assertTrustedSender(event);
+    const source = BrowserWindow.fromWebContents(event.sender);
+    if (!source || source !== mainWindow) throw new Error("Only main-window tabs can be detached.");
+    return createDetachedSessionWindow(normalizeDetachSessionRequest(value), source);
   });
 
   ipcMain.handle(IPC_CHANNELS.vncConnect, async (event, config: unknown) => {
@@ -2712,6 +2910,31 @@ function registerIpcHandlers(): void {
       serialController?.write(readUuid(request.sessionId, "serial session ID"), request.data);
     } catch (error) {
       console.warn("Rejected serial write:", error);
+    }
+  });
+
+  ipcMain.on(IPC_CHANNELS.localWrite, (event, request: unknown) => {
+    if (!isTrustedSender(event)) return;
+    try {
+      if (!isRecord(request) || typeof request.data !== "string") throw new Error("Invalid local terminal write.");
+      localTerminalController?.write(readUuid(request.sessionId, "local terminal session ID"), request.data);
+    } catch (error) {
+      console.warn("Rejected local terminal write:", error);
+    }
+  });
+
+  ipcMain.on(IPC_CHANNELS.localResize, (event, request: unknown) => {
+    if (!isTrustedSender(event)) return;
+    try {
+      if (!isRecord(request)) throw new Error("Invalid local terminal resize request.");
+      const cols = Number(request.cols);
+      const rows = Number(request.rows);
+      if (!Number.isInteger(cols) || cols < 2 || cols > 1_000 || !Number.isInteger(rows) || rows < 1 || rows > 1_000) {
+        throw new Error("Invalid terminal dimensions.");
+      }
+      localTerminalController?.resize(readUuid(request.sessionId, "local terminal session ID"), cols, rows);
+    } catch (error) {
+      console.warn("Rejected local terminal resize request:", error);
     }
   });
 

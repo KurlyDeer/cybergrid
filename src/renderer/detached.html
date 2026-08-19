@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; frame-src 'none'" />
+    <title>CyberGrid Detached Session</title>
+    <link rel="stylesheet" href="./xterm.css" />
+    <style>
+      :root { color-scheme: dark; font-family: Inter, Segoe UI, sans-serif; background: #080d14; color: #d7e2ef; }
+      * { box-sizing: border-box; }
+      html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+      body { display: grid; grid-template-rows: 30px minmax(0, 1fr); }
+      header { display: flex; min-width: 0; align-items: center; gap: 8px; padding: 0 8px; border-bottom: 1px solid #223144; background: #0d1520; }
+      #protocol { color: #23d5ab; font-size: 9px; font-weight: 900; }
+      #title { min-width: 0; flex: 1; overflow: hidden; font-size: 12px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+      #status { color: #8fa3b8; font-size: 10px; }
+      button { width: 24px; height: 22px; border: 0; border-radius: 4px; background: transparent; color: #8fa3b8; cursor: pointer; }
+      button:hover { background: #223144; color: #fff; }
+      main { position: relative; min-width: 0; min-height: 0; }
+      #terminal, #rdp { position: absolute; inset: 0; }
+      #terminal { padding: 2px; }
+      #rdp { display: none; background: #05080c; }
+      body.rdp #terminal { display: none; }
+      body.rdp #rdp { display: block; }
+    </style>
+  </head>
+  <body>
+    <header><span id="protocol">CG</span><span id="title">Moving session…</span><span id="status">Attaching</span><button id="close" type="button" aria-label="Close session">×</button></header>
+    <main><div id="terminal"></div><div id="rdp" tabindex="0"></div></main>
+    <script src="./detached.js"></script>
+  </body>
+</html>
