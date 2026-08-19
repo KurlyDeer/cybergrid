@@ -62,12 +62,24 @@ function mapProtocol(value: string): ConnectionProtocol | undefined {
   return undefined;
 }
 
+function normalizeMRemoteDomain(value: unknown): string | undefined {
+  const domain = text(value);
+  return domain && domain !== "." ? domain : undefined;
+}
+
+function mRemoteUsername(protocol: ConnectionProtocol, username: string, domain?: string): string {
+  if (protocol !== "rdp" || !domain || username.includes("\\")) return username;
+  return `${domain}\\${username}`;
+}
+
 function profileFromFields(fields: Record<string, unknown>, fallbackGroup: string): ServerProfileInput | undefined {
   const protocol = mapProtocol(text(fields.protocol ?? fields.Protocol));
   const host = text(fields.host ?? fields.hostname ?? fields.Hostname ?? fields.path ?? fields.serialline ?? fields.SerialLine);
   if (!protocol || !host) {
     return undefined;
   }
+  const domain = normalizeMRemoteDomain(fields.domain ?? fields.Domain);
+  const username = text(fields.username ?? fields.Username ?? fields.UserName);
   const password = text(fields.password ?? fields.Password) || undefined;
   const privateKeyPath = text(fields.privateKeyPath ?? fields.privatekeypath ?? fields.KeyFile ?? fields.keyfile ?? fields.PublicKeyFile) || undefined;
   let authType: ServerAuthType = text(fields.authType ?? fields.authtype) as ServerAuthType;
@@ -80,8 +92,8 @@ function profileFromFields(fields: Record<string, unknown>, fallbackGroup: strin
     name: text(fields.name ?? fields.Name) || host,
     host,
     port: Number.isInteger(requestedPort) ? requestedPort : defaultPort(protocol),
-    username: text(fields.username ?? fields.Username ?? fields.UserName),
-    domain: text(fields.domain ?? fields.Domain) || undefined,
+    username: mRemoteUsername(protocol, username, domain),
+    domain,
     group: text(fields.group ?? fields.Group) || fallbackGroup || "Imported",
     authType,
     password: authType === "password" ? password : undefined,

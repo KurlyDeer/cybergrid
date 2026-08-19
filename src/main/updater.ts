@@ -7,6 +7,13 @@ import {
 
 type AppUpdater = import("electron-updater").AppUpdater;
 
+interface ElectronUpdaterModuleShape {
+  autoUpdater?: AppUpdater;
+  default?: {
+    autoUpdater?: AppUpdater;
+  };
+}
+
 export class UpdaterController {
   private updater: AppUpdater | null = null;
   private initialization: Promise<AppUpdater> | null = null;
@@ -65,7 +72,14 @@ export class UpdaterController {
 
   private async ensureUpdater(): Promise<AppUpdater> {
     if (this.updater) return this.updater;
-    this.initialization ??= import("electron-updater").then(({ autoUpdater }) => {
+    this.initialization ??= import("electron-updater").then((loadedModule) => {
+      // electron-updater is CommonJS. Depending on how Node resolves a packaged
+      // build, autoUpdater can be exposed on either the namespace or default export.
+      const module = loadedModule as unknown as ElectronUpdaterModuleShape;
+      const autoUpdater = module.autoUpdater ?? module.default?.autoUpdater;
+      if (!autoUpdater) {
+        throw new Error("electron-updater loaded without an autoUpdater instance.");
+      }
       this.updater = autoUpdater;
       autoUpdater.autoDownload = false;
       autoUpdater.autoInstallOnAppQuit = true;
@@ -111,9 +125,13 @@ export class UpdaterController {
         void this.promptToRestart(info.version);
       });
       autoUpdater.on("error", (error) => {
-        void this.handleError(error);
+        void this.handleError(error).catch(() => undefined);
       });
       return autoUpdater;
+    }).catch((error: unknown) => {
+      this.initialization = null;
+      this.updater = null;
+      throw error;
     });
     return this.initialization;
   }

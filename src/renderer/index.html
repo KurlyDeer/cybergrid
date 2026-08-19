@@ -561,6 +561,70 @@
         font-size: 10px;
       }
 
+      html[data-compact-tree="true"] .server-tree {
+        min-width: max-content;
+        padding: 4px 6px 12px;
+      }
+      html[data-compact-tree="true"] .server-group { margin-bottom: 0; }
+      html[data-compact-tree="true"] .server-list .server-group { margin-left: 10px; }
+      html[data-compact-tree="true"] .folder-header {
+        min-height: 22px;
+        grid-template-columns: 10px minmax(max-content, 1fr) auto;
+        gap: 4px;
+        padding: 1px 4px;
+        border-radius: 3px;
+      }
+      html[data-compact-tree="true"] .folder-name {
+        overflow: visible;
+        font-size: 10px;
+        letter-spacing: 0.035em;
+        text-overflow: clip;
+      }
+      html[data-compact-tree="true"] .folder-count {
+        min-width: 14px;
+        padding: 0 3px;
+        background: transparent;
+        font-size: 9px;
+      }
+      html[data-compact-tree="true"] .server-row {
+        min-height: 22px;
+        grid-template-columns: max-content 20px;
+      }
+      html[data-compact-tree="true"] .server-item {
+        min-width: max-content;
+        min-height: 22px;
+        gap: 4px;
+        padding: 1px 4px;
+        border: 0;
+        border-radius: 3px;
+      }
+      html[data-compact-tree="true"] .server-item:hover,
+      html[data-compact-tree="true"] .server-item:focus-visible,
+      html[data-compact-tree="true"] .server-item.selected { border: 0; }
+      html[data-compact-tree="true"] .node-icon {
+        width: 14px;
+        height: 14px;
+        border: 0;
+        border-radius: 2px;
+        background: transparent;
+        font-size: 6px;
+      }
+      html[data-compact-tree="true"] .server-dot { width: 5px; height: 5px; box-shadow: none; }
+      html[data-compact-tree="true"] .server-meta { display: block; overflow: visible; }
+      html[data-compact-tree="true"] .server-name {
+        overflow: visible;
+        font-size: 11px;
+        line-height: 18px;
+        text-overflow: clip;
+      }
+      html[data-compact-tree="true"] .server-host { display: none; }
+      html[data-compact-tree="true"] .node-badge {
+        padding: 0 3px;
+        background: transparent;
+        color: var(--node-color, var(--accent));
+      }
+      html[data-compact-tree="true"] .server-delete { width: 18px; height: 18px; }
+
       .sidebar-footer {
         padding: 12px;
         border-top: 1px solid var(--border);
@@ -890,12 +954,21 @@
       }
 
       .rdp-pane {
-        padding: 24px;
+        padding: 0;
+        overflow: hidden;
         background:
           linear-gradient(rgba(35, 213, 171, 0.035) 1px, transparent 1px),
           linear-gradient(90deg, rgba(35, 213, 171, 0.035) 1px, transparent 1px),
           var(--background);
         background-size: 30px 30px;
+      }
+
+      .rdp-viewport {
+        position: absolute;
+        inset: 0;
+        overflow: hidden;
+        background: var(--background);
+        outline: none;
       }
 
       .rdp-canvas {
@@ -909,6 +982,11 @@
         background: var(--panel);
         text-align: center;
         box-shadow: 0 28px 90px rgba(0, 0, 0, 0.38);
+      }
+
+      .rdp-viewport.embedded .rdp-loading-card {
+        opacity: 0;
+        pointer-events: none;
       }
 
       .rdp-mark {
@@ -2659,6 +2737,7 @@
               <div class="checkbox-field"><input id="minimize-to-tray" type="checkbox" /><label class="checkbox-label" for="minimize-to-tray">Minimize and close to system tray</label></div>
               <div class="checkbox-field"><input id="start-minimized" type="checkbox" /><label class="checkbox-label" for="start-minimized">Start minimized to the system tray</label></div>
               <div class="checkbox-field"><input id="launch-at-login" type="checkbox" /><label class="checkbox-label" for="launch-at-login">Launch CyberGrid when I sign in</label></div>
+              <div class="checkbox-field"><input id="compact-tree-view" type="checkbox" /><label class="checkbox-label" for="compact-tree-view">Compact Tree View (22px rows, full server names)</label></div>
               <div class="checkbox-field"><input id="single-instance" type="checkbox" checked disabled /><label class="checkbox-label" for="single-instance">Enforce a single application instance</label></div>
             </section>
             <section class="settings-panel" data-settings-panel="terminal" hidden>

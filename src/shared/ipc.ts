@@ -15,6 +15,8 @@ export const IPC_CHANNELS = {
   rdpIsSupported: "cybergrid:rdp:is-supported",
   rdpConnect: "cybergrid:rdp:connect",
   rdpDisconnect: "cybergrid:rdp:disconnect",
+  rdpSetBounds: "cybergrid:rdp:set-bounds",
+  rdpSetVisible: "cybergrid:rdp:set-visible",
   rdpStatus: "cybergrid:rdp:status",
   vaultStatus: "cybergrid:vault:status",
   vaultCreate: "cybergrid:vault:create",
@@ -182,6 +184,13 @@ export interface RdpConnectionConfig {
   host: string;
   port: number;
   username: string;
+}
+
+export interface RdpBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 }
 
 export type RdpConnectionStatus = "launching" | "running" | "closed" | "error";
@@ -599,6 +608,11 @@ export interface SessionPolicy {
   terminalAppearance?: TerminalAppearanceOverrides;
 }
 
+export interface ProfileConnectionCredentials {
+  username?: string;
+  password?: string;
+}
+
 export type ProfileConnectionResult = { context: SessionVariableContext; policy: SessionPolicy } & (
   | { protocol: "ssh"; sessionId: string }
   | { protocol: "rdp"; sessionId: string }
@@ -756,6 +770,7 @@ export interface AppPreferences {
   minimizeToTray: boolean;
   startMinimized: boolean;
   launchAtLogin: boolean;
+  compactTreeView: boolean;
   masterPasswordEnabled: boolean;
   autoLockMinutes: number;
   clipboardClearSeconds: number;
@@ -834,7 +849,7 @@ export type Unsubscribe = () => void;
 
 export interface CyberGridApi {
   profiles: {
-    connect(profileId: string): Promise<ProfileConnectionResult>;
+    connect(profileId: string, credentials?: ProfileConnectionCredentials): Promise<ProfileConnectionResult>;
     runPostConnect(profileId: string): Promise<void>;
   };
   ssh: {
@@ -857,6 +872,8 @@ export interface CyberGridApi {
     isSupported(): Promise<boolean>;
     connect(config: RdpConnectionConfig): Promise<string>;
     disconnect(sessionId: string): Promise<void>;
+    setBounds(sessionId: string, bounds: RdpBounds): void;
+    setVisible(sessionId: string, visible: boolean): void;
     onStatus(listener: (event: RdpStatusEvent) => void): Unsubscribe;
   };
   stream: {

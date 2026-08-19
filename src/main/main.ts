@@ -38,6 +38,7 @@ import {
   type InventorySyncSourceInput,
   type MigrationRequest,
   type OpenPortInfo,
+  type ProfileConnectionCredentials,
   type ProfileConnectionResult,
   type RdpConnectionConfig,
   type SerialConnectionConfig,
@@ -128,6 +129,9 @@ let trayController: SystemTrayController | null = null;
 let trayStateSnapshot: TrayStateSnapshot = { sessions: [], broadcastMode: false };
 let autoLockTimer: NodeJS.Timeout | undefined;
 let isQuitting = false;
+let quitConfirmed = false;
+let quitConfirmationPending = false;
+let sessionEnding = false;
 let servicesReadyResolve!: () => void;
 let servicesReadyReject!: (reason: unknown) => void;
 const servicesReady = new Promise<void>((resolveReady, rejectReady) => {
@@ -185,6 +189,41 @@ function showMainMessageBox(options: MessageBoxOptions): Promise<Electron.Messag
     : dialog.showMessageBox(options);
 }
 
+async function requestApplicationQuit(parent = mainWindow): Promise<void> {
+  if (quitConfirmationPending) return;
+  const count = trayStateSnapshot.sessions.length;
+  if (!quitConfirmed && !sessionEnding && count > 0) {
+    quitConfirmationPending = true;
+    try {
+      const result = parent && !parent.isDestroyed()
+        ? await dialog.showMessageBox(parent, {
+            type: "warning",
+            title: "Close All Sessions?",
+            message: `You have ${count} active remote connection tabs open. Are you sure you want to close all sessions and exit CyberGrid?`,
+            buttons: ["Close All & Exit", "Cancel"],
+            defaultId: 1,
+            cancelId: 1,
+            noLink: true,
+          })
+        : await dialog.showMessageBox({
+            type: "warning",
+            title: "Close All Sessions?",
+            message: `You have ${count} active remote connection tabs open. Are you sure you want to close all sessions and exit CyberGrid?`,
+            buttons: ["Close All & Exit", "Cancel"],
+            defaultId: 1,
+            cancelId: 1,
+            noLink: true,
+          });
+      if (result.response !== 0) return;
+      quitConfirmed = true;
+    } finally {
+      quitConfirmationPending = false;
+    }
+  }
+  isQuitting = true;
+  app.quit();
+}
+
 async function checkForUpdatesFromMenu(): Promise<void> {
   await updaterController.checkForUpdates(true);
 }
@@ -205,8 +244,7 @@ function installApplicationMenu(): void {
           label: "Exit",
           accelerator: "Alt+F4",
           click: () => {
-            isQuitting = true;
-            app.quit();
+            void requestApplicationQuit();
           },
         },
       ],
@@ -501,9 +539,14 @@ function createMainWindow(): BrowserWindow {
     if (preferencesController?.get().minimizeToTray && !isQuitting) {
       event.preventDefault();
       window.hide();
+    } else if (!isQuitting && trayStateSnapshot.sessions.length > 0) {
+      event.preventDefault();
+      void requestApplicationQuit(window);
     }
   });
   window.on("session-end", () => {
+    sessionEnding = true;
+    quitConfirmed = true;
     isQuitting = true;
   });
   window.on("enter-full-screen", () => syncFullscreenWindowChrome(window));
@@ -731,7 +774,6 @@ function normalizeConnectionConfig(value: unknown): SshConnectionConfig {
     singleLine: true,
   });
   const username = readString(value.username, "Username", {
-    required: true,
     maxLength: 128,
     singleLine: true,
   });
@@ -751,13 +793,33 @@ function normalizeConnectionConfig(value: unknown): SshConnectionConfig {
   return {
     host: host as string,
     port: readPort(value.port),
-    username: username as string,
+    username: username ?? "",
     password,
     privateKey,
     passphrase,
     readyTimeout: 15_000,
     enableLegacyAlgorithms: value.enableLegacyAlgorithms === true,
   };
+}
+
+function normalizeProfileConnectionCredentials(value: unknown): ProfileConnectionCredentials | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!isRecord(value)) throw new Error("Invalid interactive connection credentials.");
+  const username = readString(value.username, "Interactive username", {
+    maxLength: 128,
+    singleLine: true,
+  });
+  const password = readString(value.password, "Interactive password", {
+    maxLength: 4_096,
+    trim: false,
+  });
+  return { username, password };
+}
+
+function formatRdpUsername(username: string, domain?: string): string {
+  const normalizedDomain = domain?.trim();
+  if (!normalizedDomain || normalizedDomain === "." || username.includes("\\")) return username;
+  return `${normalizedDomain}\\${username}`;
 }
 
 function normalizeRdpConfig(value: unknown): RdpConnectionConfig {
@@ -1488,6 +1550,7 @@ function normalizePreferences(value: unknown): AppPreferences {
     minimizeToTray: value.minimizeToTray === true,
     startMinimized: value.startMinimized === true,
     launchAtLogin: value.launchAtLogin === true,
+    compactTreeView: value.compactTreeView !== false,
     masterPasswordEnabled,
     autoLockMinutes: masterPasswordEnabled ? autoLockMinutes : 0,
     clipboardClearSeconds,
@@ -1668,8 +1731,7 @@ function createSystemTray(): void {
       void checkForUpdatesFromMenu();
     },
     quit: () => {
-      isQuitting = true;
-      app.quit();
+      void requestApplicationQuit();
     },
   });
   trayController.create({
@@ -1709,7 +1771,10 @@ function lockApplication(reason: string, notifyRenderer: boolean): void {
   if (!isQuitting) void refreshTrayMenu();
 }
 
-async function connectionConfigForProfile(profileId: string): Promise<SshConnectionConfig> {
+async function connectionConfigForProfile(
+  profileId: string,
+  interactiveCredentials?: ProfileConnectionCredentials,
+): Promise<SshConnectionConfig> {
   const profile = requireVault().getConnectionProfile(profileId);
   if (profile.protocol !== "ssh") {
     throw new Error("Selected profile is not an SSH connection.");
@@ -1717,7 +1782,7 @@ async function connectionConfigForProfile(profileId: string): Promise<SshConnect
   const baseConfig: SshConnectionConfig = {
     host: resolveEnvironmentTokens(profile.host, "Host") as string,
     port: profile.port,
-    username: resolveEnvironmentTokens(profile.username, "Username") ?? "",
+    username: interactiveCredentials?.username ?? resolveEnvironmentTokens(profile.username, "Username") ?? "",
     readyTimeout: (profile.readyTimeoutSeconds ?? 15) * 1_000,
     keepaliveInterval: profile.keepAliveEnabled === false ? 0 : (profile.keepaliveSeconds ?? 10) * 1_000,
     totpCode: profile.totpSecret ? generateTotp(profile.totpSecret, {
@@ -1728,6 +1793,10 @@ async function connectionConfigForProfile(profileId: string): Promise<SshConnect
     enableLegacyAlgorithms:
       profile.enableLegacySshAlgorithms ?? profile.category === "network",
   };
+
+  if (interactiveCredentials?.password !== undefined) {
+    return { ...baseConfig, password: interactiveCredentials.password };
+  }
 
   if (profile.authType === "password") {
     return { ...baseConfig, password: resolveEnvironmentTokens(profile.password, "Password") };
@@ -1755,10 +1824,14 @@ async function connectionConfigForProfile(profileId: string): Promise<SshConnect
   };
 }
 
-async function connectProfile(profileId: string, sender: WebContents): Promise<ProfileConnectionResult> {
+async function connectProfile(
+  profileId: string,
+  sender: WebContents,
+  interactiveCredentials?: ProfileConnectionCredentials,
+): Promise<ProfileConnectionResult> {
   const profile = requireVault().getConnectionProfile(profileId);
   const host = resolveEnvironmentTokens(profile.host, profile.protocol === "serial" ? "Serial port" : "Host") as string;
-  const username = resolveEnvironmentTokens(profile.username, "Username") ?? "";
+  const username = interactiveCredentials?.username ?? resolveEnvironmentTokens(profile.username, "Username") ?? "";
   const context = {
     displayName: profile.name,
     host,
@@ -1784,7 +1857,7 @@ async function connectProfile(profileId: string, sender: WebContents): Promise<P
       return {
         protocol: "ssh",
         sessionId: await ssh.connect(
-          await connectionConfigForProfile(profileId),
+          await connectionConfigForProfile(profileId, interactiveCredentials),
           sender,
           auditContext("ssh", profile.name, `${host}:${profile.port}`, username, profile.group),
         ),
@@ -1793,7 +1866,16 @@ async function connectProfile(profileId: string, sender: WebContents): Promise<P
       };
     }
     case "rdp":
-      return { protocol: "rdp", sessionId: await requireRdp().connect({ host, port: profile.port, username }, sender), context, policy };
+      return {
+        protocol: "rdp",
+        sessionId: await requireRdp().connect({
+          host,
+          port: profile.port,
+          username: formatRdpUsername(username, profile.domain),
+        }, sender),
+        context,
+        policy,
+      };
     case "telnet":
     case "raw":
       return {
@@ -1885,9 +1967,13 @@ function registerIpcHandlers(): void {
     );
   });
 
-  ipcMain.handle(IPC_CHANNELS.profileConnect, async (event, profileId: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.profileConnect, async (event, profileId: unknown, credentials: unknown) => {
     assertTrustedSender(event);
-    return connectProfile(readUuid(profileId, "server profile ID"), event.sender);
+    return connectProfile(
+      readUuid(profileId, "server profile ID"),
+      event.sender,
+      normalizeProfileConnectionCredentials(credentials),
+    );
   });
 
   ipcMain.handle(IPC_CHANNELS.profileRunPostConnect, async (event, profileId: unknown) => {
@@ -1981,6 +2067,20 @@ function registerIpcHandlers(): void {
   ipcMain.handle(IPC_CHANNELS.rdpDisconnect, (event, sessionId: unknown) => {
     assertTrustedSender(event);
     requireRdp().disconnect(readUuid(sessionId, "RDP session ID"));
+  });
+
+  ipcMain.on(IPC_CHANNELS.rdpSetBounds, (event, sessionId: unknown, bounds: unknown) => {
+    if (!isTrustedSender(event)) return;
+    try {
+      requireRdp().setBounds(readUuid(sessionId, "RDP session ID"), normalizeWebBounds(bounds));
+    } catch (error) {
+      console.warn("Rejected embedded RDP bounds:", error);
+    }
+  });
+
+  ipcMain.on(IPC_CHANNELS.rdpSetVisible, (event, sessionId: unknown, visible: unknown) => {
+    if (!isTrustedSender(event) || typeof visible !== "boolean") return;
+    requireRdp().setVisible(readUuid(sessionId, "RDP session ID"), visible);
   });
 
   ipcMain.handle(IPC_CHANNELS.streamConnect, (event, config: unknown) => {
@@ -2685,15 +2785,26 @@ if (!hasSingleInstanceLock) {
 }
 
 let flushingAuditLogs = false;
+let auditLogsFlushed = false;
 
 app.on("before-quit", (event) => {
+  if (!quitConfirmed && !sessionEnding && trayStateSnapshot.sessions.length > 0) {
+    event.preventDefault();
+    void requestApplicationQuit();
+    return;
+  }
   isQuitting = true;
   lockApplication("Application is closing.", false);
   auditController.closeAll();
-  if (!flushingAuditLogs) {
+  if (!auditLogsFlushed && !flushingAuditLogs) {
     flushingAuditLogs = true;
     event.preventDefault();
-    void auditController.flush().finally(() => app.quit());
+    void auditController.flush().finally(() => {
+      auditLogsFlushed = true;
+      app.quit();
+    });
+  } else if (!auditLogsFlushed) {
+    event.preventDefault();
   }
 });
 

@@ -50,6 +50,9 @@ export class SshController {
     sender: WebContents,
     auditContext: AuditSessionContext,
   ): Promise<string> {
+    if (!config.username.trim()) {
+      throw new Error("SSH requires a username. Enter it at the interactive terminal prompt.");
+    }
     const { Client } = await loadSsh2();
     const sessionId = randomUUID();
     const client = new Client();
@@ -123,7 +126,10 @@ export class SshController {
       readyTimeout: config.readyTimeout ?? 15_000,
       keepaliveInterval: config.keepaliveInterval ?? 10_000,
       keepaliveCountMax: 3,
-      tryKeyboard: Boolean(config.password || config.totpCode),
+      // Network appliances frequently expose password authentication only through
+      // keyboard-interactive. Keep it enabled even when credentials were entered
+      // interactively in the renderer immediately before connecting.
+      tryKeyboard: true,
       algorithms: config.enableLegacyAlgorithms
         ? {
             kex: [
@@ -132,6 +138,7 @@ export class SshController {
               "diffie-hellman-group-exchange-sha1",
               "diffie-hellman-group-exchange-sha256",
               "ecdh-sha2-nistp256",
+              "curve25519-sha256",
             ],
             cipher: [
               "aes128-ctr",

@@ -19,6 +19,8 @@ import type {
   DiagnosticKind,
   MigrationRequest,
   InventorySyncSourceInput,
+  ProfileConnectionCredentials,
+  RdpBounds,
   RdpStatusEvent,
   SerialConnectionConfig,
   SerialDataEvent,
@@ -62,6 +64,8 @@ const IPC_CHANNELS: typeof import("../shared/ipc").IPC_CHANNELS = {
   rdpIsSupported: "cybergrid:rdp:is-supported",
   rdpConnect: "cybergrid:rdp:connect",
   rdpDisconnect: "cybergrid:rdp:disconnect",
+  rdpSetBounds: "cybergrid:rdp:set-bounds",
+  rdpSetVisible: "cybergrid:rdp:set-visible",
   rdpStatus: "cybergrid:rdp:status",
   vaultStatus: "cybergrid:vault:status",
   vaultCreate: "cybergrid:vault:create",
@@ -155,7 +159,8 @@ const IPC_CHANNELS: typeof import("../shared/ipc").IPC_CHANNELS = {
 
 const api: CyberGridApi = {
   profiles: {
-    connect: (profileId) => ipcRenderer.invoke(IPC_CHANNELS.profileConnect, profileId),
+    connect: (profileId, credentials?: ProfileConnectionCredentials) =>
+      ipcRenderer.invoke(IPC_CHANNELS.profileConnect, profileId, credentials),
     runPostConnect: (profileId) => ipcRenderer.invoke(IPC_CHANNELS.profileRunPostConnect, profileId),
   },
   ssh: {
@@ -202,6 +207,10 @@ const api: CyberGridApi = {
     isSupported: () => ipcRenderer.invoke(IPC_CHANNELS.rdpIsSupported),
     connect: (config) => ipcRenderer.invoke(IPC_CHANNELS.rdpConnect, config),
     disconnect: (sessionId) => ipcRenderer.invoke(IPC_CHANNELS.rdpDisconnect, sessionId),
+    setBounds: (sessionId: string, bounds: RdpBounds) =>
+      ipcRenderer.send(IPC_CHANNELS.rdpSetBounds, sessionId, bounds),
+    setVisible: (sessionId: string, visible: boolean) =>
+      ipcRenderer.send(IPC_CHANNELS.rdpSetVisible, sessionId, visible),
     onStatus: (listener) => {
       const handler = (_event: IpcRendererEvent, payload: RdpStatusEvent) => listener(payload);
       ipcRenderer.on(IPC_CHANNELS.rdpStatus, handler);

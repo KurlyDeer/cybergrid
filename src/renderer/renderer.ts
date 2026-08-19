@@ -32,6 +32,7 @@ type HealthStatusEvent = import("../shared/ipc").HealthStatusEvent;
 type MigrationFormat = import("../shared/ipc").MigrationFormat;
 type InventorySyncSourceInput = import("../shared/ipc").InventorySyncSourceInput;
 type InventorySyncSourceSummary = import("../shared/ipc").InventorySyncSourceSummary;
+type ProfileConnectionCredentials = import("../shared/ipc").ProfileConnectionCredentials;
 type ProfileConnectionResult = import("../shared/ipc").ProfileConnectionResult;
 type RdpConnectionConfig = import("../shared/ipc").RdpConnectionConfig;
 type RdpConnectionStatus = import("../shared/ipc").RdpConnectionStatus;
@@ -106,6 +107,9 @@ interface WorkspaceTab {
   statusElement: HTMLSpanElement;
   paneElement: HTMLDivElement;
   rdpMessageElement?: HTMLParagraphElement;
+  rdpViewportElement?: HTMLDivElement;
+  localInputHandler?: (data: string) => void;
+  localPromptCancel?: () => void;
   status: WorkspaceStatus;
   sftp?: SftpDirectoryListing;
   duplicate?: () => Promise<void>;
@@ -120,6 +124,7 @@ const DEFAULT_SETTINGS: AppPreferences = {
   minimizeToTray: true,
   startMinimized: false,
   launchAtLogin: false,
+  compactTreeView: true,
   masterPasswordEnabled: false,
   autoLockMinutes: 15,
   clipboardClearSeconds: 30,
@@ -470,6 +475,7 @@ const settingsForm = elementById<HTMLFormElement>("settings-form");
 const minimizeToTrayInput = elementById<HTMLInputElement>("minimize-to-tray");
 const startMinimizedInput = elementById<HTMLInputElement>("start-minimized");
 const launchAtLoginInput = elementById<HTMLInputElement>("launch-at-login");
+const compactTreeViewInput = elementById<HTMLInputElement>("compact-tree-view");
 const masterPasswordEnabledInput = elementById<HTMLInputElement>("enable-master-password");
 const newMasterPasswordFields = elementById<HTMLDivElement>("new-master-password-fields");
 const newMasterPasswordInput = elementById<HTMLInputElement>("new-master-password");
@@ -681,6 +687,7 @@ function applyTerminalAppearance(tab: WorkspaceTab, overrides?: TerminalAppearan
 function applySettings(settings: AppPreferences): void {
   currentSettings = settings;
   document.documentElement.dataset.theme = settings.theme;
+  document.documentElement.dataset.compactTree = settings.compactTreeView ? "true" : "false";
   document.documentElement.style.setProperty(
     "--accent",
     settings.theme === "custom"
@@ -1106,6 +1113,10 @@ function createTerminalTab(
   tab.terminal = terminal;
   tab.fitAddon = fitAddon;
   terminal.onData((data) => {
+    if (tab.localInputHandler) {
+      tab.localInputHandler(data);
+      return;
+    }
     if (broadcastMode && activeTabId === tab.id && isBroadcastCapable(tab)) {
       for (const target of selectedBroadcastTabs()) writeTerminalInput(target, data);
       return;
@@ -1119,6 +1130,66 @@ function createTerminalTab(
   rememberTerminalTab(tab);
   renderWorkspaceLayout();
   return tab;
+}
+
+function readTerminalPrompt(tab: WorkspaceTab, prompt: string, secret = false): Promise<string> {
+  const terminal = tab.terminal;
+  if (!terminal) return Promise.reject(new Error("Interactive SSH terminal is unavailable."));
+  terminal.write(prompt);
+  return new Promise<string>((resolve, reject) => {
+    let value = "";
+    let settled = false;
+    const finish = (result?: string, error?: Error): void => {
+      if (settled) return;
+      settled = true;
+      tab.localInputHandler = undefined;
+      tab.localPromptCancel = undefined;
+      terminal.write("\r\n");
+      if (error) reject(error); else resolve(result ?? "");
+    };
+    tab.localPromptCancel = () => finish(undefined, new Error("Interactive SSH login was cancelled."));
+    tab.localInputHandler = (data) => {
+      for (const character of data) {
+        if (character === "\u0003" || character === "\u001b") {
+          finish(undefined, new Error("Interactive SSH login was cancelled."));
+          return;
+        }
+        if (character === "\r" || character === "\n") {
+          finish(value);
+          return;
+        }
+        if (character === "\u007f" || character === "\b") {
+          if (value.length > 0) {
+            value = value.slice(0, -1);
+            if (!secret) terminal.write("\b \b");
+          }
+          continue;
+        }
+        if (character >= " " && character !== "\u007f") {
+          value += character;
+          if (!secret) terminal.write(character);
+        }
+      }
+    };
+    terminal.focus();
+  });
+}
+
+async function promptForSshCredentials(
+  tab: WorkspaceTab,
+  initialUsername: string,
+  needsPassword: boolean,
+): Promise<ProfileConnectionCredentials> {
+  const terminal = tab.terminal;
+  if (!terminal) throw new Error("Interactive SSH terminal is unavailable.");
+  terminal.writeln("\x1b[1;36mCyberGrid interactive SSH login\x1b[0m");
+  terminal.writeln("Credentials are used for this session only and are not saved.");
+  const username = initialUsername || (await readTerminalPrompt(tab, "login as: ")).trim();
+  if (!username) throw new Error("SSH login requires a username.");
+  const password = needsPassword
+    ? await readTerminalPrompt(tab, `${username}@${tab.context.host || tab.label}'s password: `, true)
+    : undefined;
+  return password === undefined ? { username } : { username, password };
 }
 
 function isBroadcastCapable(tab: WorkspaceTab): boolean {
@@ -1177,15 +1248,19 @@ function updateBroadcastControls(): void {
 function createRdpTab(label: string, config: RdpConnectionConfig): WorkspaceTab {
   const tab = createWorkspaceTab("rdp", label);
   tab.paneElement.classList.add("rdp-pane");
+  const viewport = document.createElement("div");
+  viewport.className = "rdp-viewport";
+  viewport.tabIndex = 0;
+  tab.rdpViewportElement = viewport;
   const canvas = document.createElement("div");
-  canvas.className = "rdp-canvas";
+  canvas.className = "rdp-canvas rdp-loading-card";
   const mark = createTextElement("div", "rdp-mark", "RDP");
   const title = document.createElement("h2");
   title.textContent = `${config.username}@${config.host}:${config.port}`;
   const message = document.createElement("p");
   message.textContent = "Preparing the native Windows Remote Desktop client...";
   tab.rdpMessageElement = message;
-  const note = createTextElement("div", "rdp-native-note", "The secure desktop surface runs in the Windows RDP client. This tab tracks its lifecycle.");
+  const note = createTextElement("div", "rdp-native-note", "The native Windows RDP surface is being docked into this tab.");
   const disconnectButton = document.createElement("button");
   disconnectButton.className = "secondary-button";
   disconnectButton.type = "button";
@@ -1194,7 +1269,8 @@ function createRdpTab(label: string, config: RdpConnectionConfig): WorkspaceTab 
     if (tab.rdpSessionId) void window.cybergrid.rdp.disconnect(tab.rdpSessionId);
   });
   canvas.append(mark, title, message, note, disconnectButton);
-  tab.paneElement.append(canvas);
+  viewport.append(canvas);
+  tab.paneElement.append(viewport);
   return tab;
 }
 
@@ -1220,6 +1296,14 @@ function updateWebBounds(tab: WorkspaceTab): void {
   if (!tab.webSessionId || activeTabId !== tab.id) return;
   const rect = tab.paneElement.getBoundingClientRect();
   window.cybergrid.web.setBounds(tab.webSessionId, {
+    x: rect.left, y: rect.top, width: rect.width, height: rect.height,
+  });
+}
+
+function updateRdpBounds(tab: WorkspaceTab): void {
+  if (!tab.rdpSessionId || !tab.rdpViewportElement || activeTabId !== tab.id) return;
+  const rect = tab.rdpViewportElement.getBoundingClientRect();
+  window.cybergrid.rdp.setBounds(tab.rdpSessionId, {
     x: rect.left, y: rect.top, width: rect.width, height: rect.height,
   });
 }
@@ -1258,12 +1342,18 @@ function renderWorkspaceLayout(): void {
     if (candidate.webSessionId) {
       window.cybergrid.web.setVisible(candidate.webSessionId, layoutMode === "single" && isActive);
     }
+    if (candidate.rdpSessionId) {
+      window.cybergrid.rdp.setVisible(candidate.rdpSessionId, layoutMode === "single" && isActive);
+    }
   }
   requestAnimationFrame(() => {
     for (const candidate of tabs.values()) {
       if (candidate.paneElement.classList.contains("active")) candidate.fitAddon?.fit();
     }
-    if (active) updateWebBounds(active);
+    if (active) {
+      updateWebBounds(active);
+      updateRdpBounds(active);
+    }
   });
 }
 
@@ -1280,6 +1370,7 @@ function activateTab(id: string): void {
     tab.terminal?.focus();
     tab.vncClient?.focus();
     updateWebBounds(tab);
+    updateRdpBounds(tab);
   });
   if (sftpDrawerOpen && tab.kind === "ssh" && tab.sessionId && tab.status === "connected") {
     if (tab.sftp) renderSftpListing(tab.sftp);
@@ -1298,6 +1389,7 @@ async function closeTab(id: string): Promise<void> {
   const tabOrder = [...tabs.keys()];
   const closedIndex = tabOrder.indexOf(id);
   if (tab.reconnectTimer !== undefined) window.clearTimeout(tab.reconnectTimer);
+  tab.localPromptCancel?.();
   tabs.delete(id);
   recentTerminalTabIds = recentTerminalTabIds.filter((tabId) => tabId !== id);
   if (tab.sessionId) {
@@ -1308,6 +1400,7 @@ async function closeTab(id: string): Promise<void> {
   }
   if (tab.rdpSessionId) {
     rdpSessions.delete(tab.rdpSessionId);
+    window.cybergrid.rdp.setVisible(tab.rdpSessionId, false);
     await window.cybergrid.rdp.disconnect(tab.rdpSessionId).catch(() => undefined);
     queuedRdpStatus.delete(tab.rdpSessionId);
   }
@@ -1395,7 +1488,10 @@ function toggleSidebar(): void {
   requestAnimationFrame(() => {
     tabs.get(activeTabId ?? "")?.fitAddon?.fit();
     const tab = activeTabId ? tabs.get(activeTabId) : undefined;
-    if (tab) updateWebBounds(tab);
+    if (tab) {
+      updateWebBounds(tab);
+      updateRdpBounds(tab);
+    }
   });
 }
 
@@ -1440,6 +1536,10 @@ function updateSshTabStatus(tab: WorkspaceTab, event: SshStatusEvent): void {
 function updateRdpTabStatus(tab: WorkspaceTab, event: RdpStatusEvent): void {
   updateTabStatus(tab, event.status, event.message);
   if (tab.rdpMessageElement) tab.rdpMessageElement.textContent = event.message ?? event.status;
+  tab.rdpViewportElement?.classList.toggle("embedded", event.status === "running");
+  if (tab.rdpSessionId && (event.status === "closed" || event.status === "error")) {
+    window.cybergrid.rdp.setVisible(tab.rdpSessionId, false);
+  }
 }
 
 function updateConnectionState(tab: WorkspaceTab, message?: string): void {
@@ -1481,6 +1581,8 @@ function attachRdpSession(tab: WorkspaceTab, sessionId: string): void {
   const status = queuedRdpStatus.get(sessionId);
   if (status) updateRdpTabStatus(tab, status);
   queuedRdpStatus.delete(sessionId);
+  window.cybergrid.rdp.setVisible(sessionId, activeTabId === tab.id);
+  requestAnimationFrame(() => updateRdpBounds(tab));
 }
 
 function attachStreamSession(tab: WorkspaceTab, sessionId: string): void {
@@ -1671,7 +1773,12 @@ async function connectSavedProfile(profile: ServerProfileSummary): Promise<void>
   const tab = createTabForProfile(profile);
   setTabConnecting(tab, `opening ${profile.protocol.toUpperCase()} profile ${profile.name} from the encrypted vault...`);
   try {
-    await attachProfileResult(tab, await window.cybergrid.profiles.connect(profile.id));
+    const credentials = profile.protocol === "ssh" && (
+      !profile.username || (!profile.hasPassword && !profile.privateKeyPath)
+    )
+      ? await promptForSshCredentials(tab, profile.username, !profile.hasPassword && !profile.privateKeyPath)
+      : undefined;
+    await attachProfileResult(tab, await window.cybergrid.profiles.connect(profile.id, credentials));
   } catch (error) {
     handleConnectionFailure(tab, error);
   }
@@ -1683,7 +1790,12 @@ async function connectQuickSsh(config: SshConnectionConfig): Promise<void> {
   });
   tab.duplicate = () => connectQuickSsh({ ...config });
   setTabConnecting(tab, `connecting to ${config.username}@${config.host}:${config.port}...`);
-  try { attachSshSession(tab, await window.cybergrid.ssh.connect(config)); }
+  try {
+    const credentials = !config.username || (config.password === undefined && !config.privateKey)
+      ? await promptForSshCredentials(tab, config.username, config.password === undefined && !config.privateKey)
+      : undefined;
+    attachSshSession(tab, await window.cybergrid.ssh.connect({ ...config, ...credentials }));
+  }
   catch (error) { handleConnectionFailure(tab, error); }
 }
 
@@ -1781,7 +1893,6 @@ function parseQuickConnect(value: string): QuickConnection {
   if (!host) throw new Error("Quick Connect requires a host.");
   const username = decodeURIComponent(url.username);
   if (protocol === "ssh") {
-    if (!username) throw new Error("SSH Quick Connect requires a username.");
     return { protocol, config: { host, port: Number(url.port || 22), username, password: decodeURIComponent(url.password) || quickPasswordInput.value || undefined } };
   }
   if (protocol === "rdp") {
@@ -3627,6 +3738,7 @@ function populateSettingsForm(settings: AppPreferences): void {
   minimizeToTrayInput.checked = settings.minimizeToTray;
   startMinimizedInput.checked = settings.startMinimized;
   launchAtLoginInput.checked = settings.launchAtLogin;
+  compactTreeViewInput.checked = settings.compactTreeView;
   masterPasswordEnabledInput.checked = settings.masterPasswordEnabled;
   autoLockInput.value = String(settings.autoLockMinutes);
   clipboardClearInput.value = String(settings.clipboardClearSeconds);
@@ -4514,6 +4626,7 @@ settingsForm.addEventListener("submit", async (event) => {
     minimizeToTray: minimizeToTrayInput.checked,
     startMinimized: startMinimizedInput.checked,
     launchAtLogin: launchAtLoginInput.checked,
+    compactTreeView: compactTreeViewInput.checked,
     masterPasswordEnabled: masterPasswordEnabledInput.checked,
     autoLockMinutes: masterPasswordEnabledInput.checked ? Number(autoLockInput.value) : 0,
     clipboardClearSeconds: Number(clipboardClearInput.value),
@@ -4653,7 +4766,10 @@ const resizeObserver = new ResizeObserver(() => {
     if (tab.paneElement.classList.contains("active")) tab.fitAddon?.fit();
   }
   const tab = activeTabId ? tabs.get(activeTabId) : undefined;
-  if (tab) updateWebBounds(tab);
+  if (tab) {
+    updateWebBounds(tab);
+    updateRdpBounds(tab);
+  }
 });
 resizeObserver.observe(terminalStack);
 

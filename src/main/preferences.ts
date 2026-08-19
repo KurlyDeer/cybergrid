@@ -14,6 +14,7 @@ export const DEFAULT_APP_PREFERENCES: AppPreferences = {
   minimizeToTray: true,
   startMinimized: false,
   launchAtLogin: false,
+  compactTreeView: true,
   masterPasswordEnabled: false,
   autoLockMinutes: 15,
   clipboardClearSeconds: 30,
@@ -67,6 +68,9 @@ function parseStoredPreferences(value: unknown): AppPreferences {
       : DEFAULT_APP_PREFERENCES.minimizeToTray,
     startMinimized: preferences.startMinimized === true,
     launchAtLogin: preferences.launchAtLogin === true,
+    compactTreeView: typeof preferences.compactTreeView === "boolean"
+      ? preferences.compactTreeView
+      : DEFAULT_APP_PREFERENCES.compactTreeView,
     masterPasswordEnabled: typeof preferences.masterPasswordEnabled === "boolean"
       ? preferences.masterPasswordEnabled
       : true,
