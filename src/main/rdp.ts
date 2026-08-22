@@ -33,10 +33,19 @@ using System;
 using System.Runtime.InteropServices;
 public static class CyberGridRdpHost {
   private const int GWL_STYLE = -16;
+  private const int GWL_EXSTYLE = -20;
   private const long WS_CHILD = 0x40000000L;
   private const long WS_POPUP = 0x80000000L;
   private const long WS_CAPTION = 0x00C00000L;
   private const long WS_THICKFRAME = 0x00040000L;
+  private const long WS_EX_DLGMODALFRAME = 0x00000001L;
+  private const long WS_EX_WINDOWEDGE = 0x00000100L;
+  private const long WS_EX_CLIENTEDGE = 0x00000200L;
+  private const long WS_EX_STATICEDGE = 0x00020000L;
+  private const uint SWP_NOMOVE = 0x0002;
+  private const uint SWP_NOSIZE = 0x0001;
+  private const uint SWP_NOZORDER = 0x0004;
+  private const uint SWP_FRAMECHANGED = 0x0020;
   private const uint WM_CLOSE = 0x0010;
   private delegate bool EnumWindowsProc(IntPtr hwnd, IntPtr state);
   [DllImport("user32.dll")] private static extern bool EnumWindows(EnumWindowsProc callback, IntPtr state);
@@ -46,6 +55,7 @@ public static class CyberGridRdpHost {
   [DllImport("user32.dll", EntryPoint="SetWindowLongPtrW")] private static extern IntPtr SetWindowLongPtr(IntPtr hwnd, int index, IntPtr value);
   [DllImport("user32.dll")] private static extern IntPtr SetParent(IntPtr child, IntPtr parent);
   [DllImport("user32.dll")] private static extern bool MoveWindow(IntPtr hwnd, int x, int y, int width, int height, bool repaint);
+  [DllImport("user32.dll")] private static extern bool SetWindowPos(IntPtr hwnd, IntPtr after, int x, int y, int width, int height, uint flags);
   [DllImport("user32.dll")] private static extern bool ShowWindow(IntPtr hwnd, int command);
   [DllImport("user32.dll")] private static extern bool PostMessage(IntPtr hwnd, uint message, IntPtr wParam, IntPtr lParam);
   public static IntPtr FindWindow(uint processId) {
@@ -62,7 +72,11 @@ public static class CyberGridRdpHost {
     long style = GetWindowLongPtr(child, GWL_STYLE).ToInt64();
     style = (style & ~WS_POPUP & ~WS_CAPTION & ~WS_THICKFRAME) | WS_CHILD;
     SetWindowLongPtr(child, GWL_STYLE, new IntPtr(style));
+    long exStyle = GetWindowLongPtr(child, GWL_EXSTYLE).ToInt64();
+    exStyle = exStyle & ~WS_EX_DLGMODALFRAME & ~WS_EX_WINDOWEDGE & ~WS_EX_CLIENTEDGE & ~WS_EX_STATICEDGE;
+    SetWindowLongPtr(child, GWL_EXSTYLE, new IntPtr(exStyle));
     SetParent(child, parent);
+    SetWindowPos(child, IntPtr.Zero, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
   }
   public static void Move(IntPtr hwnd, int x, int y, int width, int height) { MoveWindow(hwnd, x, y, width, height, true); }
   public static void SetVisible(IntPtr hwnd, bool visible) { ShowWindow(hwnd, visible ? 5 : 0); }
@@ -275,14 +289,24 @@ export class RdpController {
 
   private createConfiguration(config: RdpConnectionConfig): string {
     const address = config.host.includes(":") ? `[${config.host}]` : config.host;
+    const username = this.formatUsername(config.username, config.domain);
     return `\uFEFF${[
       "screen mode id:i:1", "use multimon:i:0", "session bpp:i:32",
-      `full address:s:${address}:${config.port}`, `username:s:${config.username}`,
+      "smart sizing:i:1", "dynamic resolution:i:1", "desktopwidth:i:1920", "desktopheight:i:1080",
+      "desktopscalefactor:i:100", "devicescalefactor:i:100",
+      `full address:s:${address}:${config.port}`, `username:s:${username}`,
       "prompt for credentials on client:i:1", "authentication level:i:2", "enablecredsspsupport:i:1",
       "redirectclipboard:i:1", "redirectprinters:i:0", "redirectcomports:i:0", "redirectsmartcards:i:0",
       "drivestoredirect:s:", "networkautodetect:i:1", "bandwidthautodetect:i:1", "compression:i:1",
       "connection type:i:7", "autoreconnection enabled:i:1", "promptcredentialonce:i:1", "",
     ].join("\r\n")}`;
+  }
+
+  private formatUsername(username: string, domain?: string): string {
+    const cleanUsername = username.trim().replace(/^~+/, "");
+    const cleanDomain = domain?.trim();
+    if (!cleanDomain || cleanDomain === "." || cleanUsername.includes("\\")) return cleanUsername;
+    return `${cleanDomain}\\${cleanUsername}`;
   }
 
   private disconnectForSender(sender: WebContents): void {

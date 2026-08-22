@@ -955,6 +955,11 @@
         height: 100%;
       }
 
+      .terminal-pane .xterm-screen {
+        filter: none !important;
+        backdrop-filter: none !important;
+      }
+
       .rdp-pane {
         padding: 0;
         overflow: hidden;
@@ -987,9 +992,11 @@
       }
 
       .rdp-viewport.embedded .rdp-loading-card {
-        opacity: 0;
+        display: none;
         pointer-events: none;
       }
+
+      .rdp-viewport.embedded { background: #000; }
 
       .rdp-mark {
         display: grid;
@@ -2279,6 +2286,12 @@
       .switch-tools-header { position: sticky; z-index: 1; top: 0; display: flex; min-height: 36px; align-items: center; justify-content: space-between; padding: 6px 8px; border-bottom: 1px solid var(--border); background: var(--panel); }
       .switch-tools-header strong { font-size: 11px; }
       .switch-tools-body { display: grid; gap: 12px; padding: 10px; }
+      .switch-model-badge { position: absolute; z-index: 8; top: 5px; left: 6px; max-width: min(340px, 55%); overflow: hidden; padding: 3px 7px; border: 1px solid color-mix(in srgb, var(--accent) 38%, var(--border)); border-radius: 3px; background: color-mix(in srgb, var(--panel) 94%, transparent); color: var(--muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; pointer-events: none; }
+      .switch-tools-model { margin: 0; padding: 6px 7px; border: 1px solid var(--border); border-radius: 4px; color: var(--accent); font-size: 10px; font-weight: 700; }
+      .switch-tools-accordion { border: 1px solid var(--border); border-radius: 4px; background: color-mix(in srgb, var(--panel-raised) 68%, transparent); }
+      .switch-tools-accordion > summary { padding: 7px 8px; color: var(--text); cursor: pointer; font-size: 10px; font-weight: 800; user-select: none; }
+      .switch-tools-accordion[open] > summary { border-bottom: 1px solid var(--border); }
+      .switch-tools-accordion-content { display: grid; gap: 5px; padding: 6px; }
       .switch-tools-section { display: grid; gap: 6px; }
       .switch-tools-section > strong { color: var(--muted); font-size: 9px; letter-spacing: .09em; text-transform: uppercase; }
       .switch-tools-command-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; }
@@ -2521,6 +2534,7 @@
           <div class="connection-section-title">Essentials</div>
           <div class="field"><label for="server-name">Connection name (optional)</label><input id="server-name" maxlength="100" placeholder="Defaults to hostname / IP" autocomplete="off" /></div>
           <div class="field" id="server-host-field"><label for="server-host" id="server-host-label">IP / Hostname</label><input id="server-host" required maxlength="2048" placeholder="admin@server.example.net:22" autocomplete="off" /></div>
+          <div class="field" id="server-domain-field"><label for="server-domain">Domain (optional)</label><input id="server-domain" maxlength="256" placeholder="CORP" autocomplete="off" /></div>
           <div class="field" id="server-serial-port-field" hidden><label for="server-serial-port">COM port</label><div class="serial-port-picker"><select id="server-serial-port"></select><button class="secondary-button" id="refresh-serial-ports" type="button">Refresh</button></div><span class="field-hint" id="server-serial-port-status">Local ports are detected on demand.</span></div>
           <div class="field" id="server-local-shell-field" hidden><label for="server-local-shell">Local shell</label><select id="server-local-shell"><option value="powershell">PowerShell</option><option value="cmd">Command Prompt</option><option value="wsl">WSL</option></select></div>
           <div class="field"><label for="server-protocol">Protocol</label><select id="server-protocol"><option value="ssh">SSH</option><option value="rdp">Windows RDP</option><option value="telnet">Telnet</option><option value="raw">RAW TCP</option><option value="vnc">VNC Desktop</option><option value="https">HTTPS Web</option><option value="http">HTTP Web</option><option value="serial">Serial / COM</option><option value="local">Local Terminal</option></select></div>
@@ -2544,7 +2558,6 @@
               <div class="subsection-label">Organization &amp; authentication</div>
               <div class="field"><label for="server-group">Stack / location</label><input id="server-group" list="group-options" maxlength="100" placeholder="Charlotte DC / ERP Stack" autocomplete="off" /><datalist id="group-options"></datalist></div>
               <div class="field" id="server-credential-profile-field"><label for="server-credential-profile">Vault credential profile</label><select id="server-credential-profile"><option value="">Connection-specific / inherited</option></select><span class="field-hint">Reusable credentials are managed from Tools → Credential Profiles.</span></div>
-              <div class="field" id="server-domain-field"><label for="server-domain">Domain</label><input id="server-domain" maxlength="256" placeholder="CORP" autocomplete="off" /></div>
               <div class="field" id="server-auth-field"><label for="auth-type">Credential mode</label><select id="auth-type"><option value="none">Interactive / inherited</option><option value="password">Password</option><option value="privateKey">SSH private key</option></select></div>
               <div class="field"><label for="server-port">Port override</label><input id="server-port" type="number" min="1" max="65535" value="22" required /></div>
               <div class="field"><label for="server-timeout">Connection timeout (seconds)</label><input id="server-timeout" type="number" min="1" max="300" placeholder="Inherited / 15" /></div>

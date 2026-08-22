@@ -62,6 +62,7 @@ type SshConnectionConfig = import("../shared/ipc").SshConnectionConfig;
 type SshConnectionStatus = import("../shared/ipc").SshConnectionStatus;
 type SshDataEvent = import("../shared/ipc").SshDataEvent;
 type SshStatusEvent = import("../shared/ipc").SshStatusEvent;
+type SwitchModelEvent = import("../shared/ipc").SwitchModelEvent;
 type StreamConnectionConfig = import("../shared/ipc").StreamConnectionConfig;
 type StreamDataEvent = import("../shared/ipc").StreamDataEvent;
 type StreamStatusEvent = import("../shared/ipc").StreamStatusEvent;
@@ -127,6 +128,11 @@ interface WorkspaceTab {
   quickBackupButton?: HTMLButtonElement;
   quickBackupStatus?: HTMLSpanElement;
   switchCommandButtons?: HTMLButtonElement[];
+  switchModelBadge?: HTMLSpanElement;
+  switchToolsModel?: HTMLParagraphElement;
+  sshPasswordRetry?: (password: string) => Promise<void>;
+  sshAuthRetryCount?: number;
+  sshAuthRetryPrompting?: boolean;
 }
 
 const DEFAULT_SETTINGS: AppPreferences = {
@@ -164,6 +170,7 @@ const vncSessions = new Map<string, WorkspaceTab>();
 const webSessions = new Map<string, WorkspaceTab>();
 const queuedSshData = new Map<string, string[]>();
 const queuedSshStatus = new Map<string, SshStatusEvent>();
+const queuedSwitchModels = new Map<string, SwitchModelEvent>();
 const queuedRdpStatus = new Map<string, RdpStatusEvent>();
 const queuedStreamData = new Map<string, string[]>();
 const queuedStreamStatus = new Map<string, StreamStatusEvent>();
@@ -216,6 +223,7 @@ const excludedBroadcastGroups = new Set<string>();
 let currentSettings: AppPreferences = { ...DEFAULT_SETTINGS };
 let quickSnippetToolbarVisible = localStorage.getItem(QUICK_SNIPPET_TOOLBAR_KEY) === "true";
 let draggedProfileId: string | null = null;
+let copiedProfileId: string | null = null;
 
 function elementById<T extends HTMLElement>(id: string): T {
   const element = document.getElementById(id);
@@ -1198,6 +1206,9 @@ function createTerminalTab(
     fontSize: terminalSettings.fontSize,
     lineHeight: appearance?.lineHeight ?? 1.18,
     scrollback: 10_000,
+    scrollOnUserInput: true,
+    smoothScrollDuration: 0,
+    fastScrollSensitivity: 5,
     allowTransparency: true,
     theme: terminalTheme(terminalSettings),
   });
@@ -1227,6 +1238,29 @@ function createTerminalTab(
   terminal.onResize(({ cols, rows }) => {
     if (tab.kind === "ssh" && tab.sessionId) window.cybergrid.ssh.resize(tab.sessionId, cols, rows);
     if (tab.kind === "local" && tab.localSessionId) window.cybergrid.local.resize(tab.localSessionId, cols, rows);
+  });
+  const pasteClipboard = async (): Promise<void> => {
+    try {
+      const text = await navigator.clipboard.readText();
+      if (!text) return;
+      if (tab.localInputHandler) tab.localInputHandler(text);
+      else writeTerminalInput(tab, text);
+      terminal.focus();
+    } catch (error) {
+      connectionState.textContent = `Clipboard paste failed: ${errorMessage(error)}`;
+    }
+  };
+  terminal.attachCustomKeyEventHandler((event) => {
+    if (event.type === "keydown" && event.ctrlKey && event.shiftKey && event.key.toLowerCase() === "v") {
+      void pasteClipboard();
+      return false;
+    }
+    return true;
+  });
+  tab.paneElement.addEventListener("contextmenu", (event) => {
+    if (!(event.target as HTMLElement).closest(".xterm")) return;
+    event.preventDefault();
+    void pasteClipboard();
   });
   layoutMode = requestedLayout;
   rememberTerminalTab(tab);
@@ -1502,6 +1536,7 @@ async function closeTab(id: string): Promise<void> {
     await window.cybergrid.ssh.disconnect(tab.sessionId).catch(() => undefined);
     queuedSshData.delete(tab.sessionId);
     queuedSshStatus.delete(tab.sessionId);
+    queuedSwitchModels.delete(tab.sessionId);
   }
   if (tab.rdpSessionId) {
     rdpSessions.delete(tab.rdpSessionId);
@@ -1644,6 +1679,7 @@ function scheduleAutoReconnect(tab: WorkspaceTab): void {
 }
 
 function updateSshTabStatus(tab: WorkspaceTab, event: SshStatusEvent): void {
+  if (event.status === "connected") tab.sshAuthRetryCount = 0;
   updateTabStatus(tab, event.status, event.message);
 }
 
@@ -1677,12 +1713,16 @@ function replayBufferedData(tab: WorkspaceTab, sessionId: string, queue: Map<str
 }
 
 function attachSshSession(tab: WorkspaceTab, sessionId: string): void {
+  if (tab.sessionId && tab.sessionId !== sessionId) sshSessions.delete(tab.sessionId);
   tab.sessionId = sessionId;
   sshSessions.set(sessionId, tab);
   replayBufferedData(tab, sessionId, queuedSshData);
   const status = queuedSshStatus.get(sessionId);
   if (status) updateSshTabStatus(tab, status);
   queuedSshStatus.delete(sessionId);
+  const model = queuedSwitchModels.get(sessionId);
+  if (model) applySwitchModel(tab, model);
+  queuedSwitchModels.delete(sessionId);
   tab.fitAddon?.fit();
   if (tab.terminal) window.cybergrid.ssh.resize(sessionId, tab.terminal.cols, tab.terminal.rows);
   if (tab.quickBackupButton) tab.quickBackupButton.disabled = false;
@@ -1808,7 +1848,65 @@ function handleLocalData(event: LocalTerminalDataEvent): void { queueData(event,
 
 function handleSshStatus(event: SshStatusEvent): void {
   const tab = sshSessions.get(event.sessionId);
-  if (tab) updateSshTabStatus(tab, event); else queuedSshStatus.set(event.sessionId, event);
+  if (!tab) {
+    queuedSshStatus.set(event.sessionId, event);
+    return;
+  }
+  if (event.status === "error" && isSshAuthenticationFailure(event.message) && tab.sshPasswordRetry) {
+    void retrySshPassword(tab, event);
+    return;
+  }
+  updateSshTabStatus(tab, event);
+}
+
+function isSshAuthenticationFailure(message?: string): boolean {
+  return /(?:all configured authentication methods failed|authentication failed|permission denied|access denied)/i.test(message ?? "");
+}
+
+async function retrySshPassword(tab: WorkspaceTab, event: SshStatusEvent): Promise<void> {
+  if (tab.sshAuthRetryPrompting || !tab.sshPasswordRetry || !tabs.has(tab.id)) return;
+  const attempts = tab.sshAuthRetryCount ?? 0;
+  sshSessions.delete(event.sessionId);
+  if (tab.sessionId === event.sessionId) tab.sessionId = undefined;
+  if (attempts >= 3) {
+    updateTabStatus(tab, "error", "SSH authentication failed after 3 password retries.");
+    return;
+  }
+  tab.sshAuthRetryPrompting = true;
+  tab.sshAuthRetryCount = attempts + 1;
+  tab.terminal?.writeln("\r\n\x1b[31mAccess denied. Please try again.\x1b[0m");
+  try {
+    const password = await readTerminalPrompt(
+      tab,
+      `${tab.context.username || "SSH user"}'s password (retry ${attempts + 1}/3): `,
+      true,
+    );
+    if (!password) throw new Error("A password is required to retry SSH authentication.");
+    setTabConnecting(tab, `retrying SSH authentication (${attempts + 1}/3)...`);
+    await tab.sshPasswordRetry(password);
+  } catch (error) {
+    handleConnectionFailure(tab, error);
+  } finally {
+    tab.sshAuthRetryPrompting = false;
+  }
+}
+
+function applySwitchModel(tab: WorkspaceTab, event: SwitchModelEvent): void {
+  const label = `Model: ${event.model}`;
+  if (tab.switchModelBadge) {
+    tab.switchModelBadge.textContent = label;
+    tab.switchModelBadge.hidden = false;
+    tab.switchModelBadge.title = `${event.vendor.toUpperCase()} hardware detected automatically`;
+  }
+  if (tab.switchToolsModel) {
+    tab.switchToolsModel.textContent = label;
+    tab.switchToolsModel.title = `${event.vendor.toUpperCase()} hardware detected automatically`;
+  }
+}
+
+function handleSwitchModel(event: SwitchModelEvent): void {
+  const tab = sshSessions.get(event.sessionId);
+  if (tab) applySwitchModel(tab, event); else queuedSwitchModels.set(event.sessionId, event);
 }
 function handleRdpStatus(event: RdpStatusEvent): void {
   const tab = rdpSessions.get(event.sessionId);
@@ -1840,6 +1938,14 @@ function installSwitchToolsDrawer(tab: WorkspaceTab, profile?: ServerProfileSumm
   const supportedTerminal = tab.kind === "ssh" || tab.kind === "telnet" || tab.kind === "raw" || tab.kind === "serial";
   if (!supportedTerminal) return;
 
+  if (tab.kind === "ssh") {
+    const modelBadge = createTextElement("span", "switch-model-badge", "Model: Detecting...") as HTMLSpanElement;
+    modelBadge.hidden = true;
+    modelBadge.title = "Switch model is detected automatically after SSH connects";
+    tab.switchModelBadge = modelBadge;
+    tab.paneElement.append(modelBadge);
+  }
+
   const toggle = document.createElement("button");
   toggle.className = "switch-tools-toggle";
   toggle.type = "button";
@@ -1860,9 +1966,49 @@ function installSwitchToolsDrawer(tab: WorkspaceTab, profile?: ServerProfileSumm
   close.setAttribute("aria-label", "Close switch tools");
   header.append(title, close);
   const body = createTextElement("div", "switch-tools-body", "");
+  const model = createTextElement(
+    "p",
+    "switch-tools-model",
+    tab.kind === "ssh" ? "Model: Detecting..." : `Terminal: ${tab.kind.toUpperCase()}`,
+  ) as HTMLParagraphElement;
+  tab.switchToolsModel = model;
   const status = createTextElement("p", "switch-tools-status", profile
     ? `Target: ${profile.host}`
     : "Save this connection to enable backup snapshots and diagnostics.") as HTMLParagraphElement;
+
+  const accordion = (label: string, open = false): { section: HTMLDetailsElement; content: HTMLDivElement } => {
+    const section = document.createElement("details");
+    section.className = "switch-tools-accordion";
+    section.open = open;
+    const summary = document.createElement("summary");
+    summary.textContent = label;
+    const content = createTextElement("div", "switch-tools-accordion-content", "") as HTMLDivElement;
+    section.append(summary, content);
+    return { section, content };
+  };
+
+  const commandButtons: HTMLButtonElement[] = [];
+  const addCommandButtons = (
+    content: HTMLElement,
+    commands: ReadonlyArray<{ command: string; tooltip: string }>,
+  ): void => {
+    const grid = createTextElement("div", "switch-tools-command-grid", "");
+    for (const item of commands) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.disabled = true;
+      button.textContent = item.command;
+      button.title = item.tooltip;
+      button.addEventListener("click", () => {
+        writeTerminalInput(tab, commandForTerminal(item.command));
+        status.textContent = `Sent: ${item.command}`;
+        tab.terminal?.focus();
+      });
+      commandButtons.push(button);
+      grid.append(button);
+    }
+    content.append(grid);
+  };
 
   const setOpen = (open: boolean): void => {
     drawer.hidden = !open;
@@ -1877,9 +2023,9 @@ function installSwitchToolsDrawer(tab: WorkspaceTab, profile?: ServerProfileSumm
   toggle.addEventListener("click", () => setOpen(true));
   close.addEventListener("click", () => setOpen(false));
 
+  body.append(model);
+  const backupSection = accordion("📁 Backups", true);
   if (profile?.protocol === "ssh" && profile.category === "network") {
-    const backupSection = createTextElement("section", "switch-tools-section", "");
-    backupSection.append(createTextElement("strong", "", "Configuration backup"));
     const backupButton = document.createElement("button");
     backupButton.type = "button";
     backupButton.disabled = true;
@@ -1898,41 +2044,52 @@ function installSwitchToolsDrawer(tab: WorkspaceTab, profile?: ServerProfileSumm
         backupButton.disabled = !tab.sessionId || tab.status !== "connected";
       }
     });
-    backupSection.append(backupButton);
-    body.append(backupSection);
+    backupSection.content.append(backupButton);
     tab.quickBackupButton = backupButton;
     tab.quickBackupStatus = status;
+  } else {
+    const unavailable = document.createElement("button");
+    unavailable.type = "button";
+    unavailable.disabled = true;
+    unavailable.textContent = "One-Click Backup Snapshot";
+    unavailable.title = "Save this as an SSH Network Device profile to enable timestamped configuration backups";
+    backupSection.content.append(unavailable);
   }
+  body.append(backupSection.section);
 
-  const commandSection = createTextElement("section", "switch-tools-section", "");
-  commandSection.append(createTextElement("strong", "", "Quick command snippets"));
-  const commandGrid = createTextElement("div", "switch-tools-command-grid", "");
-  const commandButtons: HTMLButtonElement[] = [];
-  for (const command of ["show ip int brief", "show log", "show vlan", "show arp"]) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.disabled = true;
-    button.textContent = command;
-    button.addEventListener("click", () => {
-      writeTerminalInput(tab, commandForTerminal(command));
-      status.textContent = `Sent: ${command}`;
-      tab.terminal?.focus();
-    });
-    commandButtons.push(button);
-    commandGrid.append(button);
-  }
-  commandSection.append(commandGrid);
-  body.append(commandSection);
-  tab.switchCommandButtons = commandButtons;
+  const interfaces = accordion("🌐 Interfaces & VLANs");
+  addCommandButtons(interfaces.content, [
+    { command: "show ip int brief", tooltip: "Summarize interface addresses and operational state" },
+    { command: "show vlan", tooltip: "List configured VLANs and their assigned ports" },
+    { command: "show interfaces status", tooltip: "Show physical link, speed, duplex, and VLAN status" },
+    { command: "show etherchannel summary", tooltip: "Summarize link aggregation and port-channel health" },
+  ]);
+  body.append(interfaces.section);
 
+  const system = accordion("📋 System & Logs");
+  addCommandButtons(system.content, [
+    { command: "show log", tooltip: "Display recent system and event log entries" },
+    { command: "show tech-support", tooltip: "Collect a detailed support and troubleshooting report" },
+    { command: "show running-config", tooltip: "Display the active running configuration" },
+    { command: "show inventory", tooltip: "List hardware chassis, modules, and serial numbers" },
+  ]);
+  body.append(system.section);
+
+  const diagnosticsSection = accordion("🔍 Diagnostics");
+  addCommandButtons(diagnosticsSection.content, [
+    { command: "show mac address-table", tooltip: "Display learned MAC addresses and switch ports" },
+    { command: "show arp", tooltip: "Display the IP-to-MAC address resolution table" },
+    { command: "show cdp neighbors", tooltip: "List directly connected Cisco Discovery Protocol neighbors" },
+  ]);
   if (profile && profile.protocol !== "serial" && profile.protocol !== "local") {
-    const diagnosticsSection = createTextElement("section", "switch-tools-section", "");
-    diagnosticsSection.append(createTextElement("strong", "", "Diagnostics"));
     const diagnosticsGrid = createTextElement("div", "switch-tools-command-grid", "");
     for (const [label, kind] of [["Ping", "ping"], ["Traceroute", "traceroute"]] as const) {
       const button = document.createElement("button");
       button.type = "button";
       button.textContent = label;
+      button.title = label === "Ping"
+        ? "Run an inline reachability test against the active connection"
+        : "Trace the network route to the active connection";
       button.addEventListener("click", async () => {
         button.disabled = true;
         status.textContent = `${label} running against ${profile.host}...`;
@@ -1947,9 +2104,10 @@ function installSwitchToolsDrawer(tab: WorkspaceTab, profile?: ServerProfileSumm
       });
       diagnosticsGrid.append(button);
     }
-    diagnosticsSection.append(diagnosticsGrid);
-    body.append(diagnosticsSection);
+    diagnosticsSection.content.append(diagnosticsGrid);
   }
+  body.append(diagnosticsSection.section);
+  tab.switchCommandButtons = commandButtons;
 
   body.append(status);
   drawer.append(header, body);
@@ -1958,7 +2116,9 @@ function installSwitchToolsDrawer(tab: WorkspaceTab, profile?: ServerProfileSumm
 
 function createTabForProfile(profile: ServerProfileSummary): WorkspaceTab {
   let tab: WorkspaceTab;
-  if (profile.protocol === "rdp") tab = createRdpTab(profile.name, { host: profile.host, port: profile.port, username: profile.username });
+  if (profile.protocol === "rdp") tab = createRdpTab(profile.name, {
+    host: profile.host, port: profile.port, username: profile.username, domain: profile.domain,
+  });
   else if (profile.protocol === "vnc") tab = createVncTab(profile.name);
   else if (profile.protocol === "http" || profile.protocol === "https") tab = createWebTab(profile.name, profile.protocol);
   else tab = createTerminalTab(profile.name, profile.protocol, {
@@ -1993,6 +2153,12 @@ function handleConnectionFailure(tab: WorkspaceTab, error: unknown): void {
 
 async function connectSavedProfile(profile: ServerProfileSummary): Promise<void> {
   const tab = createTabForProfile(profile);
+  if (profile.protocol === "ssh") {
+    tab.sshPasswordRetry = async (password) => {
+      const username = tab.context.username || profile.username;
+      await attachProfileResult(tab, await window.cybergrid.profiles.connect(profile.id, { username, password }));
+    };
+  }
   setTabConnecting(tab, `opening ${profile.protocol.toUpperCase()} profile ${profile.name} from the encrypted vault...`);
   try {
     const credentials = profile.protocol === "ssh" && (
@@ -2011,12 +2177,21 @@ async function connectQuickSsh(config: SshConnectionConfig): Promise<void> {
     host: config.host, ip: config.host, username: config.username, group: "Quick Connect", port: config.port,
   });
   tab.duplicate = () => connectQuickSsh({ ...config });
+  tab.sshPasswordRetry = async (password) => {
+    config.password = password;
+    attachSshSession(tab, await window.cybergrid.ssh.connect({ ...config, password }));
+  };
   setTabConnecting(tab, `connecting to ${config.username}@${config.host}:${config.port}...`);
   try {
     const credentials = !config.username || (config.password === undefined && !config.privateKey)
       ? await promptForSshCredentials(tab, config.username, config.password === undefined && !config.privateKey)
       : undefined;
-    attachSshSession(tab, await window.cybergrid.ssh.connect({ ...config, ...credentials }));
+    if (credentials?.username) {
+      config.username = credentials.username;
+      tab.context.username = credentials.username;
+    }
+    if (credentials?.password !== undefined) config.password = credentials.password;
+    attachSshSession(tab, await window.cybergrid.ssh.connect({ ...config }));
   }
   catch (error) { handleConnectionFailure(tab, error); }
 }
@@ -3109,6 +3284,32 @@ async function deleteSelectedTreeItems(): Promise<void> {
   }
 }
 
+function pasteDestinationGroup(): string | undefined {
+  const selectedFolder = [...selectedTreeKeys].reverse().find((key) => key.startsWith("folder:"));
+  if (selectedFolder) return selectedFolder.slice("folder:".length);
+  const selectedProfileKey = [...selectedTreeKeys].reverse().find((key) => key.startsWith("profile:"));
+  const selected = selectedProfileKey
+    ? savedProfiles.find((profile) => profile.id === selectedProfileKey.slice("profile:".length))
+    : undefined;
+  return selected?.group;
+}
+
+async function duplicateConnection(profileId: string, group?: string): Promise<void> {
+  try {
+    const duplicate = await window.cybergrid.vault.duplicateProfile(profileId, group);
+    await refreshProfiles();
+    const treeKey = profileTreeKey(duplicate.id);
+    selectedTreeKeys.clear();
+    selectedTreeKeys.add(treeKey);
+    treeSelectionAnchor = treeKey;
+    selectedProfileId = duplicate.id;
+    applyTreeSelectionVisuals();
+    connectionState.textContent = `Created ${duplicate.name} in ${duplicate.group}.`;
+  } catch (error) {
+    window.alert(errorMessage(error));
+  }
+}
+
 function openServerContextMenu(event: MouseEvent, profile: ServerProfileSummary): void {
   event.preventDefault();
   event.stopPropagation();
@@ -3129,6 +3330,10 @@ function openServerContextMenu(event: MouseEvent, profile: ServerProfileSummary)
   addAction("Connection properties...", () => {
     closeServerContextMenu();
     openServerModal(profile);
+  });
+  addAction("Duplicate Connection", () => {
+    closeServerContextMenu();
+    void duplicateConnection(profile.id, profile.group);
   });
   const selectedCount = selectedProfileIdsForTree().length;
   addAction(`Delete Selected (${selectedCount})`, () => void deleteSelectedTreeItems(), selectedCount === 0);
@@ -4116,7 +4321,7 @@ function openServerModal(profile?: ServerProfileSummary): void {
   serverForm.reset();
   editingProfileId = profile?.id ?? null;
   serverModalTitle.textContent = profile ? "Connection Properties" : "Add Connection";
-  serverProtocolInput.value = profile?.protocol ?? "ssh";
+  serverProtocolInput.value = profile?.protocol ?? CATEGORY_DEFAULT_PROTOCOL.server;
   serverBaudRateInput.value = "9600";
   serverInheritFolderInput.checked = profile?.inheritFolderDefaults ?? true;
   serverKeepaliveEnabledInput.checked = profile?.keepAliveEnabled ?? true;
@@ -4135,7 +4340,9 @@ function openServerModal(profile?: ServerProfileSummary): void {
     serverNameInput.value = profile.name;
     serverHostInput.value = profile.host;
     serverPortInput.value = String(profile.port);
-    serverUsernameInput.value = profile.username.replace(profile.domain ? `${profile.domain}\\` : "", "");
+    serverUsernameInput.value = profile.username
+      .replace(profile.domain ? `${profile.domain}\\` : "", "")
+      .replace(/^~+/, "");
     serverGroupInput.value = profile.group;
     serverTagsInput.value = profile.tags.join(", ");
     serverFavoriteInput.checked = profile.favorite;
@@ -5232,6 +5439,29 @@ commandPalette.addEventListener("click", (event) => {
 });
 
 document.addEventListener("keydown", (event) => {
+  const target = event.target as HTMLElement | null;
+  const editable = target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement ||
+    target instanceof HTMLSelectElement || Boolean(target?.isContentEditable);
+  const sidebarFocused = profileTree.contains(document.activeElement);
+  if (!editable && sidebarFocused && (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "c") {
+    const profileIds = [...selectedTreeKeys]
+      .filter((key) => key.startsWith("profile:"))
+      .map((key) => key.slice("profile:".length));
+    if (profileIds.length === 1) {
+      event.preventDefault();
+      copiedProfileId = profileIds[0] ?? null;
+      const profile = savedProfiles.find((candidate) => candidate.id === copiedProfileId);
+      connectionState.textContent = profile ? `Copied ${profile.name}. Press Ctrl+V to duplicate it.` : "Connection copied.";
+    }
+    return;
+  }
+  if (!editable && sidebarFocused && (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "v") {
+    if (copiedProfileId) {
+      event.preventDefault();
+      void duplicateConnection(copiedProfileId, pasteDestinationGroup());
+    }
+    return;
+  }
   if (event.key === "Escape") {
     closeServerContextMenu();
   } else if (event.key === "Delete" && selectedTreeKeys.size > 0 && profileTree.contains(document.activeElement)) {
@@ -5248,6 +5478,7 @@ window.addEventListener("blur", closeServerContextMenu);
 
 window.cybergrid.ssh.onData(handleSshData);
 window.cybergrid.ssh.onStatus(handleSshStatus);
+window.cybergrid.ssh.onModelDetected(handleSwitchModel);
 window.cybergrid.sftp.onProgress(handleSftpProgress);
 window.cybergrid.rdp.onStatus(handleRdpStatus);
 window.cybergrid.stream.onData(handleStreamData);

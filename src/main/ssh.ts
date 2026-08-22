@@ -13,6 +13,7 @@ import {
   type SshConnectionStatus,
   type SshStatusEvent,
   type SwitchBackupResult,
+  type SwitchModelEvent,
 } from "../shared/ipc";
 
 type Client = import("ssh2").Client;
@@ -30,6 +31,7 @@ interface SshSession {
   forwardServer?: Server;
   closed: boolean;
   history: string;
+  modelProbeStarted: boolean;
 }
 
 let ssh2ModulePromise: Promise<typeof import("ssh2")> | undefined;
@@ -65,6 +67,7 @@ export class SshController {
       sender,
       closed: false,
       history: "",
+      modelProbeStarted: false,
     };
 
     this.sessions.set(sessionId, session);
@@ -104,6 +107,7 @@ export class SshController {
           });
 
           this.emitStatus(session, "connected", `Connected to ${config.host}.`);
+          void this.detectSwitchModel(session);
         },
       );
     });
@@ -465,6 +469,85 @@ export class SshController {
     if (/\b(?:aruba|procurve|hewlett[- ]packard|hpe|comware)\b/i.test(output)) return "hp";
     if (/\b(?:cisco|ios(?: xe)?|nx-os|catalyst)\b/i.test(output)) return "cisco";
     return "unknown";
+  }
+
+  private async detectSwitchModel(session: SshSession): Promise<void> {
+    if (session.modelProbeStarted || session.closed) return;
+    session.modelProbeStarted = true;
+    const commands = [
+      "show version | include Cisco|IOS|Model|Forti|ProCurve",
+      "show version",
+      "get system status",
+    ];
+    for (const command of commands) {
+      if (session.closed) return;
+      try {
+        const output = await this.execProbe(session, command, 7_000);
+        const identity = this.parseSwitchIdentity(output);
+        if (identity) {
+          this.emitSwitchModel(session, identity.vendor, identity.model);
+          return;
+        }
+      } catch {
+        // Some appliances disable SSH exec channels while still allowing an
+        // interactive shell. Fingerprinting is best-effort and never disrupts it.
+      }
+    }
+  }
+
+  private execProbe(session: SshSession, command: string, timeoutMs: number): Promise<string> {
+    return new Promise<string>((resolve, reject) => {
+      let settled = false;
+      let output = "";
+      const timeout = setTimeout(() => finish(), timeoutMs);
+      timeout.unref();
+      const finish = (error?: Error): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        if (error) reject(error);
+        else resolve(output.slice(0, 128_000));
+      };
+      session.client.exec(command, (error, channel) => {
+        if (error) {
+          finish(error);
+          return;
+        }
+        channel.on("data", (data: Buffer) => { output += data.toString("utf8"); });
+        channel.stderr.on("data", (data: Buffer) => { output += data.toString("utf8"); });
+        channel.once("error", finish);
+        channel.once("close", () => finish());
+      });
+    });
+  }
+
+  private parseSwitchIdentity(output: string): { vendor: SwitchBackupResult["vendor"]; model: string } | undefined {
+    if (!output.trim()) return undefined;
+    const forti = output.match(/\b(FortiSwitch[- ]?[A-Z0-9-]+)\b/i);
+    if (forti?.[1]) return { vendor: "fortinet", model: forti[1].replace(/FortiSwitch\s+/i, "FortiSwitch-") };
+
+    const ciscoModel = output.match(/(?:Model\s+(?:Number|number)|cisco)\s*[: ]\s*(WS-C\d+[A-Z0-9-]*|C\d{3,4}[A-Z0-9-]*)\b/i)?.[1];
+    if (ciscoModel || /\b(?:Cisco|IOS(?: XE)?|Catalyst)\b/i.test(output)) {
+      const numeric = ciscoModel?.match(/(?:WS-C|C)(\d{3,4})/i)?.[1];
+      return { vendor: "cisco", model: numeric ? `Cisco Catalyst ${numeric}` : "Cisco network device" };
+    }
+
+    const hpModel = output.match(/\b(?:ProCurve|Aruba)\s+(\d{3,4}[A-Z0-9-]*)\b/i)?.[1]
+      ?? output.match(/\b(\d{3,4}[A-Z0-9-]*)\s+(?:Switch|Series)\b/i)?.[1];
+    if (hpModel || /\b(?:HP|HPE|ProCurve|Aruba)\b/i.test(output)) {
+      return { vendor: "hp", model: hpModel ? `HP ProCurve ${hpModel}` : "HP network device" };
+    }
+    return undefined;
+  }
+
+  private emitSwitchModel(
+    session: SshSession,
+    vendor: SwitchBackupResult["vendor"],
+    model: string,
+  ): void {
+    if (session.closed || session.sender.isDestroyed()) return;
+    const payload: SwitchModelEvent = { sessionId: session.id, vendor, model };
+    session.sender.send(IPC_CHANNELS.sshModelDetected, payload);
   }
 
   private joinRemotePath(directory: string, name: string): string {

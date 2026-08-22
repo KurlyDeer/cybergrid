@@ -966,12 +966,6 @@ function normalizeProfileConnectionCredentials(value: unknown): ProfileConnectio
   return { username, password };
 }
 
-function formatRdpUsername(username: string, domain?: string): string {
-  const normalizedDomain = domain?.trim();
-  if (!normalizedDomain || normalizedDomain === "." || username.includes("\\")) return username;
-  return `${normalizedDomain}\\${username}`;
-}
-
 function normalizeRdpConfig(value: unknown): RdpConnectionConfig {
   if (!isRecord(value)) {
     throw new Error("Invalid RDP connection configuration.");
@@ -992,10 +986,15 @@ function normalizeRdpConfig(value: unknown): RdpConnectionConfig {
     maxLength: 256,
     singleLine: true,
   });
+  const domain = readString(value.domain, "Domain", {
+    maxLength: 256,
+    singleLine: true,
+  });
   return {
     host,
     port: target.port ?? readPort(value.port, 3389),
-    username: username as string,
+    username: (username as string).replace(/^~+/, ""),
+    domain,
   };
 }
 
@@ -1045,9 +1044,10 @@ function normalizeProfileInput(value: unknown): ServerProfileInput {
   const port = localOrSerial
     ? 0
     : target.port ?? readPort(value.port, defaultPorts[protocol]);
-  const username = target.username === undefined
+  const parsedUsername = target.username === undefined
     ? rawUsername
     : readString(target.username, "Username", { maxLength: 256, singleLine: true }) ?? "";
+  const username = protocol === "rdp" ? parsedUsername.replace(/^~+/, "") : parsedUsername;
   const category: ConnectionCategory = value.category === "network" || value.category === "web" || value.category === "desktop"
     ? value.category : "server";
   const profile: ServerProfileInput = {
@@ -2081,7 +2081,8 @@ async function connectProfile(
         sessionId: await requireRdp().connect({
           host,
           port,
-          username: formatRdpUsername(username, profile.domain),
+          username,
+          domain: profile.domain,
         }, sender),
         context,
         policy,
@@ -2462,6 +2463,17 @@ function registerIpcHandlers(): void {
     const deletedCount = await requireVault().deleteProfiles(normalizedIds, normalizedFolderPaths);
     await refreshTrayMenu();
     return deletedCount;
+  });
+
+  ipcMain.handle(IPC_CHANNELS.vaultDuplicateProfile, async (event, profileId: unknown, group: unknown) => {
+    assertTrustedSender(event);
+    const destinationGroup = group === undefined ? undefined : normalizeFolderPath(group);
+    const result = await requireVault().duplicateProfile(
+      readUuid(profileId, "server profile ID"),
+      destinationGroup,
+    );
+    await refreshTrayMenu();
+    return result;
   });
 
   ipcMain.handle(IPC_CHANNELS.vaultUpdateProfileNotes, async (event, profileId: unknown, notes: unknown) => {

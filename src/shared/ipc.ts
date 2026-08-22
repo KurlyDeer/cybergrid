@@ -8,6 +8,7 @@ export const IPC_CHANNELS = {
   sshQuickBackup: "cybergrid:ssh:quick-backup",
   sshData: "cybergrid:ssh:data",
   sshStatus: "cybergrid:ssh:status",
+  sshModelDetected: "cybergrid:ssh:model-detected",
   sftpList: "cybergrid:sftp:list",
   sftpUpload: "cybergrid:sftp:upload",
   sftpDownload: "cybergrid:sftp:download",
@@ -27,6 +28,7 @@ export const IPC_CHANNELS = {
   vaultMoveProfile: "cybergrid:vault:move-profile",
   vaultDeleteProfile: "cybergrid:vault:delete-profile",
   vaultDeleteProfiles: "cybergrid:vault:delete-profiles",
+  vaultDuplicateProfile: "cybergrid:vault:duplicate-profile",
   vaultUpdateProfileNotes: "cybergrid:vault:update-profile-notes",
   vaultAddConfigBackup: "cybergrid:vault:add-config-backup",
   vaultDeleteConfigBackup: "cybergrid:vault:delete-config-backup",
@@ -162,6 +164,12 @@ export interface SshStatusEvent {
   message?: string;
 }
 
+export interface SwitchModelEvent {
+  sessionId: string;
+  vendor: SwitchBackupResult["vendor"];
+  model: string;
+}
+
 export interface SshWriteRequest {
   sessionId: string;
   data: string;
@@ -201,6 +209,7 @@ export interface RdpConnectionConfig {
   host: string;
   port: number;
   username: string;
+  domain?: string;
 }
 
 export interface RdpBounds {
@@ -922,6 +931,7 @@ export interface CyberGridApi {
     quickBackup(sessionId: string, profileId: string): Promise<SwitchBackupResult>;
     onData(listener: (event: SshDataEvent) => void): Unsubscribe;
     onStatus(listener: (event: SshStatusEvent) => void): Unsubscribe;
+    onModelDetected(listener: (event: SwitchModelEvent) => void): Unsubscribe;
   };
   sftp: {
     listDirectory(sessionId: string, remotePath: string): Promise<SftpDirectoryListing>;
@@ -982,6 +992,7 @@ export interface CyberGridApi {
     moveProfile(profileId: string, group: string): Promise<ServerProfileSummary>;
     deleteProfile(profileId: string): Promise<void>;
     deleteProfiles(profileIds: string[], folderPaths?: string[]): Promise<number>;
+    duplicateProfile(profileId: string, group?: string): Promise<ServerProfileSummary>;
     updateProfileNotes(profileId: string, notes: string): Promise<ServerProfileSummary>;
     addConfigBackup(profileId: string, input: ConfigBackupInput): Promise<ServerProfileSummary>;
     deleteConfigBackup(profileId: string, backupId: string): Promise<ServerProfileSummary>;

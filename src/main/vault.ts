@@ -1109,6 +1109,47 @@ export class VaultController {
     return summarizeProfile(this.getConnectionProfile(profile.id));
   }
 
+  async duplicateProfile(profileId: string, group?: string): Promise<ServerProfileSummary> {
+    const payload = this.requirePayload();
+    const source = payload.profiles.find((candidate) => candidate.id === profileId);
+    if (!source) throw new Error("Server profile was not found.");
+    const destinationGroup = group ?? source.group;
+    const names = new Set(
+      payload.profiles
+        .filter((profile) => profile.group === destinationGroup)
+        .map((profile) => profile.name.toLocaleLowerCase()),
+    );
+    const baseName = `${source.name} - Copy`;
+    let name = baseName;
+    for (let suffix = 2; names.has(name.toLocaleLowerCase()); suffix += 1) name = `${baseName} ${suffix}`;
+    const timestamp = new Date().toISOString();
+    const duplicate: DecryptedServerProfile = {
+      ...source,
+      id: randomUUID(),
+      name,
+      group: destinationGroup,
+      favorite: false,
+      portForward: source.portForward ? { ...source.portForward } : undefined,
+      tags: [...(source.tags ?? [])],
+      terminalOverrides: cloneTerminalOverrides(source.terminalOverrides),
+      configBackups: cloneConfigBackups(source.configBackups),
+      preConnectTaskIds: [...(source.preConnectTaskIds ?? [])],
+      postConnectTaskIds: [...(source.postConnectTaskIds ?? [])],
+      managedBySyncId: undefined,
+      managedObjectId: undefined,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    };
+    payload.profiles.push(duplicate);
+    try {
+      await this.persist();
+    } catch (error) {
+      payload.profiles.pop();
+      throw error;
+    }
+    return summarizeProfile(this.getConnectionProfile(duplicate.id));
+  }
+
   async deleteProfile(profileId: string): Promise<void> {
     const payload = this.requirePayload();
     const profileIndex = payload.profiles.findIndex((profile) => profile.id === profileId);

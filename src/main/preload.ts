@@ -61,6 +61,7 @@ const IPC_CHANNELS: typeof import("../shared/ipc").IPC_CHANNELS = {
   sshQuickBackup: "cybergrid:ssh:quick-backup",
   sshData: "cybergrid:ssh:data",
   sshStatus: "cybergrid:ssh:status",
+  sshModelDetected: "cybergrid:ssh:model-detected",
   sftpList: "cybergrid:sftp:list",
   sftpUpload: "cybergrid:sftp:upload",
   sftpDownload: "cybergrid:sftp:download",
@@ -79,6 +80,7 @@ const IPC_CHANNELS: typeof import("../shared/ipc").IPC_CHANNELS = {
   vaultSaveProfile: "cybergrid:vault:save-profile",
   vaultDeleteProfile: "cybergrid:vault:delete-profile",
   vaultDeleteProfiles: "cybergrid:vault:delete-profiles",
+  vaultDuplicateProfile: "cybergrid:vault:duplicate-profile",
   vaultUpdateProfileNotes: "cybergrid:vault:update-profile-notes",
   vaultAddConfigBackup: "cybergrid:vault:add-config-backup",
   vaultDeleteConfigBackup: "cybergrid:vault:delete-config-backup",
@@ -202,6 +204,11 @@ const api: CyberGridApi = {
       ipcRenderer.on(IPC_CHANNELS.sshStatus, handler);
       return () => ipcRenderer.removeListener(IPC_CHANNELS.sshStatus, handler);
     },
+    onModelDetected: (listener) => {
+      const handler = (_event: IpcRendererEvent, payload: import("../shared/ipc").SwitchModelEvent) => listener(payload);
+      ipcRenderer.on(IPC_CHANNELS.sshModelDetected, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.sshModelDetected, handler);
+    },
   },
   sftp: {
     listDirectory: (sessionId, remotePath) =>
@@ -312,6 +319,8 @@ const api: CyberGridApi = {
       ipcRenderer.invoke(IPC_CHANNELS.vaultDeleteProfile, profileId),
     deleteProfiles: (profileIds, folderPaths) =>
       ipcRenderer.invoke(IPC_CHANNELS.vaultDeleteProfiles, profileIds, folderPaths),
+    duplicateProfile: (profileId, group) =>
+      ipcRenderer.invoke(IPC_CHANNELS.vaultDuplicateProfile, profileId, group),
     updateProfileNotes: (profileId, notes) =>
       ipcRenderer.invoke(IPC_CHANNELS.vaultUpdateProfileNotes, profileId, notes),
     addConfigBackup: (profileId, input: ConfigBackupInput) =>
