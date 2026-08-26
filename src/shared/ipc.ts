@@ -210,6 +210,9 @@ export interface RdpConnectionConfig {
   port: number;
   username: string;
   domain?: string;
+  smartSizing?: boolean;
+  colorDepth?: 15 | 16 | 24 | 32;
+  soundMode?: "local" | "remote" | "disabled";
 }
 
 export interface RdpBounds {
@@ -243,12 +246,16 @@ export type CredentialProfileAuthType = Exclude<ServerAuthType, "none">;
 
 export type AppMenuCommand =
   | "new-connection"
+  | "new-folder"
+  | "duplicate-connection"
+  | "delete-selection"
   | "focus-quick-connect"
   | "lock-vault"
   | "import-export"
   | "command-palette"
   | "clear-terminal"
   | "toggle-sidebar"
+  | "toggle-tools-drawer"
   | "toggle-grid"
   | "toggle-broadcast"
   | "broadcast-targets"
@@ -258,6 +265,7 @@ export type AppMenuCommand =
   | "enterprise"
   | "credential-profiles"
   | "subnet-scanner"
+  | "port-scan"
   | "toggle-quick-snippets"
   | "settings"
   | "close-tab"
@@ -821,6 +829,7 @@ export interface AppPreferences {
   minimizeToTray: boolean;
   startMinimized: boolean;
   launchAtLogin: boolean;
+  confirmExitWithActiveSessions: boolean;
   compactTreeView: boolean;
   masterPasswordEnabled: boolean;
   autoLockMinutes: number;
@@ -828,11 +837,17 @@ export interface AppPreferences {
   theme: TerminalThemeName;
   fontFamily: string;
   fontSize: number;
+  terminalLineHeight: number;
   cursorBlink: boolean;
   background: string;
   foreground: string;
   cursor: string;
   accent: string;
+  sshKeepAliveSeconds: number;
+  sshMaxPasswordRetries: number;
+  rdpSmartSizing: boolean;
+  rdpColorDepth: 15 | 16 | 24 | 32;
+  rdpSoundMode: "local" | "remote" | "disabled";
   proxyMode: ProxyMode;
   proxyUrl: string;
   proxyBypassRules: string;

@@ -2,7 +2,7 @@ import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { AppPreferences } from "../shared/ipc";
 
-const PREFERENCES_VERSION = 1 as const;
+const PREFERENCES_VERSION = 2 as const;
 const MAX_PREFERENCES_BYTES = 64 * 1024;
 
 interface PreferencesFile {
@@ -14,6 +14,7 @@ export const DEFAULT_APP_PREFERENCES: AppPreferences = {
   minimizeToTray: true,
   startMinimized: false,
   launchAtLogin: false,
+  confirmExitWithActiveSessions: true,
   compactTreeView: true,
   masterPasswordEnabled: false,
   autoLockMinutes: 15,
@@ -21,11 +22,17 @@ export const DEFAULT_APP_PREFERENCES: AppPreferences = {
   theme: "dark",
   fontFamily: "Cascadia Mono, JetBrains Mono, Consolas, monospace",
   fontSize: 14,
+  terminalLineHeight: 1.18,
   cursorBlink: true,
   background: "#080d14",
   foreground: "#d7e2ef",
   cursor: "#23d5ab",
   accent: "#23d5ab",
+  sshKeepAliveSeconds: 10,
+  sshMaxPasswordRetries: 0,
+  rdpSmartSizing: true,
+  rdpColorDepth: 32,
+  rdpSoundMode: "local",
   proxyMode: "system",
   proxyUrl: "",
   proxyBypassRules: "<local>",
@@ -59,7 +66,7 @@ function storedColor(value: unknown, fallback: string): string {
 function parseStoredPreferences(value: unknown): AppPreferences {
   if (!isRecord(value)) return clonePreferences(DEFAULT_APP_PREFERENCES);
   const preferences = value.preferences;
-  if (value.version !== PREFERENCES_VERSION || !isRecord(preferences)) {
+  if ((value.version !== 1 && value.version !== PREFERENCES_VERSION) || !isRecord(preferences)) {
     return clonePreferences(DEFAULT_APP_PREFERENCES);
   }
   return {
@@ -68,6 +75,9 @@ function parseStoredPreferences(value: unknown): AppPreferences {
       : DEFAULT_APP_PREFERENCES.minimizeToTray,
     startMinimized: preferences.startMinimized === true,
     launchAtLogin: preferences.launchAtLogin === true,
+    confirmExitWithActiveSessions: typeof preferences.confirmExitWithActiveSessions === "boolean"
+      ? preferences.confirmExitWithActiveSessions
+      : DEFAULT_APP_PREFERENCES.confirmExitWithActiveSessions,
     compactTreeView: typeof preferences.compactTreeView === "boolean"
       ? preferences.compactTreeView
       : DEFAULT_APP_PREFERENCES.compactTreeView,
@@ -94,6 +104,11 @@ function parseStoredPreferences(value: unknown): AppPreferences {
       Number(preferences.fontSize) >= 10 && Number(preferences.fontSize) <= 28
       ? Number(preferences.fontSize)
       : DEFAULT_APP_PREFERENCES.fontSize,
+    terminalLineHeight: typeof preferences.terminalLineHeight === "number" &&
+      Number.isFinite(preferences.terminalLineHeight) &&
+      preferences.terminalLineHeight >= 1 && preferences.terminalLineHeight <= 2
+      ? Math.round(preferences.terminalLineHeight * 100) / 100
+      : DEFAULT_APP_PREFERENCES.terminalLineHeight,
     cursorBlink: typeof preferences.cursorBlink === "boolean"
       ? preferences.cursorBlink
       : DEFAULT_APP_PREFERENCES.cursorBlink,
@@ -101,6 +116,24 @@ function parseStoredPreferences(value: unknown): AppPreferences {
     foreground: storedColor(preferences.foreground, DEFAULT_APP_PREFERENCES.foreground),
     cursor: storedColor(preferences.cursor, DEFAULT_APP_PREFERENCES.cursor),
     accent: storedColor(preferences.accent, DEFAULT_APP_PREFERENCES.accent),
+    sshKeepAliveSeconds: Number.isInteger(preferences.sshKeepAliveSeconds) &&
+      Number(preferences.sshKeepAliveSeconds) >= 0 && Number(preferences.sshKeepAliveSeconds) <= 300
+      ? Number(preferences.sshKeepAliveSeconds)
+      : DEFAULT_APP_PREFERENCES.sshKeepAliveSeconds,
+    sshMaxPasswordRetries: Number.isInteger(preferences.sshMaxPasswordRetries) &&
+      Number(preferences.sshMaxPasswordRetries) >= 0 && Number(preferences.sshMaxPasswordRetries) <= 100
+      ? Number(preferences.sshMaxPasswordRetries)
+      : DEFAULT_APP_PREFERENCES.sshMaxPasswordRetries,
+    rdpSmartSizing: typeof preferences.rdpSmartSizing === "boolean"
+      ? preferences.rdpSmartSizing
+      : DEFAULT_APP_PREFERENCES.rdpSmartSizing,
+    rdpColorDepth: preferences.rdpColorDepth === 15 || preferences.rdpColorDepth === 16 ||
+      preferences.rdpColorDepth === 24 || preferences.rdpColorDepth === 32
+      ? preferences.rdpColorDepth
+      : DEFAULT_APP_PREFERENCES.rdpColorDepth,
+    rdpSoundMode: preferences.rdpSoundMode === "remote" || preferences.rdpSoundMode === "disabled"
+      ? preferences.rdpSoundMode
+      : DEFAULT_APP_PREFERENCES.rdpSoundMode,
     proxyMode: preferences.proxyMode === "direct" || preferences.proxyMode === "manual"
       ? preferences.proxyMode
       : "system",

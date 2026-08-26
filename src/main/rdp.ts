@@ -31,66 +31,83 @@ $ErrorActionPreference = 'Stop'
 Add-Type -TypeDefinition @"
 using System;
 using System.Runtime.InteropServices;
+using System.Text;
 public static class CyberGridRdpHost {
   private const int GWL_STYLE = -16;
   private const int GWL_EXSTYLE = -20;
+  private const int GWLP_HWNDPARENT = -8;
   private const long WS_CHILD = 0x40000000L;
   private const long WS_POPUP = 0x80000000L;
   private const long WS_CAPTION = 0x00C00000L;
   private const long WS_THICKFRAME = 0x00040000L;
+  private const long WS_SYSMENU = 0x00080000L;
+  private const long WS_MINIMIZEBOX = 0x00020000L;
+  private const long WS_MAXIMIZEBOX = 0x00010000L;
   private const long WS_EX_DLGMODALFRAME = 0x00000001L;
   private const long WS_EX_WINDOWEDGE = 0x00000100L;
   private const long WS_EX_CLIENTEDGE = 0x00000200L;
   private const long WS_EX_STATICEDGE = 0x00020000L;
+  private const long WS_EX_APPWINDOW = 0x00040000L;
+  private const long WS_EX_TOOLWINDOW = 0x00000080L;
   private const uint SWP_NOMOVE = 0x0002;
   private const uint SWP_NOSIZE = 0x0001;
   private const uint SWP_NOZORDER = 0x0004;
+  private const uint SWP_NOACTIVATE = 0x0010;
   private const uint SWP_FRAMECHANGED = 0x0020;
-  private const uint RDW_INVALIDATE = 0x0001;
-  private const uint RDW_ERASE = 0x0004;
-  private const uint RDW_ALLCHILDREN = 0x0080;
-  private const uint RDW_UPDATENOW = 0x0100;
-  private const uint RDW_FRAME = 0x0400;
   private const uint WM_CLOSE = 0x0010;
+  [StructLayout(LayoutKind.Sequential)] private struct Point { public int X; public int Y; }
   private delegate bool EnumWindowsProc(IntPtr hwnd, IntPtr state);
   [DllImport("user32.dll")] private static extern bool EnumWindows(EnumWindowsProc callback, IntPtr state);
   [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint processId);
   [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr hwnd);
+  [DllImport("user32.dll", CharSet=CharSet.Unicode)] private static extern int GetClassName(IntPtr hwnd, StringBuilder className, int maxCount);
   [DllImport("user32.dll", EntryPoint="GetWindowLongPtrW")] private static extern IntPtr GetWindowLongPtr(IntPtr hwnd, int index);
   [DllImport("user32.dll", EntryPoint="SetWindowLongPtrW")] private static extern IntPtr SetWindowLongPtr(IntPtr hwnd, int index, IntPtr value);
-  [DllImport("user32.dll")] private static extern IntPtr SetParent(IntPtr child, IntPtr parent);
-  [DllImport("user32.dll")] private static extern bool MoveWindow(IntPtr hwnd, int x, int y, int width, int height, bool repaint);
   [DllImport("user32.dll")] private static extern bool SetWindowPos(IntPtr hwnd, IntPtr after, int x, int y, int width, int height, uint flags);
-  [DllImport("user32.dll")] private static extern bool RedrawWindow(IntPtr hwnd, IntPtr updateRect, IntPtr updateRegion, uint flags);
+  [DllImport("user32.dll")] private static extern bool ClientToScreen(IntPtr hwnd, ref Point point);
+  [DllImport("user32.dll")] private static extern bool UpdateWindow(IntPtr hwnd);
   [DllImport("user32.dll")] private static extern bool ShowWindow(IntPtr hwnd, int command);
   [DllImport("user32.dll")] private static extern bool PostMessage(IntPtr hwnd, uint message, IntPtr wParam, IntPtr lParam);
   public static IntPtr FindWindow(uint processId) {
     IntPtr found = IntPtr.Zero;
+    IntPtr fallback = IntPtr.Zero;
     EnumWindows(delegate(IntPtr hwnd, IntPtr state) {
       uint owner;
       GetWindowThreadProcessId(hwnd, out owner);
-      if (owner == processId && IsWindowVisible(hwnd)) { found = hwnd; return false; }
+      if (owner != processId || !IsWindowVisible(hwnd)) return true;
+      if (fallback == IntPtr.Zero) fallback = hwnd;
+      StringBuilder className = new StringBuilder(256);
+      GetClassName(hwnd, className, className.Capacity);
+      if (String.Equals(className.ToString(), "TscShellContainerClass", StringComparison.Ordinal)) {
+        found = hwnd;
+        return false;
+      }
       return true;
     }, IntPtr.Zero);
-    return found;
+    return found != IntPtr.Zero ? found : fallback;
   }
-  public static void Dock(IntPtr child, IntPtr parent) {
+  public static void Own(IntPtr child, IntPtr parent) {
     long style = GetWindowLongPtr(child, GWL_STYLE).ToInt64();
-    style = (style & ~WS_POPUP & ~WS_CAPTION & ~WS_THICKFRAME) | WS_CHILD;
+    style = (style | WS_POPUP) & ~WS_CHILD & ~WS_CAPTION & ~WS_THICKFRAME & ~WS_SYSMENU & ~WS_MINIMIZEBOX & ~WS_MAXIMIZEBOX;
     SetWindowLongPtr(child, GWL_STYLE, new IntPtr(style));
     long exStyle = GetWindowLongPtr(child, GWL_EXSTYLE).ToInt64();
-    exStyle = exStyle & ~WS_EX_DLGMODALFRAME & ~WS_EX_WINDOWEDGE & ~WS_EX_CLIENTEDGE & ~WS_EX_STATICEDGE;
+    exStyle = (exStyle | WS_EX_TOOLWINDOW) & ~WS_EX_APPWINDOW & ~WS_EX_DLGMODALFRAME & ~WS_EX_WINDOWEDGE & ~WS_EX_CLIENTEDGE & ~WS_EX_STATICEDGE;
     SetWindowLongPtr(child, GWL_EXSTYLE, new IntPtr(exStyle));
-    SetParent(child, parent);
-    SetWindowPos(child, IntPtr.Zero, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
-    uint repaint = RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW | RDW_FRAME;
-    RedrawWindow(child, IntPtr.Zero, IntPtr.Zero, repaint);
-    RedrawWindow(parent, IntPtr.Zero, IntPtr.Zero, repaint);
+    SetWindowLongPtr(child, GWLP_HWNDPARENT, parent);
+    SetWindowPos(child, IntPtr.Zero, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+    UpdateWindow(child);
+    UpdateWindow(parent);
   }
-  public static void Move(IntPtr hwnd, int x, int y, int width, int height) { MoveWindow(hwnd, x, y, width, height, true); }
+  public static void Move(IntPtr hwnd, IntPtr parent, int x, int y, int width, int height) {
+    Point origin = new Point { X = x, Y = y };
+    if (!ClientToScreen(parent, ref origin)) throw new InvalidOperationException("Could not translate the RDP viewport to screen coordinates.");
+    SetWindowPos(hwnd, IntPtr.Zero, origin.X, origin.Y, Math.Max(1, width), Math.Max(1, height), SWP_NOZORDER | SWP_NOACTIVATE);
+    UpdateWindow(hwnd);
+    UpdateWindow(parent);
+  }
   public static void SetVisible(IntPtr hwnd, bool visible) {
     ShowWindow(hwnd, visible ? 5 : 0);
-    if (visible) RedrawWindow(hwnd, IntPtr.Zero, IntPtr.Zero, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW);
+    if (visible) UpdateWindow(hwnd);
   }
   public static void Close(IntPtr hwnd) { PostMessage(hwnd, WM_CLOSE, IntPtr.Zero, IntPtr.Zero); }
 }
@@ -107,8 +124,9 @@ while ([DateTime]::UtcNow -lt $deadline -and $windowHandle -eq [IntPtr]::Zero -a
   $windowHandle = [CyberGridRdpHost]::FindWindow([uint32]$rdp.Id)
 }
 if ($windowHandle -eq [IntPtr]::Zero) { throw 'The Windows RDP client did not expose an embeddable window.' }
-[CyberGridRdpHost]::Dock($windowHandle, [IntPtr]::new([Int64]$ParentHandle))
-[CyberGridRdpHost]::Move($windowHandle, 0, 0, 1, 1)
+$parentWindow = [IntPtr]::new([Int64]$ParentHandle)
+[CyberGridRdpHost]::Own($windowHandle, $parentWindow)
+[CyberGridRdpHost]::Move($windowHandle, $parentWindow, 0, 0, 1, 1)
 [CyberGridRdpHost]::SetVisible($windowHandle, $false)
 [Console]::Out.WriteLine('READY')
 [Console]::Out.Flush()
@@ -123,14 +141,15 @@ try {
       switch ($parts[0]) {
         'BOUNDS' {
           if ($parts.Length -eq 5) {
-            [CyberGridRdpHost]::Move($windowHandle, [int]$parts[1], [int]$parts[2], [int]$parts[3], [int]$parts[4])
+            [CyberGridRdpHost]::Move($windowHandle, $parentWindow, [int]$parts[1], [int]$parts[2], [int]$parts[3], [int]$parts[4])
           }
         }
         'SHOW' { [CyberGridRdpHost]::SetVisible($windowHandle, $true) }
         'HIDE' { [CyberGridRdpHost]::SetVisible($windowHandle, $false) }
         'PARENT' {
           if ($parts.Length -eq 2) {
-            [CyberGridRdpHost]::Dock($windowHandle, [IntPtr]::new([Int64]$parts[1]))
+            $parentWindow = [IntPtr]::new([Int64]$parts[1])
+            [CyberGridRdpHost]::Own($windowHandle, $parentWindow)
           }
         }
         'CLOSE' { break }
@@ -259,6 +278,15 @@ export class RdpController {
     this.applyGeometry(session);
   }
 
+  refreshForWindow(window: BrowserWindow): void {
+    if (window.isDestroyed()) return;
+    for (const session of this.sessions.values()) {
+      if (!session.closed && BrowserWindow.fromWebContents(session.sender) === window) {
+        this.applyGeometry(session);
+      }
+    }
+  }
+
   attachRenderer(sessionId: string, sender: WebContents): boolean {
     const session = this.sessions.get(sessionId);
     const parentWindow = BrowserWindow.fromWebContents(sender);
@@ -315,12 +343,16 @@ export class RdpController {
   private createConfiguration(config: RdpConnectionConfig): string {
     const address = config.host.includes(":") ? `[${config.host}]` : config.host;
     const username = this.formatUsername(config.username, config.domain);
+    const smartSizing = config.smartSizing !== false ? 1 : 0;
+    const colorDepth = config.colorDepth ?? 32;
+    const audioMode = config.soundMode === "remote" ? 1 : config.soundMode === "disabled" ? 2 : 0;
     return `\uFEFF${[
-      "screen mode id:i:1", "use multimon:i:0", "session bpp:i:32",
-      "smart sizing:i:1", "dynamic resolution:i:1", "desktopwidth:i:1920", "desktopheight:i:1080",
+      "screen mode id:i:1", "use multimon:i:0", `session bpp:i:${colorDepth}`,
+      `smart sizing:i:${smartSizing}`, `dynamic resolution:i:${smartSizing}`, "desktopwidth:i:1920", "desktopheight:i:1080",
       "desktopscalefactor:i:100", "devicescalefactor:i:100",
       `full address:s:${address}:${config.port}`, `username:s:${username}`,
       "prompt for credentials on client:i:1", "authentication level:i:2", "enablecredsspsupport:i:1",
+      `audiomode:i:${audioMode}`, "audiocapturemode:i:0",
       "redirectclipboard:i:1", "redirectprinters:i:0", "redirectcomports:i:0", "redirectsmartcards:i:0",
       "drivestoredirect:s:", "networkautodetect:i:1", "bandwidthautodetect:i:1", "compression:i:1",
       "connection type:i:7", "autoreconnection enabled:i:1", "promptcredentialonce:i:1", "",

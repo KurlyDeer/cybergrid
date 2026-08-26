@@ -96,6 +96,7 @@ type NoVncRfbConstructor = new (
 
 type WorkspaceTabKind = ConnectionProtocol | "welcome";
 type WorkspaceStatus = SshConnectionStatus | RdpConnectionStatus | "idle" | "loading" | "ready" | "opening";
+type SwitchDeviceOs = "auto" | "cisco" | "fortinet" | "hp" | "generic";
 
 interface WorkspaceTab {
   id: string;
@@ -134,12 +135,19 @@ interface WorkspaceTab {
   switchToolsModel?: HTMLParagraphElement;
   sshPasswordRetry?: (password: string) => Promise<void>;
   sshAuthRetryPrompting?: boolean;
+  sshAuthRetryCount?: number;
+  detectedSwitchVendor?: SwitchDeviceOs;
+  switchToolsSelect?: HTMLSelectElement;
+  renderSwitchTools?: () => void;
+  switchToolsOpen?: boolean;
+  setSwitchToolsOpen?: (open: boolean) => void;
 }
 
 const DEFAULT_SETTINGS: AppPreferences = {
   minimizeToTray: true,
   startMinimized: false,
   launchAtLogin: false,
+  confirmExitWithActiveSessions: true,
   compactTreeView: true,
   masterPasswordEnabled: false,
   autoLockMinutes: 15,
@@ -147,11 +155,17 @@ const DEFAULT_SETTINGS: AppPreferences = {
   theme: "dark",
   fontFamily: "Cascadia Mono, JetBrains Mono, Consolas, monospace",
   fontSize: 14,
+  terminalLineHeight: 1.18,
   cursorBlink: true,
   background: "#080d14",
   foreground: "#d7e2ef",
   cursor: "#23d5ab",
   accent: "#23d5ab",
+  sshKeepAliveSeconds: 10,
+  sshMaxPasswordRetries: 0,
+  rdpSmartSizing: true,
+  rdpColorDepth: 32,
+  rdpSoundMode: "local",
   proxyMode: "system",
   proxyUrl: "",
   proxyBypassRules: "<local>",
@@ -209,6 +223,7 @@ let treeSelectionAnchor: string | null = null;
 let treeSelectionOrder: string[] = [];
 let editingProfileId: string | null = null;
 let connectionCategory: ConnectionCategory = "server";
+let editingProfileSnapshot: ServerProfileSummary | null = null;
 let broadcastMode = false;
 let layoutMode: "single" | "grid" = "single";
 let recentTerminalTabIds: string[] = [];
@@ -339,19 +354,14 @@ const serverFavoriteInput = elementById<HTMLInputElement>("server-favorite");
 const serverInheritFolderInput = elementById<HTMLInputElement>("server-inherit-folder");
 const serverDomainInput = elementById<HTMLInputElement>("server-domain");
 const serverTimeoutInput = elementById<HTMLInputElement>("server-timeout");
-const serverKeepaliveField = elementById<HTMLDivElement>("server-keepalive-field");
 const serverKeepaliveInput = elementById<HTMLInputElement>("server-keepalive");
-const serverKeepaliveEnabledField = elementById<HTMLDivElement>("server-keepalive-enabled-field");
 const serverKeepaliveEnabledInput = elementById<HTMLInputElement>("server-keepalive-enabled");
 const serverPersistInput = elementById<HTMLInputElement>("server-persist");
 const serverAutoReconnectInput = elementById<HTMLInputElement>("server-auto-reconnect");
-const serverLegacySshField = elementById<HTMLDivElement>("server-legacy-ssh-field");
 const serverLegacySshInput = elementById<HTMLInputElement>("server-legacy-ssh");
-const serverPortForwardingSection = elementById<HTMLDivElement>("server-port-forwarding-section");
 const serverForwardLocalPortInput = elementById<HTMLInputElement>("server-forward-local-port");
 const serverForwardRemoteHostInput = elementById<HTMLInputElement>("server-forward-remote-host");
 const serverForwardRemotePortInput = elementById<HTMLInputElement>("server-forward-remote-port");
-const serverJumpHostField = elementById<HTMLDivElement>("server-jump-host-field");
 const serverJumpHostInput = elementById<HTMLInputElement>("server-jump-host");
 const serverProxyOverrideInput = elementById<HTMLInputElement>("server-proxy-override");
 const serverIconInput = elementById<HTMLSelectElement>("server-icon");
@@ -361,7 +371,6 @@ const categoryButtons = [...serverModal.querySelectorAll<HTMLButtonElement>("[da
 const serverPreTasksInput = elementById<HTMLSelectElement>("server-pre-tasks");
 const serverPostTasksInput = elementById<HTMLSelectElement>("server-post-tasks");
 const serverTotpSecretInput = elementById<HTMLInputElement>("server-totp-secret");
-const serverTotpDigitsInput = elementById<HTMLSelectElement>("server-totp-digits");
 const serverTotpAlgorithmInput = elementById<HTMLSelectElement>("server-totp-algorithm");
 const groupOptions = elementById<HTMLDataListElement>("group-options");
 const authTypeInput = elementById<HTMLSelectElement>("auth-type");
@@ -507,6 +516,7 @@ const settingsForm = elementById<HTMLFormElement>("settings-form");
 const minimizeToTrayInput = elementById<HTMLInputElement>("minimize-to-tray");
 const startMinimizedInput = elementById<HTMLInputElement>("start-minimized");
 const launchAtLoginInput = elementById<HTMLInputElement>("launch-at-login");
+const confirmExitActiveSessionsInput = elementById<HTMLInputElement>("confirm-exit-active-sessions");
 const compactTreeViewInput = elementById<HTMLInputElement>("compact-tree-view");
 const masterPasswordEnabledInput = elementById<HTMLInputElement>("enable-master-password");
 const newMasterPasswordFields = elementById<HTMLDivElement>("new-master-password-fields");
@@ -517,11 +527,17 @@ const clipboardClearInput = elementById<HTMLSelectElement>("clipboard-clear-seco
 const themeInput = elementById<HTMLSelectElement>("theme-mode");
 const fontFamilyInput = elementById<HTMLInputElement>("terminal-font-family");
 const fontSizeInput = elementById<HTMLInputElement>("terminal-font-size");
+const terminalLineHeightInput = elementById<HTMLInputElement>("terminal-line-height");
+const sshKeepAliveSecondsInput = elementById<HTMLInputElement>("ssh-keepalive-seconds");
+const sshMaxPasswordRetriesInput = elementById<HTMLInputElement>("ssh-max-password-retries");
 const cursorBlinkInput = elementById<HTMLInputElement>("terminal-cursor-blink");
 const backgroundInput = elementById<HTMLInputElement>("terminal-background");
 const foregroundInput = elementById<HTMLInputElement>("terminal-foreground");
 const cursorInput = elementById<HTMLInputElement>("terminal-cursor");
 const accentInput = elementById<HTMLInputElement>("ui-accent");
+const rdpSmartSizingInput = elementById<HTMLInputElement>("rdp-smart-sizing");
+const rdpColorDepthInput = elementById<HTMLSelectElement>("rdp-color-depth");
+const rdpSoundModeInput = elementById<HTMLSelectElement>("rdp-sound-mode");
 const customPaletteFields = elementById<HTMLDivElement>("custom-palette-fields");
 const proxyModeInput = elementById<HTMLSelectElement>("proxy-mode");
 const proxyUrlInput = elementById<HTMLInputElement>("proxy-url");
@@ -710,7 +726,7 @@ function applyTerminalAppearance(tab: WorkspaceTab, overrides?: TerminalAppearan
   const settings = terminalSettingsWithOverrides(overrides);
   tab.terminal.options.fontFamily = settings.fontFamily;
   tab.terminal.options.fontSize = settings.fontSize;
-  tab.terminal.options.lineHeight = overrides?.lineHeight ?? 1.18;
+  tab.terminal.options.lineHeight = overrides?.lineHeight ?? settings.terminalLineHeight;
   tab.terminal.options.cursorBlink = settings.cursorBlink;
   tab.terminal.options.theme = terminalTheme(settings);
   tab.fitAddon?.fit();
@@ -1205,7 +1221,7 @@ function createTerminalTab(
     cursorStyle: "bar",
     fontFamily: terminalSettings.fontFamily,
     fontSize: terminalSettings.fontSize,
-    lineHeight: appearance?.lineHeight ?? 1.18,
+    lineHeight: appearance?.lineHeight ?? terminalSettings.terminalLineHeight,
     scrollback: 10_000,
     scrollOnUserInput: true,
     smoothScrollDuration: 0,
@@ -1681,6 +1697,7 @@ function scheduleAutoReconnect(tab: WorkspaceTab): void {
 }
 
 function updateSshTabStatus(tab: WorkspaceTab, event: SshStatusEvent): void {
+  if (event.status === "connected") tab.sshAuthRetryCount = 0;
   updateTabStatus(tab, event.status, event.message);
 }
 
@@ -1866,16 +1883,23 @@ function isSshAuthenticationFailure(message?: string): boolean {
 
 async function retrySshPassword(tab: WorkspaceTab, event: SshStatusEvent): Promise<void> {
   if (tab.sshAuthRetryPrompting || !tab.sshPasswordRetry || !tabs.has(tab.id)) return;
+  const maximum = currentSettings.sshMaxPasswordRetries;
+  const attempts = tab.sshAuthRetryCount ?? 0;
+  if (maximum > 0 && attempts >= maximum) {
+    updateTabStatus(tab, "error", `SSH authentication failed after ${maximum} password retries.`);
+    return;
+  }
   sshSessions.delete(event.sessionId);
   if (tab.sessionId === event.sessionId) tab.sessionId = undefined;
   tab.sshAuthRetryPrompting = true;
+  tab.sshAuthRetryCount = attempts + 1;
   tab.terminal?.writeln("\r\n\x1b[31mAccess denied. Please try again.\x1b[0m");
   try {
     let password = "";
     while (!password && tabs.has(tab.id)) {
       password = await readTerminalPrompt(
         tab,
-        `${tab.context.username || "SSH user"}'s password (Esc to cancel): `,
+        `${tab.context.username || "SSH user"}'s password (${maximum === 0 ? "unlimited retries" : `retry ${attempts + 1}/${maximum}`}; Esc to cancel): `,
         true,
       );
       if (!password) tab.terminal?.writeln("\x1b[33mPassword cannot be empty. Please try again.\x1b[0m");
@@ -1901,6 +1925,8 @@ function applySwitchModel(tab: WorkspaceTab, event: SwitchModelEvent): void {
     tab.switchToolsModel.textContent = label;
     tab.switchToolsModel.title = `${event.vendor.toUpperCase()} hardware detected automatically`;
   }
+  tab.detectedSwitchVendor = event.vendor === "unknown" ? "generic" : event.vendor;
+  tab.renderSwitchTools?.();
 }
 
 function handleSwitchModel(event: SwitchModelEvent): void {
@@ -1973,6 +1999,25 @@ function installSwitchToolsDrawer(tab: WorkspaceTab, profile?: ServerProfileSumm
     tab.kind === "ssh" ? "Model: Detecting..." : `Terminal: ${tab.kind.toUpperCase()}`,
   ) as HTMLParagraphElement;
   tab.switchToolsModel = model;
+  const osField = createTextElement("div", "switch-tools-device-os", "") as HTMLDivElement;
+  const osLabel = document.createElement("label");
+  osLabel.textContent = "Device OS";
+  const osSelect = document.createElement("select");
+  osSelect.title = "Select the command dialect, or use the SSH fingerprint result";
+  for (const [value, label] of [
+    ["auto", "Auto-Detect"],
+    ["cisco", "Cisco IOS"],
+    ["fortinet", "FortiOS"],
+    ["hp", "HP ProCurve"],
+    ["generic", "Linux / Generic"],
+  ] as const) {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = label;
+    osSelect.append(option);
+  }
+  osField.append(osLabel, osSelect);
+  tab.switchToolsSelect = osSelect;
   const status = createTextElement("p", "switch-tools-status", profile
     ? `Target: ${profile.host}`
     : "Save this connection to enable backup snapshots and diagnostics.") as HTMLParagraphElement;
@@ -1988,7 +2033,7 @@ function installSwitchToolsDrawer(tab: WorkspaceTab, profile?: ServerProfileSumm
     return { section, content };
   };
 
-  const commandButtons: HTMLButtonElement[] = [];
+  let commandButtons: HTMLButtonElement[] = [];
   const addCommandButtons = (
     content: HTMLElement,
     commands: ReadonlyArray<{ command: string; tooltip: string }>,
@@ -2012,6 +2057,7 @@ function installSwitchToolsDrawer(tab: WorkspaceTab, profile?: ServerProfileSumm
   };
 
   const setOpen = (open: boolean): void => {
+    tab.switchToolsOpen = open;
     drawer.classList.toggle("open", open);
     drawer.inert = !open;
     drawer.setAttribute("aria-hidden", String(!open));
@@ -2023,10 +2069,11 @@ function installSwitchToolsDrawer(tab: WorkspaceTab, profile?: ServerProfileSumm
     });
     window.setTimeout(() => tab.fitAddon?.fit(), 180);
   };
+  tab.setSwitchToolsOpen = setOpen;
   toggle.addEventListener("click", () => setOpen(true));
   close.addEventListener("click", () => setOpen(false));
 
-  body.append(model);
+  body.append(model, osField);
   const backupSection = accordion("📁 Backups", true);
   if (profile?.protocol === "ssh" && profile.category === "network") {
     const backupButton = document.createElement("button");
@@ -2060,57 +2107,82 @@ function installSwitchToolsDrawer(tab: WorkspaceTab, profile?: ServerProfileSumm
   }
   body.append(backupSection.section);
 
-  const interfaces = accordion("🌐 Interfaces & VLANs");
-  addCommandButtons(interfaces.content, [
-    { command: "show ip int brief", tooltip: "Summarize interface addresses and operational state" },
-    { command: "show vlan", tooltip: "List configured VLANs and their assigned ports" },
-    { command: "show interfaces status", tooltip: "Show physical link, speed, duplex, and VLAN status" },
-    { command: "show etherchannel summary", tooltip: "Summarize link aggregation and port-channel health" },
-  ]);
-  body.append(interfaces.section);
+  const toolsHost = createTextElement("div", "switch-tools-dynamic", "") as HTMLDivElement;
+  const vendorCommands: Record<Exclude<SwitchDeviceOs, "auto" | "generic">, ReadonlyArray<{ command: string; tooltip: string }>> = {
+    cisco: [
+      { command: "show ip int brief", tooltip: "Summarize Cisco interface addresses and state" },
+      { command: "show running-config", tooltip: "Display the active Cisco IOS configuration" },
+      { command: "show vlan", tooltip: "List Cisco VLANs and port membership" },
+      { command: "show log", tooltip: "Display Cisco IOS log entries" },
+      { command: "show mac address-table", tooltip: "Display learned MAC addresses and switch ports" },
+    ],
+    fortinet: [
+      { command: "get system status", tooltip: "Display FortiOS version, serial number, and system status" },
+      { command: "show full-configuration", tooltip: "Display the complete FortiOS configuration" },
+      { command: "get hardware status", tooltip: "Display Fortinet hardware and sensor information" },
+      { command: "diagnose sys top", tooltip: "Display live FortiOS process and resource usage" },
+    ],
+    hp: [
+      { command: "show interfaces brief", tooltip: "Summarize HP ProCurve interface state" },
+      { command: "show running-config", tooltip: "Display the active ProCurve configuration" },
+      { command: "show vlans", tooltip: "List HP ProCurve VLANs" },
+      { command: "show log", tooltip: "Display HP ProCurve event logs" },
+      { command: "show mac-address", tooltip: "Display learned MAC addresses" },
+    ],
+  };
 
-  const system = accordion("📋 System & Logs");
-  addCommandButtons(system.content, [
-    { command: "show log", tooltip: "Display recent system and event log entries" },
-    { command: "show tech-support", tooltip: "Collect a detailed support and troubleshooting report" },
-    { command: "show running-config", tooltip: "Display the active running configuration" },
-    { command: "show inventory", tooltip: "List hardware chassis, modules, and serial numbers" },
-  ]);
-  body.append(system.section);
-
-  const diagnosticsSection = accordion("🔍 Diagnostics");
-  addCommandButtons(diagnosticsSection.content, [
-    { command: "show mac address-table", tooltip: "Display learned MAC addresses and switch ports" },
-    { command: "show arp", tooltip: "Display the IP-to-MAC address resolution table" },
-    { command: "show cdp neighbors", tooltip: "List directly connected Cisco Discovery Protocol neighbors" },
-  ]);
-  if (profile && profile.protocol !== "serial" && profile.protocol !== "local") {
-    const diagnosticsGrid = createTextElement("div", "switch-tools-command-grid", "");
-    for (const [label, kind] of [["Ping", "ping"], ["Traceroute", "traceroute"]] as const) {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.textContent = label;
-      button.title = label === "Ping"
-        ? "Run an inline reachability test against the active connection"
-        : "Trace the network route to the active connection";
-      button.addEventListener("click", async () => {
-        button.disabled = true;
-        status.textContent = `${label} running against ${profile.host}...`;
-        try {
-          const result = await window.cybergrid.diagnostics.run(profile.id, kind);
-          status.textContent = `${result.summary}\n${result.output}`;
-        } catch (error) {
-          status.textContent = errorMessage(error);
-        } finally {
-          button.disabled = false;
-        }
-      });
-      diagnosticsGrid.append(button);
+  const renderVendorTools = (): void => {
+    toolsHost.replaceChildren();
+    commandButtons = [];
+    const selected = osSelect.value as SwitchDeviceOs;
+    const deviceOs = selected === "auto" ? tab.detectedSwitchVendor ?? "generic" : selected;
+    if (deviceOs !== "generic" && deviceOs !== "auto") {
+      const commands = accordion(deviceOs === "cisco" ? "Cisco IOS Commands" : deviceOs === "fortinet" ? "FortiOS Commands" : "HP ProCurve Commands", true);
+      addCommandButtons(commands.content, vendorCommands[deviceOs]);
+      toolsHost.append(commands.section);
+    } else {
+      const diagnostics = accordion("Linux / Generic Diagnostics", true);
+      const grid = createTextElement("div", "switch-tools-command-grid", "");
+      for (const [label, kind, terminalCommand] of [
+        ["Ping", "ping", `ping ${tab.context.host}`],
+        ["Traceroute", "traceroute", `traceroute ${tab.context.host}`],
+        ["Port Scan", "port", `nmap -Pn ${tab.context.host}`],
+      ] as const) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.textContent = label;
+        button.title = `${label} the active endpoint using CyberGrid diagnostics or the current shell`;
+        button.addEventListener("click", async () => {
+          if (!profile) {
+            writeTerminalInput(tab, commandForTerminal(terminalCommand));
+            status.textContent = `Sent: ${terminalCommand}`;
+            return;
+          }
+          button.disabled = true;
+          status.textContent = `${label} running against ${profile.host}...`;
+          try {
+            const result = await window.cybergrid.diagnostics.run(profile.id, kind);
+            status.textContent = `${result.summary}\n${result.output}`;
+          } catch (error) {
+            status.textContent = errorMessage(error);
+          } finally {
+            button.disabled = false;
+          }
+        });
+        grid.append(button);
+      }
+      diagnostics.content.append(grid);
+      toolsHost.append(diagnostics.section);
     }
-    diagnosticsSection.content.append(diagnosticsGrid);
-  }
-  body.append(diagnosticsSection.section);
-  tab.switchCommandButtons = commandButtons;
+    tab.switchCommandButtons = commandButtons;
+    for (const button of commandButtons) {
+      button.disabled = tab.status !== "connected" && tab.status !== "running" && tab.status !== "ready";
+    }
+  };
+  tab.renderSwitchTools = renderVendorTools;
+  osSelect.addEventListener("change", renderVendorTools);
+  body.append(toolsHost);
+  renderVendorTools();
 
   body.append(status);
   drawer.append(header, body);
@@ -2132,7 +2204,7 @@ function createTabForProfile(profile: ServerProfileSummary): WorkspaceTab {
     displayName: profile.name, host: profile.host, ip: profile.host, username: profile.username,
     group: profile.group, port: profile.port, profileId: profile.id,
   });
-  tab.duplicate = () => connectSavedProfile(profile);
+  tab.duplicate = () => connectSavedProfile(profile, true);
   return tab;
 }
 
@@ -2177,9 +2249,9 @@ function focusOpenConnectionTab(connectionId?: string, endpointKey?: string): bo
   return true;
 }
 
-async function connectSavedProfile(profile: ServerProfileSummary): Promise<void> {
+async function connectSavedProfile(profile: ServerProfileSummary, allowDuplicate = false): Promise<void> {
   const endpointKey = profileEndpointKey(profile);
-  if (focusOpenConnectionTab(profile.id, endpointKey)) return;
+  if (!allowDuplicate && focusOpenConnectionTab(profile.id, endpointKey)) return;
   const tab = createTabForProfile(profile);
   tab.connectionKey = endpointKey;
   if (profile.protocol === "ssh") {
@@ -2201,14 +2273,14 @@ async function connectSavedProfile(profile: ServerProfileSummary): Promise<void>
   }
 }
 
-async function connectQuickSsh(config: SshConnectionConfig): Promise<void> {
+async function connectQuickSsh(config: SshConnectionConfig, allowDuplicate = false): Promise<void> {
   const endpointKey = connectionEndpointKey("ssh", config.host, config.port);
-  if (focusOpenConnectionTab(undefined, endpointKey)) return;
+  if (!allowDuplicate && focusOpenConnectionTab(undefined, endpointKey)) return;
   const tab = createTerminalTab(config.host, "ssh", {
     host: config.host, ip: config.host, username: config.username, group: "Quick Connect", port: config.port,
   });
   tab.connectionKey = endpointKey;
-  tab.duplicate = () => connectQuickSsh({ ...config });
+  tab.duplicate = () => connectQuickSsh({ ...config }, true);
   tab.sshPasswordRetry = async (password) => {
     config.password = password;
     attachSshSession(tab, await window.cybergrid.ssh.connect({ ...config, password }));
@@ -2228,53 +2300,53 @@ async function connectQuickSsh(config: SshConnectionConfig): Promise<void> {
   catch (error) { handleConnectionFailure(tab, error); }
 }
 
-async function connectQuickRdp(config: RdpConnectionConfig): Promise<void> {
+async function connectQuickRdp(config: RdpConnectionConfig, allowDuplicate = false): Promise<void> {
   const endpointKey = connectionEndpointKey("rdp", config.host, config.port);
-  if (focusOpenConnectionTab(undefined, endpointKey)) return;
+  if (!allowDuplicate && focusOpenConnectionTab(undefined, endpointKey)) return;
   const tab = createRdpTab(config.host, config);
   tab.connectionKey = endpointKey;
   tab.context = tabContext(config.host, { host: config.host, ip: config.host, username: config.username, port: config.port });
-  tab.duplicate = () => connectQuickRdp({ ...config });
+  tab.duplicate = () => connectQuickRdp({ ...config }, true);
   tab.status = "launching";
   updateConnectionState(tab);
   try { attachRdpSession(tab, await window.cybergrid.rdp.connect(config)); }
   catch (error) { handleConnectionFailure(tab, error); }
 }
 
-async function connectQuickStream(config: StreamConnectionConfig): Promise<void> {
+async function connectQuickStream(config: StreamConnectionConfig, allowDuplicate = false): Promise<void> {
   const endpointKey = connectionEndpointKey(config.protocol, config.host, config.port);
-  if (focusOpenConnectionTab(undefined, endpointKey)) return;
+  if (!allowDuplicate && focusOpenConnectionTab(undefined, endpointKey)) return;
   const tab = createTerminalTab(config.host, config.protocol, {
     host: config.host, ip: config.host, group: "Quick Connect", port: config.port,
   });
   tab.connectionKey = endpointKey;
-  tab.duplicate = () => connectQuickStream({ ...config });
+  tab.duplicate = () => connectQuickStream({ ...config }, true);
   setTabConnecting(tab, `connecting to ${config.host}:${config.port}...`);
   try { attachStreamSession(tab, await window.cybergrid.stream.connect(config)); }
   catch (error) { handleConnectionFailure(tab, error); }
 }
 
-async function connectQuickSerial(config: SerialConnectionConfig): Promise<void> {
+async function connectQuickSerial(config: SerialConnectionConfig, allowDuplicate = false): Promise<void> {
   const endpointKey = connectionEndpointKey("serial", config.path);
-  if (focusOpenConnectionTab(undefined, endpointKey)) return;
+  if (!allowDuplicate && focusOpenConnectionTab(undefined, endpointKey)) return;
   const tab = createTerminalTab(config.path, "serial", {
     host: config.path, ip: config.path, group: "Quick Connect",
   });
   tab.connectionKey = endpointKey;
-  tab.duplicate = () => connectQuickSerial({ ...config });
+  tab.duplicate = () => connectQuickSerial({ ...config }, true);
   setTabConnecting(tab, `opening ${config.path} at ${config.baudRate} baud...`);
   try { attachSerialSession(tab, await window.cybergrid.serial.connect(config)); }
   catch (error) { handleConnectionFailure(tab, error); }
 }
 
-async function connectQuickLocal(config: LocalTerminalConfig): Promise<void> {
+async function connectQuickLocal(config: LocalTerminalConfig, allowDuplicate = false): Promise<void> {
   const endpointKey = connectionEndpointKey("local", config.shell);
-  if (focusOpenConnectionTab(undefined, endpointKey)) return;
+  if (!allowDuplicate && focusOpenConnectionTab(undefined, endpointKey)) return;
   const tab = createTerminalTab(config.shell, "local", {
     host: config.shell, ip: "127.0.0.1", group: "Local",
   });
   tab.connectionKey = endpointKey;
-  tab.duplicate = () => connectQuickLocal({ ...config });
+  tab.duplicate = () => connectQuickLocal({ ...config }, true);
   setTabConnecting(tab, `starting local ${config.shell} shell...`);
   try {
     attachLocalSession(tab, await window.cybergrid.local.connect({
@@ -2285,28 +2357,28 @@ async function connectQuickLocal(config: LocalTerminalConfig): Promise<void> {
   } catch (error) { handleConnectionFailure(tab, error); }
 }
 
-async function connectQuickVnc(config: VncConnectionConfig): Promise<void> {
+async function connectQuickVnc(config: VncConnectionConfig, allowDuplicate = false): Promise<void> {
   const endpointKey = connectionEndpointKey("vnc", config.host, config.port);
-  if (focusOpenConnectionTab(undefined, endpointKey)) return;
+  if (!allowDuplicate && focusOpenConnectionTab(undefined, endpointKey)) return;
   const tab = createVncTab(config.host);
   tab.connectionKey = endpointKey;
   tab.context = tabContext(config.host, { host: config.host, ip: config.host, port: config.port });
-  tab.duplicate = () => connectQuickVnc({ ...config });
+  tab.duplicate = () => connectQuickVnc({ ...config }, true);
   setTabConnecting(tab, `connecting to VNC ${config.host}:${config.port}...`);
   try { await attachVncSession(tab, await window.cybergrid.vnc.connect(config)); }
   catch (error) { handleConnectionFailure(tab, error); }
 }
 
-async function connectQuickWeb(url: string): Promise<void> {
+async function connectQuickWeb(url: string, allowDuplicate = false): Promise<void> {
   const parsed = new URL(url);
   const protocol = parsed.protocol === "https:" ? "https" : "http";
   const port = Number(parsed.port || (protocol === "https" ? 443 : 80));
   const endpointKey = connectionEndpointKey(protocol, parsed.hostname, port);
-  if (focusOpenConnectionTab(undefined, endpointKey)) return;
+  if (!allowDuplicate && focusOpenConnectionTab(undefined, endpointKey)) return;
   const tab = createWebTab(parsed.hostname, protocol);
   tab.connectionKey = endpointKey;
   tab.context = tabContext(parsed.hostname, { host: parsed.hostname, ip: parsed.hostname, port });
-  tab.duplicate = () => connectQuickWeb(url);
+  tab.duplicate = () => connectQuickWeb(url, true);
   updateTabStatus(tab, "loading");
   const username = decodeURIComponent(parsed.username);
   const password = decodeURIComponent(parsed.password);
@@ -4218,8 +4290,8 @@ const DEFAULT_PROTOCOL_PORTS: Record<Exclude<ConnectionProtocol, "serial" | "loc
 
 const CATEGORY_PROTOCOLS: Record<ConnectionCategory, ConnectionProtocol[]> = {
   server: ["rdp", "ssh", "vnc", "local"],
-  network: ["ssh", "telnet", "raw", "serial"],
-  web: ["https", "http"],
+  network: ["ssh", "serial"],
+  web: ["https"],
   desktop: ["vnc", "rdp"],
 };
 
@@ -4307,76 +4379,40 @@ function selectConnectionCategory(category: ConnectionCategory, resetProtocol = 
 
 function updateProfileFields(resetDefaults = false): void {
   const protocol = serverProtocolInput.value as ConnectionProtocol;
-  const sshProtocol = protocol === "ssh";
   const serial = protocol === "serial";
   const local = protocol === "local";
-  const webProtocol = protocol === "http" || protocol === "https";
-  const usesUsername = protocol === "ssh" || protocol === "rdp" || webProtocol;
-  const usesAuthentication = protocol === "ssh" || protocol === "rdp" || protocol === "vnc" || webProtocol;
-  const privateKeyOption = authTypeInput.querySelector<HTMLOptionElement>('option[value="privateKey"]');
-  renderCredentialProfileOptions();
-  if (!usesAuthentication) serverCredentialProfileInput.value = "";
-  const linkedCredential = Boolean(serverCredentialProfileInput.value);
-
-  serverHostLabel.textContent = "IP / Hostname";
-  serverHostInput.placeholder = "admin@server.example.net:22";
-  serverHostField.hidden = serial || local;
-  serverHostInput.disabled = serial || local;
-  serverHostInput.required = !serial && !local;
-  serverSerialPortField.hidden = !serial;
-  serverSerialPortInput.disabled = !serial;
-  serverSerialPortInput.required = serial;
-  serverLocalShellField.hidden = !local;
-  serverLocalShellInput.disabled = !local;
-  serverLocalShellInput.required = local;
+  serverHostLabel.textContent = serial ? "COM port" : local ? "Local shell" : "IP / Hostname";
+  serverHostInput.placeholder = serial ? "COM3" : local ? "powershell, cmd, or wsl" : "admin@server.example.net:22";
+  serverHostField.hidden = false;
+  serverHostInput.disabled = false;
+  serverHostInput.required = true;
+  serverSerialPortField.hidden = true;
+  serverSerialPortInput.disabled = true;
+  serverSerialPortInput.required = false;
+  serverLocalShellField.hidden = true;
+  serverLocalShellInput.disabled = true;
+  serverLocalShellInput.required = false;
   serverPortInput.closest<HTMLElement>(".field")?.toggleAttribute("hidden", serial || local);
   serverPortInput.disabled = serial || local;
-  serverPortInput.required = !serial && !local;
-  serverSerialSection.hidden = !serial;
-  serverBaudRateInput.required = serial;
-  serverCredentialProfileField.hidden = !usesAuthentication;
-  serverUsernameField.hidden = !usesUsername || linkedCredential;
-  serverDomainInput.closest<HTMLElement>(".field")?.toggleAttribute("hidden", protocol !== "rdp" || linkedCredential);
-  serverUsernameInput.required = (protocol === "ssh" || protocol === "rdp") && !serverInheritFolderInput.checked && !linkedCredential;
-  serverAuthField.hidden = !usesAuthentication || linkedCredential;
-  privateKeyOption?.toggleAttribute("disabled", protocol !== "ssh");
-
-  if (resetDefaults) {
-    if (!serial && !local) serverPortInput.value = String(DEFAULT_PROTOCOL_PORTS[protocol]);
-    authTypeInput.value = usesAuthentication && !serverInheritFolderInput.checked ? "password" : "none";
-  } else if (protocol !== "ssh" && authTypeInput.value === "privateKey") {
-    authTypeInput.value = usesAuthentication ? "password" : "none";
-  } else if (!usesAuthentication) {
-    authTypeInput.value = "none";
-  }
-  if (linkedCredential) authTypeInput.value = "none";
-
-  const usesPassword = usesAuthentication && !linkedCredential && authTypeInput.value === "password";
-  const usesPrivateKey = sshProtocol && !linkedCredential && authTypeInput.value === "privateKey";
-  serverPasswordSection.hidden = !usesPassword;
-  serverKeySection.hidden = !usesPrivateKey;
-  serverPasswordInput.required = usesPassword && !serverPasswordInput.placeholder.startsWith("Stored");
-  serverKeyPathInput.required = usesPrivateKey && !serverKeyPathInput.placeholder.startsWith("Stored");
-  serverKeepaliveField.hidden = !sshProtocol;
-  serverKeepaliveEnabledField.hidden = !sshProtocol;
-  serverKeepaliveEnabledInput.disabled = !sshProtocol;
-  serverKeepaliveInput.disabled = !sshProtocol || !serverKeepaliveEnabledInput.checked;
-  serverJumpHostField.hidden = !sshProtocol;
-  serverJumpHostInput.disabled = !sshProtocol;
-  serverLegacySshField.hidden = !sshProtocol;
-  serverLegacySshInput.disabled = !sshProtocol;
-  serverPortForwardingSection.hidden = !sshProtocol;
-  for (const input of [serverForwardLocalPortInput, serverForwardRemoteHostInput, serverForwardRemotePortInput]) {
-    input.disabled = !sshProtocol;
-  }
-  if (serial && serverSerialPortInput.options.length === 0) {
-    void refreshSerialPortOptions(serverHostInput.value);
-  }
+  serverPortInput.required = false;
+  if (resetDefaults) serverPortInput.value = "";
+  serverSerialSection.hidden = true;
+  serverBaudRateInput.required = false;
+  serverCredentialProfileField.hidden = true;
+  serverUsernameField.hidden = false;
+  serverDomainInput.closest<HTMLElement>(".field")?.removeAttribute("hidden");
+  serverUsernameInput.required = false;
+  serverAuthField.hidden = true;
+  serverPasswordSection.hidden = false;
+  serverPasswordInput.required = false;
+  serverKeySection.hidden = true;
+  serverKeyPathInput.required = false;
 }
 
 function openServerModal(profile?: ServerProfileSummary): void {
   serverForm.reset();
   editingProfileId = profile?.id ?? null;
+  editingProfileSnapshot = profile ?? null;
   serverModalTitle.textContent = profile ? "Connection Properties" : "Add Connection";
   serverProtocolInput.value = profile?.protocol ?? CATEGORY_DEFAULT_PROTOCOL.server;
   serverBaudRateInput.value = "9600";
@@ -4477,6 +4513,7 @@ function populateSettingsForm(settings: AppPreferences): void {
   minimizeToTrayInput.checked = settings.minimizeToTray;
   startMinimizedInput.checked = settings.startMinimized;
   launchAtLoginInput.checked = settings.launchAtLogin;
+  confirmExitActiveSessionsInput.checked = settings.confirmExitWithActiveSessions;
   compactTreeViewInput.checked = settings.compactTreeView;
   masterPasswordEnabledInput.checked = settings.masterPasswordEnabled;
   autoLockInput.value = String(settings.autoLockMinutes);
@@ -4484,11 +4521,17 @@ function populateSettingsForm(settings: AppPreferences): void {
   themeInput.value = settings.theme;
   fontFamilyInput.value = settings.fontFamily;
   fontSizeInput.value = String(settings.fontSize);
+  terminalLineHeightInput.value = String(settings.terminalLineHeight);
+  sshKeepAliveSecondsInput.value = String(settings.sshKeepAliveSeconds);
+  sshMaxPasswordRetriesInput.value = String(settings.sshMaxPasswordRetries);
   cursorBlinkInput.checked = settings.cursorBlink;
   backgroundInput.value = settings.background;
   foregroundInput.value = settings.foreground;
   cursorInput.value = settings.cursor;
   accentInput.value = settings.accent;
+  rdpSmartSizingInput.checked = settings.rdpSmartSizing;
+  rdpColorDepthInput.value = String(settings.rdpColorDepth);
+  rdpSoundModeInput.value = settings.rdpSoundMode;
   proxyModeInput.value = settings.proxyMode;
   proxyUrlInput.value = settings.proxyUrl;
   proxyBypassInput.value = settings.proxyBypassRules;
@@ -4571,10 +4614,45 @@ async function disconnectAllSessions(): Promise<void> {
   updateBroadcastControls();
 }
 
+function createFolderFromMenu(): void {
+  const suggestedParent = pasteDestinationGroup();
+  const path = window.prompt("New folder path", suggestedParent ? `${suggestedParent}/New Folder` : "New Folder")?.trim();
+  if (!path) return;
+  openFolderDefaultsModal(path.replace(/\\/g, "/").replace(/\s*>\s*/g, "/"));
+}
+
+function duplicateSelectedConnectionFromMenu(): void {
+  const profileId = selectedProfileIdsForTree()[0];
+  if (!profileId) {
+    connectionState.textContent = "Select a saved connection to duplicate.";
+    return;
+  }
+  void duplicateConnection(profileId, pasteDestinationGroup());
+}
+
+function toggleActiveToolsDrawer(): void {
+  const tab = activeTabId ? tabs.get(activeTabId) : undefined;
+  if (!tab?.setSwitchToolsOpen) {
+    connectionState.textContent = "The active tab does not provide terminal tools.";
+    return;
+  }
+  tab.setSwitchToolsOpen(!tab.switchToolsOpen);
+}
+
+function runSelectedPortScan(): void {
+  const profile = selectedProfile();
+  if (!profile) {
+    connectionState.textContent = "Select a saved connection to run a port scan.";
+    return;
+  }
+  void executeProfileDiagnostic(profile, "port");
+}
+
 async function handleAppMenuCommand(command: AppMenuCommand): Promise<void> {
   const requiresUnlockedVault = new Set<AppMenuCommand>([
-    "new-connection", "lock-vault", "import-export", "command-palette", "external-tools",
-    "enterprise", "credential-profiles", "subnet-scanner", "settings", "export-vault-backup",
+    "new-connection", "new-folder", "duplicate-connection", "delete-selection", "lock-vault",
+    "import-export", "command-palette", "external-tools", "enterprise", "credential-profiles",
+    "subnet-scanner", "port-scan", "settings", "export-vault-backup",
   ]);
   if (requiresUnlockedVault.has(command) && !vaultUnlocked) {
     vaultError.textContent = "Unlock the credential vault to use this command.";
@@ -4582,6 +4660,9 @@ async function handleAppMenuCommand(command: AppMenuCommand): Promise<void> {
   }
   switch (command) {
     case "new-connection": openServerModal(); break;
+    case "new-folder": createFolderFromMenu(); break;
+    case "duplicate-connection": duplicateSelectedConnectionFromMenu(); break;
+    case "delete-selection": await deleteSelectedTreeItems(); break;
     case "focus-quick-connect": quickConnectInput.focus(); quickConnectInput.select(); break;
     case "lock-vault": await lockVaultFromUi(); break;
     case "import-export": openMigrationModal(); break;
@@ -4589,6 +4670,7 @@ async function handleAppMenuCommand(command: AppMenuCommand): Promise<void> {
     case "command-palette": openCommandPalette(); break;
     case "clear-terminal": clearActiveTerminal(); break;
     case "toggle-sidebar": toggleSidebar(); break;
+    case "toggle-tools-drawer": toggleActiveToolsDrawer(); break;
     case "toggle-grid": toggleGridLayout(); break;
     case "toggle-broadcast": toggleBroadcastMode(); break;
     case "broadcast-targets": openBroadcastTargets(); break;
@@ -4605,6 +4687,7 @@ async function handleAppMenuCommand(command: AppMenuCommand): Promise<void> {
     case "enterprise": openEnterpriseModal(); break;
     case "credential-profiles": openCredentialProfiles(); break;
     case "subnet-scanner": openScanModal(); break;
+    case "port-scan": runSelectedPortScan(); break;
     case "settings": openSettingsModal(); break;
     case "close-tab": if (activeTabId) await closeTab(activeTabId); break;
     case "reopen-tab": await reopenClosedTab(); break;
@@ -5241,6 +5324,7 @@ serverModal.addEventListener("click", (event) => {
 });
 serverModal.addEventListener("close", () => {
   editingProfileId = null;
+  editingProfileSnapshot = null;
   serverPasswordInput.type = "password";
   serverPasswordInput.value = "";
 });
@@ -5256,16 +5340,18 @@ serverForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   serverFormError.textContent = "";
   const protocol = serverProtocolInput.value as ConnectionProtocol;
-  const credentialProfileId = serverCredentialProfileInput.value || undefined;
-  const authType = credentialProfileId ? "none" : authTypeInput.value as ServerAuthType;
+  const existing = editingProfileSnapshot;
+  const passwordProvided = serverPasswordInput.value.length > 0;
+  const credentialProfileId = passwordProvided ? undefined : existing?.credentialProfileId;
+  const authType: ServerAuthType = passwordProvided ? "password" : existing?.authType ?? "none";
   let connectionTarget: ReturnType<typeof parseConnectionTarget>;
   try {
     if (protocol === "serial") {
-      const path = serverSerialPortInput.value.trim();
-      if (!path) throw new Error("Select an available COM or serial port.");
+      const path = serverHostInput.value.trim();
+      if (!path) throw new Error("Enter a COM or serial port.");
       connectionTarget = { host: path };
     } else if (protocol === "local") {
-      const shell = serverLocalShellInput.value as LocalShell;
+      const shell = serverHostInput.value.trim().toLowerCase() as LocalShell;
       if (shell !== "powershell" && shell !== "cmd" && shell !== "wsl") throw new Error("Select a local shell.");
       connectionTarget = { host: shell };
     } else {
@@ -5284,45 +5370,41 @@ serverForm.addEventListener("submit", async (event) => {
     protocol,
     name: serverNameInput.value.trim() || connectionTarget.host,
     host: connectionTarget.host,
-    port: protocol === "serial" || protocol === "local" ? 0 : connectionTarget.port ?? Number(serverPortInput.value),
+    port: protocol === "serial" || protocol === "local"
+      ? 0
+      : connectionTarget.port ?? (serverPortInput.value ? Number(serverPortInput.value) : DEFAULT_PROTOCOL_PORTS[protocol]),
     username: connectionTarget.username ?? serverUsernameInput.value.trim(),
-    group: serverGroupInput.value.trim() || "Ungrouped",
+    group: existing?.group ?? "Ungrouped",
     authType,
     credentialProfileId,
     password: authType === "password" ? serverPasswordInput.value : undefined,
-    privateKeyPath: authType === "privateKey" ? serverKeyPathInput.value.trim() : undefined,
-    passphrase: authType === "privateKey" ? serverPassphraseInput.value : undefined,
-    baudRate: protocol === "serial" ? Number(serverBaudRateInput.value) : undefined,
-    dataBits: protocol === "serial" ? Number(serverDataBitsInput.value) as 5 | 6 | 7 | 8 : undefined,
-    stopBits: protocol === "serial" ? Number(serverStopBitsInput.value) as 1 | 2 : undefined,
-    parity: protocol === "serial" ? serverParityInput.value as ServerProfileInput["parity"] : undefined,
-    localShell: protocol === "local" ? serverLocalShellInput.value as LocalShell : undefined,
-    portForward: protocol === "ssh" && (
-      serverForwardLocalPortInput.value || serverForwardRemoteHostInput.value || serverForwardRemotePortInput.value
-    ) ? {
-        localPort: Number(serverForwardLocalPortInput.value),
-        remoteHost: serverForwardRemoteHostInput.value.trim(),
-        remotePort: Number(serverForwardRemotePortInput.value),
-      } : undefined,
-    tags: [...new Set(serverTagsInput.value.split(",").map((tag) => tag.trim()).filter(Boolean))],
-    favorite: serverFavoriteInput.checked,
-    inheritFolderDefaults: serverInheritFolderInput.checked,
+    privateKeyPath: authType === "privateKey" ? existing?.privateKeyPath : undefined,
+    baudRate: protocol === "serial" ? existing?.baudRate ?? 9_600 : undefined,
+    dataBits: protocol === "serial" ? existing?.dataBits ?? 8 : undefined,
+    stopBits: protocol === "serial" ? existing?.stopBits ?? 1 : undefined,
+    parity: protocol === "serial" ? existing?.parity ?? "none" : undefined,
+    localShell: protocol === "local" ? connectionTarget.host as LocalShell : undefined,
+    portForward: protocol === "ssh" ? existing?.portForward : undefined,
+    tags: existing?.tags ?? [],
+    favorite: existing?.favorite ?? false,
+    inheritFolderDefaults: existing?.inheritFolderDefaults ?? true,
     domain: serverDomainInput.value.trim() || undefined,
-    readyTimeoutSeconds: serverTimeoutInput.value ? Number(serverTimeoutInput.value) : undefined,
-    keepaliveSeconds: protocol === "ssh" && serverKeepaliveInput.value ? Number(serverKeepaliveInput.value) : undefined,
-    keepAliveEnabled: protocol === "ssh" && serverKeepaliveEnabledInput.checked,
-    persistUntilAppCloses: serverPersistInput.checked,
-    autoReconnect: serverAutoReconnectInput.checked,
-    enableLegacySshAlgorithms: protocol === "ssh" && serverLegacySshInput.checked,
-    jumpHost: protocol === "ssh" ? serverJumpHostInput.value.trim() || undefined : undefined,
-    proxyOverride: serverProxyOverrideInput.value.trim() || undefined,
-    icon: (serverIconInput.value || undefined) as DeviceIcon | undefined,
-    applicationBadge: serverApplicationBadgeInput.value.trim() || undefined,
-    indicatorColor: serverIndicatorColorInput.value,
-    preConnectTaskIds: [...serverPreTasksInput.selectedOptions].map((option) => option.value),
-    postConnectTaskIds: [...serverPostTasksInput.selectedOptions].map((option) => option.value),
-    totpSecret: serverTotpSecretInput.value || undefined,
-    totpDigits: serverTotpDigitsInput.value === "8" ? 8 : 6,
+    readyTimeoutSeconds: existing?.readyTimeoutSeconds,
+    keepaliveSeconds: undefined,
+    keepAliveEnabled: true,
+    persistUntilAppCloses: existing?.persistUntilAppCloses ?? false,
+    autoReconnect: existing?.autoReconnect ?? false,
+    enableLegacySshAlgorithms: protocol === "ssh" && (existing?.enableLegacySshAlgorithms ?? connectionCategory === "network"),
+    jumpHost: protocol === "ssh" ? existing?.jumpHost : undefined,
+    proxyOverride: existing?.proxyOverride,
+    icon: existing?.icon,
+    applicationBadge: existing?.applicationBadge,
+    indicatorColor: existing?.indicatorColor,
+    terminalOverrides: undefined,
+    preConnectTaskIds: existing?.preConnectTaskIds ?? [],
+    postConnectTaskIds: existing?.postConnectTaskIds ?? [],
+    totpSecret: undefined,
+    totpDigits: 6,
     totpPeriod: 30,
     totpAlgorithm: serverTotpAlgorithmInput.value as ServerProfileInput["totpAlgorithm"],
   };
@@ -5330,6 +5412,7 @@ serverForm.addEventListener("submit", async (event) => {
   try {
     await window.cybergrid.vault.saveProfile(profile);
     editingProfileId = null;
+    editingProfileSnapshot = null;
     serverPasswordInput.value = "";
     serverPassphraseInput.value = "";
     serverTotpSecretInput.value = "";
@@ -5404,6 +5487,7 @@ settingsForm.addEventListener("submit", async (event) => {
     minimizeToTray: minimizeToTrayInput.checked,
     startMinimized: startMinimizedInput.checked,
     launchAtLogin: launchAtLoginInput.checked,
+    confirmExitWithActiveSessions: confirmExitActiveSessionsInput.checked,
     compactTreeView: compactTreeViewInput.checked,
     masterPasswordEnabled: masterPasswordEnabledInput.checked,
     autoLockMinutes: masterPasswordEnabledInput.checked ? Number(autoLockInput.value) : 0,
@@ -5411,11 +5495,17 @@ settingsForm.addEventListener("submit", async (event) => {
     theme: themeInput.value as AppPreferences["theme"],
     fontFamily: fontFamilyInput.value.trim() || DEFAULT_SETTINGS.fontFamily,
     fontSize: Math.min(28, Math.max(10, Math.round(Number(fontSizeInput.value)))),
+    terminalLineHeight: Math.min(2, Math.max(1, Number(terminalLineHeightInput.value))),
     cursorBlink: cursorBlinkInput.checked,
     background: backgroundInput.value,
     foreground: foregroundInput.value,
     cursor: cursorInput.value,
     accent: accentInput.value,
+    sshKeepAliveSeconds: Math.min(300, Math.max(0, Math.round(Number(sshKeepAliveSecondsInput.value)))),
+    sshMaxPasswordRetries: Math.min(100, Math.max(0, Math.round(Number(sshMaxPasswordRetriesInput.value)))),
+    rdpSmartSizing: rdpSmartSizingInput.checked,
+    rdpColorDepth: Number(rdpColorDepthInput.value) as AppPreferences["rdpColorDepth"],
+    rdpSoundMode: rdpSoundModeInput.value as AppPreferences["rdpSoundMode"],
     proxyMode: proxyModeInput.value as AppPreferences["proxyMode"],
     proxyUrl: proxyUrlInput.value.trim(),
     proxyBypassRules: proxyBypassInput.value.trim(),

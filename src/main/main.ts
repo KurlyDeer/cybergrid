@@ -7,7 +7,6 @@ import {
   Menu,
   session,
   type MessageBoxOptions,
-  type MenuItemConstructorOptions,
   type IpcMainEvent,
   type IpcMainInvokeEvent,
   type ProxyConfig,
@@ -74,6 +73,7 @@ import type { MigrationController } from "./migration";
 import type { LocalTerminalController } from "./local-terminal";
 import type { PreferencesController } from "./preferences";
 import { RdpController } from "./rdp";
+import { installCyberGridMenu } from "./menu";
 import type { ScannerController } from "./scanner";
 import type { SerialController } from "./serial";
 import type { SshController } from "./ssh";
@@ -202,15 +202,16 @@ function showMainMessageBox(options: MessageBoxOptions): Promise<Electron.Messag
 
 async function requestApplicationQuit(parent = mainWindow): Promise<void> {
   if (quitConfirmationPending) return;
-  const count = trayStateSnapshot.openTabCount;
-  if (!quitConfirmed && !sessionEnding && count > 0) {
+  const count = trayStateSnapshot.sessions.length;
+  const confirmationEnabled = preferencesController?.get().confirmExitWithActiveSessions ?? true;
+  if (!quitConfirmed && !sessionEnding && confirmationEnabled && count > 0) {
     quitConfirmationPending = true;
     try {
       const result = parent && !parent.isDestroyed()
         ? await dialog.showMessageBox(parent, {
             type: "warning",
             title: "Exit CyberGrid?",
-            message: `You have ${count} active sessions open. Close all and exit CyberGrid?`,
+            message: `You have ${count} active sessions open. Are you sure you want to close all sessions and exit CyberGrid?`,
             buttons: ["Close All & Exit", "Cancel"],
             defaultId: 1,
             cancelId: 1,
@@ -219,7 +220,7 @@ async function requestApplicationQuit(parent = mainWindow): Promise<void> {
         : await dialog.showMessageBox({
             type: "warning",
             title: "Exit CyberGrid?",
-            message: `You have ${count} active sessions open. Close all and exit CyberGrid?`,
+            message: `You have ${count} active sessions open. Are you sure you want to close all sessions and exit CyberGrid?`,
             buttons: ["Close All & Exit", "Cancel"],
             defaultId: 1,
             cancelId: 1,
@@ -240,112 +241,26 @@ async function checkForUpdatesFromMenu(): Promise<void> {
 }
 
 function installApplicationMenu(): void {
-  const command = (value: AppMenuCommand): (() => void) => () => sendMenuCommand(value);
-  const template: MenuItemConstructorOptions[] = [
-    {
-      label: "File",
-      submenu: [
-        { label: "New Connection...", accelerator: "CommandOrControl+Shift+N", click: command("new-connection") },
-        { label: "Quick Connect", accelerator: "CommandOrControl+N", click: command("focus-quick-connect") },
-        { type: "separator" },
-        { label: "Lock Vault", accelerator: "CommandOrControl+L", click: command("lock-vault") },
-        { label: "Import / Export (.xml, .cgvault)...", click: command("import-export") },
-        { type: "separator" },
-        {
-          label: "Exit",
-          accelerator: "Alt+F4",
-          click: () => {
-            void requestApplicationQuit();
-          },
-        },
-      ],
-    },
-    {
-      label: "Edit",
-      submenu: [
-        { role: "copy", label: "Copy" },
-        { role: "paste", label: "Paste" },
-        { type: "separator" },
-        { label: "Command Palette...", accelerator: "CommandOrControl+K", click: command("command-palette") },
-        { label: "Clear Active Terminal", accelerator: "CommandOrControl+Shift+K", click: command("clear-terminal") },
-      ],
-    },
-    {
-      label: "View",
-      submenu: [
-        { label: "Toggle Sidebar", accelerator: "CommandOrControl+B", click: command("toggle-sidebar") },
-        { label: "Split Grid View (2x2)", accelerator: "CommandOrControl+Shift+G", click: command("toggle-grid") },
-        { type: "separator" },
-        { role: "resetZoom", label: "Reset Zoom" },
-        {
-          id: "fullscreen-toggle",
-          label: "Enter Fullscreen (F11)",
-          accelerator: "F11",
-          click: toggleMainWindowFullscreen,
-        },
-        {
-          label: "Exit Fullscreen",
-          accelerator: "CommandOrControl+Shift+F",
-          click: exitMainWindowFullscreen,
-        },
-      ],
-    },
-    {
-      label: "Tools",
-      submenu: [
-        { label: "Broadcast Terminal (Multi-Exec)", click: command("toggle-broadcast") },
-        { label: "Broadcast Targets...", click: command("broadcast-targets") },
-        { label: "SFTP File Browser", click: command("toggle-sftp") },
-        { label: "Node Workspace (Snippets / Notes / Backups)", click: command("node-workspace") },
-        { label: "Quick Snippet Toolbar", click: command("toggle-quick-snippets") },
-        { type: "separator" },
-        { label: "External Tools Launcher", click: command("external-tools") },
-        { label: "Credential Profiles...", click: command("credential-profiles") },
-        { label: "Enterprise Integrations...", click: command("enterprise") },
-        { label: "Subnet IPAM Scanner...", click: command("subnet-scanner") },
-        { type: "separator" },
-        { label: "Settings...", click: command("settings") },
-      ],
-    },
-    {
-      label: "Window",
-      submenu: [
-        { label: "Close Tab", accelerator: "CommandOrControl+W", click: command("close-tab") },
-        { label: "Reopen Tab", accelerator: "CommandOrControl+Shift+T", click: command("reopen-tab") },
-        { label: "Next Tab", accelerator: "Control+Tab", click: command("next-tab") },
-      ],
-    },
-    {
-      label: "Help",
-      submenu: [
-        { label: "Built-in Documentation", accelerator: "F1", click: command("help") },
-        { label: "Keyboard Shortcuts", accelerator: "CommandOrControl+/", click: command("shortcuts") },
-        { type: "separator" },
-        {
-          label: "Check for Updates...",
-          click: () => void checkForUpdatesFromMenu().catch((error: unknown) => {
-            void showMainMessageBox({
-              type: "error",
-              title: "CyberGrid Update Check",
-              message: "CyberGrid could not check for updates.",
-              detail: errorStack(error),
-            });
-          }),
-        },
-        { type: "separator" },
-        {
-          label: "About CyberGrid",
-          click: () => void showMainMessageBox({
-            type: "info",
-            title: "About CyberGrid",
-            message: `CyberGrid ${app.getVersion()}`,
-            detail: "A secure command center for terminal, remote desktop, infrastructure inventory, and systems operations.\n\nMIT License",
-          }),
-        },
-      ],
-    },
-  ];
-  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+  installCyberGridMenu({
+    send: sendMenuCommand,
+    quit: () => void requestApplicationQuit(),
+    toggleFullscreen: toggleMainWindowFullscreen,
+    exitFullscreen: exitMainWindowFullscreen,
+    checkForUpdates: () => void checkForUpdatesFromMenu().catch((error: unknown) => {
+      void showMainMessageBox({
+        type: "error",
+        title: "CyberGrid Update Check",
+        message: "CyberGrid could not check for updates.",
+        detail: errorStack(error),
+      });
+    }),
+    showAbout: () => void showMainMessageBox({
+      type: "info",
+      title: "About CyberGrid",
+      message: `CyberGrid ${app.getVersion()}`,
+      detail: "A secure command center for terminal, remote desktop, infrastructure inventory, and systems operations.\n\nMIT License",
+    }),
+  });
   if (mainWindow && !mainWindow.isDestroyed()) syncFullscreenWindowChrome(mainWindow);
 }
 
@@ -596,7 +511,8 @@ function createMainWindow(): BrowserWindow {
     if (preferencesController?.get().minimizeToTray && !isQuitting) {
       event.preventDefault();
       window.hide();
-    } else if (!isQuitting && trayStateSnapshot.openTabCount > 0) {
+    } else if (!isQuitting && trayStateSnapshot.sessions.length > 0 &&
+      (preferencesController?.get().confirmExitWithActiveSessions ?? true)) {
       event.preventDefault();
       void requestApplicationQuit(window);
     }
@@ -608,6 +524,12 @@ function createMainWindow(): BrowserWindow {
   });
   window.on("enter-full-screen", () => syncFullscreenWindowChrome(window));
   window.on("leave-full-screen", () => syncFullscreenWindowChrome(window));
+  const refreshOwnedRdpWindows = (): void => rdpController?.refreshForWindow(window);
+  window.on("move", refreshOwnedRdpWindows);
+  window.on("resize", refreshOwnedRdpWindows);
+  window.on("restore", refreshOwnedRdpWindows);
+  window.on("maximize", refreshOwnedRdpWindows);
+  window.on("unmaximize", refreshOwnedRdpWindows);
   window.on("closed", () => {
     if (mainWindow === window) {
       mainWindow = null;
@@ -994,11 +916,21 @@ function normalizeRdpConfig(value: unknown): RdpConnectionConfig {
     maxLength: 256,
     singleLine: true,
   });
+  const defaults = preferencesController?.get();
+  const colorDepth = value.colorDepth === 15 || value.colorDepth === 16 || value.colorDepth === 24 || value.colorDepth === 32
+    ? value.colorDepth
+    : defaults?.rdpColorDepth ?? 32;
+  const soundMode = value.soundMode === "remote" || value.soundMode === "disabled" || value.soundMode === "local"
+    ? value.soundMode
+    : defaults?.rdpSoundMode ?? "local";
   return {
     host,
     port: target.port ?? readPort(value.port, 3389),
     username: (username as string).replace(/^~+/, ""),
     domain,
+    smartSizing: typeof value.smartSizing === "boolean" ? value.smartSizing : defaults?.rdpSmartSizing ?? true,
+    colorDepth,
+    soundMode,
   };
 }
 
@@ -1711,6 +1643,9 @@ function normalizePreferences(value: unknown): AppPreferences {
   if (!isRecord(value)) throw new Error("Invalid application preferences.");
   const autoLockMinutes = Number(value.autoLockMinutes);
   const fontSize = Number(value.fontSize);
+  const terminalLineHeight = Number(value.terminalLineHeight);
+  const sshKeepAliveSeconds = Number(value.sshKeepAliveSeconds);
+  const sshMaxPasswordRetries = Number(value.sshMaxPasswordRetries);
   const clipboardClearSeconds = Number(value.clipboardClearSeconds);
   const healthCheckIntervalSeconds = Number(value.healthCheckIntervalSeconds);
   if (!Number.isInteger(autoLockMinutes) || autoLockMinutes < 0 || autoLockMinutes > 480) {
@@ -1718,6 +1653,23 @@ function normalizePreferences(value: unknown): AppPreferences {
   }
   if (!Number.isInteger(fontSize) || fontSize < 10 || fontSize > 28) {
     throw new Error("Terminal font size must be between 10 and 28 pixels.");
+  }
+  if (!Number.isFinite(terminalLineHeight) || terminalLineHeight < 1 || terminalLineHeight > 2) {
+    throw new Error("Terminal line height must be between 1.0 and 2.0.");
+  }
+  if (!Number.isInteger(sshKeepAliveSeconds) || sshKeepAliveSeconds < 0 || sshKeepAliveSeconds > 300) {
+    throw new Error("SSH keep-alive must be between 0 and 300 seconds.");
+  }
+  if (!Number.isInteger(sshMaxPasswordRetries) || sshMaxPasswordRetries < 0 || sshMaxPasswordRetries > 100) {
+    throw new Error("Maximum password retries must be between 0 and 100 (0 means unlimited).");
+  }
+  const rdpColorDepth = Number(value.rdpColorDepth);
+  if (rdpColorDepth !== 15 && rdpColorDepth !== 16 && rdpColorDepth !== 24 && rdpColorDepth !== 32) {
+    throw new Error("RDP color depth must be 15, 16, 24, or 32 bits.");
+  }
+  const rdpSoundMode = value.rdpSoundMode;
+  if (rdpSoundMode !== "local" && rdpSoundMode !== "remote" && rdpSoundMode !== "disabled") {
+    throw new Error("Invalid RDP sound redirection mode.");
   }
   if (!Number.isInteger(clipboardClearSeconds) || clipboardClearSeconds < 0 || clipboardClearSeconds > 300) {
     throw new Error("Clipboard clearing must be between 0 and 300 seconds.");
@@ -1757,6 +1709,7 @@ function normalizePreferences(value: unknown): AppPreferences {
     minimizeToTray: value.minimizeToTray === true,
     startMinimized: value.startMinimized === true,
     launchAtLogin: value.launchAtLogin === true,
+    confirmExitWithActiveSessions: value.confirmExitWithActiveSessions !== false,
     compactTreeView: value.compactTreeView !== false,
     masterPasswordEnabled,
     autoLockMinutes: masterPasswordEnabled ? autoLockMinutes : 0,
@@ -1768,11 +1721,17 @@ function normalizePreferences(value: unknown): AppPreferences {
       singleLine: true,
     }) as string,
     fontSize,
+    terminalLineHeight: Math.round(terminalLineHeight * 100) / 100,
     cursorBlink: value.cursorBlink === true,
     background: readHexColor(value.background, "Terminal background"),
     foreground: readHexColor(value.foreground, "Terminal foreground"),
     cursor: readHexColor(value.cursor, "Terminal cursor"),
     accent: readHexColor(value.accent, "Interface accent"),
+    sshKeepAliveSeconds,
+    sshMaxPasswordRetries,
+    rdpSmartSizing: value.rdpSmartSizing !== false,
+    rdpColorDepth,
+    rdpSoundMode,
     proxyMode,
     proxyUrl,
     proxyBypassRules: readString(value.proxyBypassRules, "Proxy bypass rules", {
@@ -1984,6 +1943,7 @@ async function connectionConfigForProfile(
   interactiveCredentials?: ProfileConnectionCredentials,
 ): Promise<SshConnectionConfig> {
   const profile = requireVault().getConnectionProfile(profileId);
+  const globalOptions = requirePreferences().get();
   if (profile.protocol !== "ssh") {
     throw new Error("Selected profile is not an SSH connection.");
   }
@@ -1993,7 +1953,9 @@ async function connectionConfigForProfile(
     port: target.port ?? profile.port,
     username: interactiveCredentials?.username ?? target.username ?? resolveEnvironmentTokens(profile.username, "Username") ?? "",
     readyTimeout: (profile.readyTimeoutSeconds ?? 15) * 1_000,
-    keepaliveInterval: profile.keepAliveEnabled === false ? 0 : (profile.keepaliveSeconds ?? 10) * 1_000,
+    keepaliveInterval: profile.keepAliveEnabled === false
+      ? 0
+      : (profile.keepaliveSeconds ?? globalOptions.sshKeepAliveSeconds) * 1_000,
     totpCode: profile.totpSecret ? generateTotp(profile.totpSecret, {
       digits: profile.totpDigits,
       period: profile.totpPeriod,
@@ -2079,7 +2041,8 @@ async function connectProfile(
         policy,
       };
     }
-    case "rdp":
+    case "rdp": {
+      const rdpOptions = requirePreferences().get();
       return {
         protocol: "rdp",
         sessionId: await requireRdp().connect({
@@ -2087,10 +2050,14 @@ async function connectProfile(
           port,
           username,
           domain: profile.domain,
+          smartSizing: rdpOptions.rdpSmartSizing,
+          colorDepth: rdpOptions.rdpColorDepth,
+          soundMode: rdpOptions.rdpSoundMode,
         }, sender),
         context,
         policy,
       };
+    }
     case "telnet":
     case "raw":
       return {
@@ -3108,7 +3075,8 @@ let flushingAuditLogs = false;
 let auditLogsFlushed = false;
 
 app.on("before-quit", (event) => {
-  if (!quitConfirmed && !sessionEnding && trayStateSnapshot.openTabCount > 0) {
+  if (!quitConfirmed && !sessionEnding && trayStateSnapshot.sessions.length > 0 &&
+      (preferencesController?.get().confirmExitWithActiveSessions ?? true)) {
     event.preventDefault();
     void requestApplicationQuit();
     return;

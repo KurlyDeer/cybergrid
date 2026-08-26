@@ -107,7 +107,11 @@ export class SshController {
           });
 
           this.emitStatus(session, "connected", `Connected to ${config.host}.`);
-          void this.detectSwitchModel(session);
+          // Wake appliance shells so the MOTD and first prompt are emitted before
+          // vendor probes run. Cisco/FortiOS/ProCurve commonly wait for this CR.
+          stream.write("\r");
+          const probeTimer = setTimeout(() => void this.detectSwitchModel(session), 350);
+          probeTimer.unref();
         },
       );
     });
@@ -474,6 +478,11 @@ export class SshController {
   private async detectSwitchModel(session: SshSession): Promise<void> {
     if (session.modelProbeStarted || session.closed) return;
     session.modelProbeStarted = true;
+    const bannerIdentity = this.parseSwitchIdentity(session.history);
+    if (bannerIdentity) {
+      this.emitSwitchModel(session, bannerIdentity.vendor, bannerIdentity.model);
+      return;
+    }
     const commands = [
       "show version | include Cisco|IOS|Model|Forti|ProCurve",
       "show version",

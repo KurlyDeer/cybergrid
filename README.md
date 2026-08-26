@@ -23,25 +23,26 @@ Traditional administrator workflows often span mRemoteNG for connection trees, P
 
 CyberGrid does not transmit vault data to a hosted CyberGrid service and includes no product telemetry. Connections, preferences, workspaces, audit transcripts, and vault files remain on the workstation unless an operator explicitly exports or transfers them.
 
-## Version 1.2.3 Highlights
+## Version 1.3.0 Architecture
 
-- Reuses an existing session tab when the same saved connection or protocol endpoint is opened again.
-- Repaints embedded RDP surfaces immediately after native window docking to avoid black viewports.
-- Keeps interactive SSH authentication available until login succeeds or the operator cancels it.
-- Places switch backups, diagnostics, and command macros in a flex-based slide-out drawer that never covers the terminal scrollbar.
-- Confirms before closing CyberGrid when connection tabs are still open.
-- Keeps connection properties focused on essentials while terminal appearance remains centralized in global Settings.
+- **True native RDP docking:** CyberGrid discovers the `TscShellContainerClass` HWND, assigns the Electron window through `GWLP_HWNDPARENT`, strips native chrome, translates tab client coordinates to screen coordinates, and updates the owned window after every move or resize.
+- **Minimal connection editor:** saved connections expose only name, endpoint, protocol, domain, username, password, and an optional port override. Existing advanced metadata remains intact when a connection is edited.
+- **Centralized Global Options:** startup, exit protection, terminal rendering, SSH keep-alives and password retries, RDP Smart Sizing, color depth, sound redirection, vault protection, proxy settings, and external-tool paths live in one tabbed modal.
+- **Intentional tab behavior:** ordinary opens reuse a matching profile or endpoint tab; the tab context menu remains the explicit path for duplicate sessions.
+- **Vendor-aware network operations:** the non-overlapping 300-pixel tools drawer selects Cisco IOS, FortiOS, HP ProCurve, or generic diagnostics automatically, while retaining a manual override.
+- **Native desktop navigation:** the File, Edit, View, Tools, Window, and Help menus expose the complete keyboard-driven administration workflow.
 
 ## Core Features
 
 | Area | Capabilities |
 | --- | --- |
-| Multi-protocol sessions | Embedded Windows RDP with Smart Sizing, SSH/SFTP with opt-in legacy switch KEX and Oakley DH compatibility, embedded VNC, serial/COM, Telnet, RAW TCP, isolated HTTP/HTTPS consoles, and local PowerShell/CMD/WSL terminals |
-| Connection management | High-density mRemote-style tree, multi-tier groups, application stacks, locations, favorites, fuzzy search, duplicate prevention, multi-select bulk actions, connection duplication, custom icons, and folder inheritance |
+| Multi-protocol sessions | True HWND-owned Windows RDP with Smart Sizing, SSH/SFTP with opt-in legacy switch KEX and Oakley DH compatibility, embedded VNC, serial/COM, Telnet, RAW TCP, isolated web consoles, and local PowerShell/CMD/WSL terminals |
+| Connection management | High-density mRemote-style tree, essential-only connection editor, multi-tier groups, favorites, fuzzy search, endpoint tab de-duplication, explicit duplicate tabs, multi-select bulk actions, connection duplication, custom icons, and folder inheritance |
+| Global options | Central startup and exit behavior, terminal fonts/colors/line height, SSH keep-alive and retry policy, RDP sizing/color/audio defaults, vault auto-lock, proxy configuration, and external-tool mappings |
 | Encrypted vault | Zero-telemetry AES-256-GCM local encryption, scrypt key derivation, optional master password, OS-protected automatic key, auto-lock, TOTP generation, and environment-variable credential tokens |
 | Discovery and CMDB | Private-subnet scanning, administration-port detection, DNS/MAC/OUI fingerprinting, vendor and OS hints, automatic icons, asset tags, rack/site data, SLA metadata, and health badges |
 | Subnet IPAM | A 256-address `/24` grid with saved, online, offline, and unassigned states plus direct SSH/RDP and vault-entry actions |
-| Operations | Broadcast terminal with explicit target filters, tagged command snippets, variable substitution, notes, SFTP transfers, screenshots, external tools, and a slide-out Switch Tools drawer for configuration snapshots, diagnostics, and command macros |
+| Operations | Broadcast terminal with explicit target filters, tagged command snippets, variable substitution, notes, SFTP transfers, screenshots, external tools, and a vendor-aware flex Switch Tools drawer for Cisco/Fortinet/HP snapshots, diagnostics, and macros |
 | Team and migration | mRemoteNG XML, PuTTY Registry, CSV, and AES-256-GCM `.cgvault` import/export with `${TOKEN}` substitution for personal credentials |
 | Enterprise integration | Pre/post-connect tasks, VPN/script orchestration, AD/LDAP inventory sync, VMware inventory pull, and Hyper-V inventory support |
 | Recovery and audit | Per-session raw/plain-text transcripts, automatic saved-workspace restore, and a password-encrypted offline disaster-recovery HTML runbook |
@@ -49,23 +50,23 @@ CyberGrid does not transmit vault data to a hosted CyberGrid service and include
 
 ## Install CyberGrid on Windows
 
-CyberGrid v1.2.3 produces two x64 Windows packages in `dist/`:
+CyberGrid v1.3.0 produces two x64 Windows packages in `dist/`:
 
-- `CyberGrid-1.2.3-setup-x64.exe` — guided NSIS installer with selectable installation directory, desktop shortcut, Start menu shortcut, and uninstaller.
-- `CyberGrid-1.2.3-portable-x64.exe` — self-contained portable executable.
+- `CyberGrid-1.3.0-setup-x64.exe` — guided NSIS installer with selectable installation directory, desktop shortcut, Start menu shortcut, and uninstaller.
+- `CyberGrid-1.3.0-portable-x64.exe` — self-contained portable executable.
 
 Download the preferred package from the repository's [Releases page](https://github.com/KurlyDeer/cybergrid/releases). For the installer, run the setup executable and follow the wizard. For the portable build, place the executable in a user-writable tools directory and launch it directly.
 
 ### Windows SmartScreen
 
-CyberGrid v1.2.3 packages may display a Windows SmartScreen **Unknown Publisher** warning until the project has an established code-signing reputation. Download CyberGrid only from this repository's Releases page, verify its SHA-256 checksum, and then select **More info → Run anyway** if you trust the verified package. Never bypass SmartScreen for an executable from an unverified mirror or unexpected message attachment.
+CyberGrid v1.3.0 packages may display a Windows SmartScreen **Unknown Publisher** warning until the project has an established code-signing reputation. Download CyberGrid only from this repository's Releases page, verify its SHA-256 checksum, and then select **More info → Run anyway** if you trust the verified package. Never bypass SmartScreen for an executable from an unverified mirror or unexpected message attachment.
 
 ### Verify a release download
 
 Calculate the installer checksum in PowerShell and compare the complete value with the SHA-256 value published in the corresponding GitHub release notes:
 
 ```powershell
-Get-FileHash -LiteralPath ".\CyberGrid-1.2.3-setup-x64.exe" -Algorithm SHA256
+Get-FileHash -LiteralPath ".\CyberGrid-1.3.0-setup-x64.exe" -Algorithm SHA256
 ```
 
 For an additional reputation check, upload the verified installer to [VirusTotal](https://www.virustotal.com/gui/home/upload) if your organization's policy permits public malware-analysis submissions. A detection result is supplementary evidence, not a replacement for matching the release checksum and confirming the download source. Do not upload private or internally customized builds.
@@ -85,7 +86,7 @@ Installed builds check the repository's published release metadata after startup
 
 ### Requirements
 
-- Windows 10/11 x64 for the complete v1.2.3 desktop feature set and embedded RDP integration.
+- Windows 10/11 x64 for the complete v1.3.0 desktop feature set and native HWND-owned RDP integration.
 - Node.js 22 LTS and npm.
 - Git.
 - Native build prerequisites supported by Electron Builder if a prebuilt native dependency is unavailable.
@@ -131,7 +132,8 @@ flowchart LR
   UI["Sandboxed renderer\nTerminal, tabs, tree, IPAM"] --> PRELOAD["Context-isolated preload\nTyped API boundary"]
   PRELOAD --> IPC["Validated Electron IPC"]
   IPC --> MAIN["Main-process controllers"]
-  MAIN --> PROTOCOLS["SSH / SFTP / Serial / Telnet\nRDP / VNC / Web"]
+  MAIN --> PROTOCOLS["SSH / SFTP / Serial / Telnet\nVNC / Web / Local shells"]
+  MAIN --> RDP["Owned native mstsc HWND\nGWLP_HWNDPARENT + SetWindowPos"]
   MAIN --> VAULT["AES-256-GCM vault\nin userData"]
   MAIN --> OPS["Discovery / diagnostics / health\naudit / tasks / sync"]
   VAULT --> OSKEY["Optional master password\nor OS safeStorage key"]
