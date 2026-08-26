@@ -46,6 +46,11 @@ public static class CyberGridRdpHost {
   private const uint SWP_NOSIZE = 0x0001;
   private const uint SWP_NOZORDER = 0x0004;
   private const uint SWP_FRAMECHANGED = 0x0020;
+  private const uint RDW_INVALIDATE = 0x0001;
+  private const uint RDW_ERASE = 0x0004;
+  private const uint RDW_ALLCHILDREN = 0x0080;
+  private const uint RDW_UPDATENOW = 0x0100;
+  private const uint RDW_FRAME = 0x0400;
   private const uint WM_CLOSE = 0x0010;
   private delegate bool EnumWindowsProc(IntPtr hwnd, IntPtr state);
   [DllImport("user32.dll")] private static extern bool EnumWindows(EnumWindowsProc callback, IntPtr state);
@@ -56,6 +61,7 @@ public static class CyberGridRdpHost {
   [DllImport("user32.dll")] private static extern IntPtr SetParent(IntPtr child, IntPtr parent);
   [DllImport("user32.dll")] private static extern bool MoveWindow(IntPtr hwnd, int x, int y, int width, int height, bool repaint);
   [DllImport("user32.dll")] private static extern bool SetWindowPos(IntPtr hwnd, IntPtr after, int x, int y, int width, int height, uint flags);
+  [DllImport("user32.dll")] private static extern bool RedrawWindow(IntPtr hwnd, IntPtr updateRect, IntPtr updateRegion, uint flags);
   [DllImport("user32.dll")] private static extern bool ShowWindow(IntPtr hwnd, int command);
   [DllImport("user32.dll")] private static extern bool PostMessage(IntPtr hwnd, uint message, IntPtr wParam, IntPtr lParam);
   public static IntPtr FindWindow(uint processId) {
@@ -77,9 +83,15 @@ public static class CyberGridRdpHost {
     SetWindowLongPtr(child, GWL_EXSTYLE, new IntPtr(exStyle));
     SetParent(child, parent);
     SetWindowPos(child, IntPtr.Zero, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+    uint repaint = RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW | RDW_FRAME;
+    RedrawWindow(child, IntPtr.Zero, IntPtr.Zero, repaint);
+    RedrawWindow(parent, IntPtr.Zero, IntPtr.Zero, repaint);
   }
   public static void Move(IntPtr hwnd, int x, int y, int width, int height) { MoveWindow(hwnd, x, y, width, height, true); }
-  public static void SetVisible(IntPtr hwnd, bool visible) { ShowWindow(hwnd, visible ? 5 : 0); }
+  public static void SetVisible(IntPtr hwnd, bool visible) {
+    ShowWindow(hwnd, visible ? 5 : 0);
+    if (visible) RedrawWindow(hwnd, IntPtr.Zero, IntPtr.Zero, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW);
+  }
   public static void Close(IntPtr hwnd) { PostMessage(hwnd, WM_CLOSE, IntPtr.Zero, IntPtr.Zero); }
 }
 "@
@@ -197,7 +209,15 @@ export class RdpController {
         for (const line of lines) {
           if (line.trim() === "READY" && !session.closed) {
             session.hostReady = true;
+            if (!parentWindow.isDestroyed() && !parentWindow.webContents.isDestroyed()) {
+              parentWindow.webContents.invalidate();
+            }
             this.applyGeometry(session);
+            setImmediate(() => {
+              if (!parentWindow.isDestroyed() && !parentWindow.webContents.isDestroyed()) {
+                parentWindow.webContents.invalidate();
+              }
+            });
             this.emitStatus(session, "running", `RDP session embedded for ${config.host}.`);
           }
         }
@@ -246,6 +266,11 @@ export class RdpController {
     session.sender = sender;
     if (session.hostReady && session.hostProcess?.stdin?.writable) {
       session.hostProcess.stdin.write(`PARENT ${this.nativeHandle(parentWindow)}\n`);
+      setImmediate(() => {
+        if (!parentWindow.isDestroyed() && !parentWindow.webContents.isDestroyed()) {
+          parentWindow.webContents.invalidate();
+        }
+      });
     }
     this.applyGeometry(session);
     this.emitStatus(session, session.hostReady ? "running" : "launching", "RDP session moved to a detached window.");

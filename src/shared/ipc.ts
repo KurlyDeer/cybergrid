@@ -881,6 +881,7 @@ export interface TraySessionSummary {
 
 export interface TrayStateSnapshot {
   sessions: TraySessionSummary[];
+  openTabCount: number;
   broadcastMode: boolean;
 }
 

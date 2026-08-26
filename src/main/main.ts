@@ -137,7 +137,7 @@ let quickLauncherWindow: BrowserWindow | null = null;
 const detachedWindows = new Map<number, { window: BrowserWindow; protocol: DetachSessionRequest["protocol"]; sessionId: string }>();
 const updaterController = new UpdaterController(() => mainWindow);
 let trayController: SystemTrayController | null = null;
-let trayStateSnapshot: TrayStateSnapshot = { sessions: [], broadcastMode: false };
+let trayStateSnapshot: TrayStateSnapshot = { sessions: [], openTabCount: 0, broadcastMode: false };
 let autoLockTimer: NodeJS.Timeout | undefined;
 let isQuitting = false;
 let quitConfirmed = false;
@@ -202,15 +202,15 @@ function showMainMessageBox(options: MessageBoxOptions): Promise<Electron.Messag
 
 async function requestApplicationQuit(parent = mainWindow): Promise<void> {
   if (quitConfirmationPending) return;
-  const count = trayStateSnapshot.sessions.length;
+  const count = trayStateSnapshot.openTabCount;
   if (!quitConfirmed && !sessionEnding && count > 0) {
     quitConfirmationPending = true;
     try {
       const result = parent && !parent.isDestroyed()
         ? await dialog.showMessageBox(parent, {
             type: "warning",
-            title: "Close All Sessions?",
-            message: `You have ${count} active remote connection tabs open. Are you sure you want to close all sessions and exit CyberGrid?`,
+            title: "Exit CyberGrid?",
+            message: `You have ${count} active sessions open. Close all and exit CyberGrid?`,
             buttons: ["Close All & Exit", "Cancel"],
             defaultId: 1,
             cancelId: 1,
@@ -218,8 +218,8 @@ async function requestApplicationQuit(parent = mainWindow): Promise<void> {
           })
         : await dialog.showMessageBox({
             type: "warning",
-            title: "Close All Sessions?",
-            message: `You have ${count} active remote connection tabs open. Are you sure you want to close all sessions and exit CyberGrid?`,
+            title: "Exit CyberGrid?",
+            message: `You have ${count} active sessions open. Close all and exit CyberGrid?`,
             buttons: ["Close All & Exit", "Cancel"],
             defaultId: 1,
             cancelId: 1,
@@ -492,7 +492,11 @@ function normalizeTrayStateSnapshot(value: unknown): TrayStateSnapshot {
       status: readString(session.status, "Tray session status", { required: true, maxLength: 40, singleLine: true }) as string,
     };
   });
-  return { sessions, broadcastMode: value.broadcastMode === true };
+  const openTabCount = Number(value.openTabCount);
+  if (!Number.isInteger(openTabCount) || openTabCount < 0 || openTabCount > 100) {
+    throw new Error("Invalid open connection tab count.");
+  }
+  return { sessions, openTabCount, broadcastMode: value.broadcastMode === true };
 }
 
 async function loadWorkspaceSnapshot(): Promise<WorkspaceSnapshot> {
@@ -592,7 +596,7 @@ function createMainWindow(): BrowserWindow {
     if (preferencesController?.get().minimizeToTray && !isQuitting) {
       event.preventDefault();
       window.hide();
-    } else if (!isQuitting && trayStateSnapshot.sessions.length > 0) {
+    } else if (!isQuitting && trayStateSnapshot.openTabCount > 0) {
       event.preventDefault();
       void requestApplicationQuit(window);
     }
@@ -3104,7 +3108,7 @@ let flushingAuditLogs = false;
 let auditLogsFlushed = false;
 
 app.on("before-quit", (event) => {
-  if (!quitConfirmed && !sessionEnding && trayStateSnapshot.sessions.length > 0) {
+  if (!quitConfirmed && !sessionEnding && trayStateSnapshot.openTabCount > 0) {
     event.preventDefault();
     void requestApplicationQuit();
     return;

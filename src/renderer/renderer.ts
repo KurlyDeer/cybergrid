@@ -102,6 +102,7 @@ interface WorkspaceTab {
   kind: WorkspaceTabKind;
   label: string;
   context: SessionVariableContext;
+  connectionKey?: string;
   sessionId?: string;
   rdpSessionId?: string;
   streamSessionId?: string;
@@ -112,6 +113,7 @@ interface WorkspaceTab {
   vncClient?: NoVncRfbInstance;
   terminal?: XtermTerminal;
   fitAddon?: XtermFitAddon;
+  terminalSurfaceElement?: HTMLDivElement;
   tabElement: HTMLButtonElement;
   statusElement: HTMLSpanElement;
   paneElement: HTMLDivElement;
@@ -131,7 +133,6 @@ interface WorkspaceTab {
   switchModelBadge?: HTMLSpanElement;
   switchToolsModel?: HTMLParagraphElement;
   sshPasswordRetry?: (password: string) => Promise<void>;
-  sshAuthRetryCount?: number;
   sshAuthRetryPrompting?: boolean;
 }
 
@@ -338,7 +339,9 @@ const serverFavoriteInput = elementById<HTMLInputElement>("server-favorite");
 const serverInheritFolderInput = elementById<HTMLInputElement>("server-inherit-folder");
 const serverDomainInput = elementById<HTMLInputElement>("server-domain");
 const serverTimeoutInput = elementById<HTMLInputElement>("server-timeout");
+const serverKeepaliveField = elementById<HTMLDivElement>("server-keepalive-field");
 const serverKeepaliveInput = elementById<HTMLInputElement>("server-keepalive");
+const serverKeepaliveEnabledField = elementById<HTMLDivElement>("server-keepalive-enabled-field");
 const serverKeepaliveEnabledInput = elementById<HTMLInputElement>("server-keepalive-enabled");
 const serverPersistInput = elementById<HTMLInputElement>("server-persist");
 const serverAutoReconnectInput = elementById<HTMLInputElement>("server-auto-reconnect");
@@ -348,18 +351,12 @@ const serverPortForwardingSection = elementById<HTMLDivElement>("server-port-for
 const serverForwardLocalPortInput = elementById<HTMLInputElement>("server-forward-local-port");
 const serverForwardRemoteHostInput = elementById<HTMLInputElement>("server-forward-remote-host");
 const serverForwardRemotePortInput = elementById<HTMLInputElement>("server-forward-remote-port");
+const serverJumpHostField = elementById<HTMLDivElement>("server-jump-host-field");
 const serverJumpHostInput = elementById<HTMLInputElement>("server-jump-host");
 const serverProxyOverrideInput = elementById<HTMLInputElement>("server-proxy-override");
 const serverIconInput = elementById<HTMLSelectElement>("server-icon");
 const serverApplicationBadgeInput = elementById<HTMLInputElement>("server-application-badge");
 const serverIndicatorColorInput = elementById<HTMLInputElement>("server-indicator-color");
-const serverTerminalThemeInput = elementById<HTMLSelectElement>("server-terminal-theme");
-const serverTerminalFontInput = elementById<HTMLInputElement>("server-terminal-font");
-const serverTerminalSizeInput = elementById<HTMLInputElement>("server-terminal-size");
-const serverTerminalLineHeightInput = elementById<HTMLInputElement>("server-terminal-line-height");
-const serverTerminalBackgroundInput = elementById<HTMLInputElement>("server-terminal-background");
-const serverTerminalForegroundInput = elementById<HTMLInputElement>("server-terminal-foreground");
-const serverTerminalCursorInput = elementById<HTMLInputElement>("server-terminal-cursor");
 const categoryButtons = [...serverModal.querySelectorAll<HTMLButtonElement>("[data-connection-category]")];
 const serverPreTasksInput = elementById<HTMLSelectElement>("server-pre-tasks");
 const serverPostTasksInput = elementById<HTMLSelectElement>("server-post-tasks");
@@ -1198,6 +1195,10 @@ function createTerminalTab(
   const requestedLayout = layoutMode;
   const tab = createWorkspaceTab(kind, label, context);
   tab.paneElement.classList.add("terminal-pane");
+  const terminalSurface = document.createElement("div");
+  terminalSurface.className = "terminal-surface";
+  tab.terminalSurfaceElement = terminalSurface;
+  tab.paneElement.append(terminalSurface);
   const terminalSettings = terminalSettingsWithOverrides(appearance);
   const terminal = new Terminal({
     cursorBlink: terminalSettings.cursorBlink,
@@ -1214,7 +1215,7 @@ function createTerminalTab(
   });
   const fitAddon = new FitAddon();
   terminal.loadAddon(fitAddon);
-  terminal.open(tab.paneElement);
+  terminal.open(terminalSurface);
   try {
     const webglAddon = new WebglAddon();
     terminal.loadAddon(webglAddon);
@@ -1373,7 +1374,8 @@ function scheduleTrayStateSync(): void {
         protocol: tab.kind as ConnectionProtocol,
         status: tab.status,
       }));
-    window.cybergrid.system.updateTrayState({ sessions, broadcastMode });
+    const openTabCount = [...tabs.values()].filter((tab) => tab.kind !== "welcome").length;
+    window.cybergrid.system.updateTrayState({ sessions, openTabCount, broadcastMode });
   });
 }
 
@@ -1679,7 +1681,6 @@ function scheduleAutoReconnect(tab: WorkspaceTab): void {
 }
 
 function updateSshTabStatus(tab: WorkspaceTab, event: SshStatusEvent): void {
-  if (event.status === "connected") tab.sshAuthRetryCount = 0;
   updateTabStatus(tab, event.status, event.message);
 }
 
@@ -1865,24 +1866,22 @@ function isSshAuthenticationFailure(message?: string): boolean {
 
 async function retrySshPassword(tab: WorkspaceTab, event: SshStatusEvent): Promise<void> {
   if (tab.sshAuthRetryPrompting || !tab.sshPasswordRetry || !tabs.has(tab.id)) return;
-  const attempts = tab.sshAuthRetryCount ?? 0;
   sshSessions.delete(event.sessionId);
   if (tab.sessionId === event.sessionId) tab.sessionId = undefined;
-  if (attempts >= 3) {
-    updateTabStatus(tab, "error", "SSH authentication failed after 3 password retries.");
-    return;
-  }
   tab.sshAuthRetryPrompting = true;
-  tab.sshAuthRetryCount = attempts + 1;
   tab.terminal?.writeln("\r\n\x1b[31mAccess denied. Please try again.\x1b[0m");
   try {
-    const password = await readTerminalPrompt(
-      tab,
-      `${tab.context.username || "SSH user"}'s password (retry ${attempts + 1}/3): `,
-      true,
-    );
-    if (!password) throw new Error("A password is required to retry SSH authentication.");
-    setTabConnecting(tab, `retrying SSH authentication (${attempts + 1}/3)...`);
+    let password = "";
+    while (!password && tabs.has(tab.id)) {
+      password = await readTerminalPrompt(
+        tab,
+        `${tab.context.username || "SSH user"}'s password (Esc to cancel): `,
+        true,
+      );
+      if (!password) tab.terminal?.writeln("\x1b[33mPassword cannot be empty. Please try again.\x1b[0m");
+    }
+    if (!tabs.has(tab.id)) return;
+    setTabConnecting(tab, "retrying SSH authentication...");
     await tab.sshPasswordRetry(password);
   } catch (error) {
     handleConnectionFailure(tab, error);
@@ -1943,27 +1942,29 @@ function installSwitchToolsDrawer(tab: WorkspaceTab, profile?: ServerProfileSumm
     modelBadge.hidden = true;
     modelBadge.title = "Switch model is detected automatically after SSH connects";
     tab.switchModelBadge = modelBadge;
-    tab.paneElement.append(modelBadge);
+    (tab.terminalSurfaceElement ?? tab.paneElement).append(modelBadge);
   }
 
   const toggle = document.createElement("button");
   toggle.className = "switch-tools-toggle";
   toggle.type = "button";
-  toggle.textContent = "[ 🛠️ Tools ]";
+  toggle.textContent = ">";
   toggle.setAttribute("aria-expanded", "false");
-  toggle.title = "Open switch tools";
+  toggle.title = "Open tools drawer";
+  toggle.setAttribute("aria-label", "Open tools drawer");
 
   const drawer = document.createElement("aside");
   drawer.className = "switch-tools-drawer";
-  drawer.hidden = true;
   drawer.setAttribute("aria-label", "Switch tools");
+  drawer.setAttribute("aria-hidden", "true");
+  drawer.inert = true;
   const header = createTextElement("header", "switch-tools-header", "");
   const title = createTextElement("strong", "", "Switch Tools");
   const close = document.createElement("button");
   close.type = "button";
-  close.textContent = "×";
-  close.title = "Close switch tools";
-  close.setAttribute("aria-label", "Close switch tools");
+  close.textContent = ">";
+  close.title = "Collapse tools drawer";
+  close.setAttribute("aria-label", "Collapse tools drawer");
   header.append(title, close);
   const body = createTextElement("div", "switch-tools-body", "");
   const model = createTextElement(
@@ -2011,14 +2012,16 @@ function installSwitchToolsDrawer(tab: WorkspaceTab, profile?: ServerProfileSumm
   };
 
   const setOpen = (open: boolean): void => {
-    drawer.hidden = !open;
-    tab.paneElement.classList.toggle("switch-tools-open", open);
+    drawer.classList.toggle("open", open);
+    drawer.inert = !open;
+    drawer.setAttribute("aria-hidden", String(!open));
     toggle.hidden = open;
     toggle.setAttribute("aria-expanded", String(open));
     requestAnimationFrame(() => {
       tab.fitAddon?.fit();
       tab.terminal?.focus();
     });
+    window.setTimeout(() => tab.fitAddon?.fit(), 180);
   };
   toggle.addEventListener("click", () => setOpen(true));
   close.addEventListener("click", () => setOpen(false));
@@ -2151,8 +2154,34 @@ function handleConnectionFailure(tab: WorkspaceTab, error: unknown): void {
   if (tab.rdpMessageElement) tab.rdpMessageElement.textContent = errorMessage(error);
 }
 
+function connectionEndpointKey(protocol: ConnectionProtocol, host: string, port?: number): string {
+  const normalizedHost = host.trim().replace(/^\[|\]$/g, "").toLowerCase();
+  return port === undefined ? `${protocol}:${normalizedHost}` : `${protocol}:${normalizedHost}:${port}`;
+}
+
+function profileEndpointKey(profile: ServerProfileSummary): string {
+  if (profile.protocol === "serial") return connectionEndpointKey("serial", profile.host);
+  if (profile.protocol === "local") return connectionEndpointKey("local", profile.localShell ?? profile.host);
+  return connectionEndpointKey(profile.protocol, profile.host, profile.port);
+}
+
+function focusOpenConnectionTab(connectionId?: string, endpointKey?: string): boolean {
+  const existing = [...tabs.values()].find((tab) => (
+    (connectionId !== undefined && tab.context.profileId === connectionId) ||
+    (endpointKey !== undefined && tab.connectionKey === endpointKey)
+  ));
+  if (!existing) return false;
+  activateTab(existing.id);
+  existing.tabElement.focus();
+  connectionState.textContent = `${existing.label} is already open.`;
+  return true;
+}
+
 async function connectSavedProfile(profile: ServerProfileSummary): Promise<void> {
+  const endpointKey = profileEndpointKey(profile);
+  if (focusOpenConnectionTab(profile.id, endpointKey)) return;
   const tab = createTabForProfile(profile);
+  tab.connectionKey = endpointKey;
   if (profile.protocol === "ssh") {
     tab.sshPasswordRetry = async (password) => {
       const username = tab.context.username || profile.username;
@@ -2173,9 +2202,12 @@ async function connectSavedProfile(profile: ServerProfileSummary): Promise<void>
 }
 
 async function connectQuickSsh(config: SshConnectionConfig): Promise<void> {
+  const endpointKey = connectionEndpointKey("ssh", config.host, config.port);
+  if (focusOpenConnectionTab(undefined, endpointKey)) return;
   const tab = createTerminalTab(config.host, "ssh", {
     host: config.host, ip: config.host, username: config.username, group: "Quick Connect", port: config.port,
   });
+  tab.connectionKey = endpointKey;
   tab.duplicate = () => connectQuickSsh({ ...config });
   tab.sshPasswordRetry = async (password) => {
     config.password = password;
@@ -2197,7 +2229,10 @@ async function connectQuickSsh(config: SshConnectionConfig): Promise<void> {
 }
 
 async function connectQuickRdp(config: RdpConnectionConfig): Promise<void> {
+  const endpointKey = connectionEndpointKey("rdp", config.host, config.port);
+  if (focusOpenConnectionTab(undefined, endpointKey)) return;
   const tab = createRdpTab(config.host, config);
+  tab.connectionKey = endpointKey;
   tab.context = tabContext(config.host, { host: config.host, ip: config.host, username: config.username, port: config.port });
   tab.duplicate = () => connectQuickRdp({ ...config });
   tab.status = "launching";
@@ -2207,9 +2242,12 @@ async function connectQuickRdp(config: RdpConnectionConfig): Promise<void> {
 }
 
 async function connectQuickStream(config: StreamConnectionConfig): Promise<void> {
+  const endpointKey = connectionEndpointKey(config.protocol, config.host, config.port);
+  if (focusOpenConnectionTab(undefined, endpointKey)) return;
   const tab = createTerminalTab(config.host, config.protocol, {
     host: config.host, ip: config.host, group: "Quick Connect", port: config.port,
   });
+  tab.connectionKey = endpointKey;
   tab.duplicate = () => connectQuickStream({ ...config });
   setTabConnecting(tab, `connecting to ${config.host}:${config.port}...`);
   try { attachStreamSession(tab, await window.cybergrid.stream.connect(config)); }
@@ -2217,9 +2255,12 @@ async function connectQuickStream(config: StreamConnectionConfig): Promise<void>
 }
 
 async function connectQuickSerial(config: SerialConnectionConfig): Promise<void> {
+  const endpointKey = connectionEndpointKey("serial", config.path);
+  if (focusOpenConnectionTab(undefined, endpointKey)) return;
   const tab = createTerminalTab(config.path, "serial", {
     host: config.path, ip: config.path, group: "Quick Connect",
   });
+  tab.connectionKey = endpointKey;
   tab.duplicate = () => connectQuickSerial({ ...config });
   setTabConnecting(tab, `opening ${config.path} at ${config.baudRate} baud...`);
   try { attachSerialSession(tab, await window.cybergrid.serial.connect(config)); }
@@ -2227,9 +2268,12 @@ async function connectQuickSerial(config: SerialConnectionConfig): Promise<void>
 }
 
 async function connectQuickLocal(config: LocalTerminalConfig): Promise<void> {
+  const endpointKey = connectionEndpointKey("local", config.shell);
+  if (focusOpenConnectionTab(undefined, endpointKey)) return;
   const tab = createTerminalTab(config.shell, "local", {
     host: config.shell, ip: "127.0.0.1", group: "Local",
   });
+  tab.connectionKey = endpointKey;
   tab.duplicate = () => connectQuickLocal({ ...config });
   setTabConnecting(tab, `starting local ${config.shell} shell...`);
   try {
@@ -2242,7 +2286,10 @@ async function connectQuickLocal(config: LocalTerminalConfig): Promise<void> {
 }
 
 async function connectQuickVnc(config: VncConnectionConfig): Promise<void> {
+  const endpointKey = connectionEndpointKey("vnc", config.host, config.port);
+  if (focusOpenConnectionTab(undefined, endpointKey)) return;
   const tab = createVncTab(config.host);
+  tab.connectionKey = endpointKey;
   tab.context = tabContext(config.host, { host: config.host, ip: config.host, port: config.port });
   tab.duplicate = () => connectQuickVnc({ ...config });
   setTabConnecting(tab, `connecting to VNC ${config.host}:${config.port}...`);
@@ -2253,8 +2300,12 @@ async function connectQuickVnc(config: VncConnectionConfig): Promise<void> {
 async function connectQuickWeb(url: string): Promise<void> {
   const parsed = new URL(url);
   const protocol = parsed.protocol === "https:" ? "https" : "http";
+  const port = Number(parsed.port || (protocol === "https" ? 443 : 80));
+  const endpointKey = connectionEndpointKey(protocol, parsed.hostname, port);
+  if (focusOpenConnectionTab(undefined, endpointKey)) return;
   const tab = createWebTab(parsed.hostname, protocol);
-  tab.context = tabContext(parsed.hostname, { host: parsed.hostname, ip: parsed.hostname, port: Number(parsed.port || (protocol === "https" ? 443 : 80)) });
+  tab.connectionKey = endpointKey;
+  tab.context = tabContext(parsed.hostname, { host: parsed.hostname, ip: parsed.hostname, port });
   tab.duplicate = () => connectQuickWeb(url);
   updateTabStatus(tab, "loading");
   const username = decodeURIComponent(parsed.username);
@@ -4256,6 +4307,7 @@ function selectConnectionCategory(category: ConnectionCategory, resetProtocol = 
 
 function updateProfileFields(resetDefaults = false): void {
   const protocol = serverProtocolInput.value as ConnectionProtocol;
+  const sshProtocol = protocol === "ssh";
   const serial = protocol === "serial";
   const local = protocol === "local";
   const webProtocol = protocol === "http" || protocol === "https";
@@ -4300,17 +4352,22 @@ function updateProfileFields(resetDefaults = false): void {
   if (linkedCredential) authTypeInput.value = "none";
 
   const usesPassword = usesAuthentication && !linkedCredential && authTypeInput.value === "password";
-  const usesPrivateKey = protocol === "ssh" && !linkedCredential && authTypeInput.value === "privateKey";
+  const usesPrivateKey = sshProtocol && !linkedCredential && authTypeInput.value === "privateKey";
   serverPasswordSection.hidden = !usesPassword;
   serverKeySection.hidden = !usesPrivateKey;
   serverPasswordInput.required = usesPassword && !serverPasswordInput.placeholder.startsWith("Stored");
   serverKeyPathInput.required = usesPrivateKey && !serverKeyPathInput.placeholder.startsWith("Stored");
-  serverKeepaliveInput.disabled = !serverKeepaliveEnabledInput.checked || protocol !== "ssh";
-  serverLegacySshField.hidden = protocol !== "ssh";
-  serverLegacySshInput.disabled = protocol !== "ssh";
-  serverPortForwardingSection.hidden = protocol !== "ssh";
+  serverKeepaliveField.hidden = !sshProtocol;
+  serverKeepaliveEnabledField.hidden = !sshProtocol;
+  serverKeepaliveEnabledInput.disabled = !sshProtocol;
+  serverKeepaliveInput.disabled = !sshProtocol || !serverKeepaliveEnabledInput.checked;
+  serverJumpHostField.hidden = !sshProtocol;
+  serverJumpHostInput.disabled = !sshProtocol;
+  serverLegacySshField.hidden = !sshProtocol;
+  serverLegacySshInput.disabled = !sshProtocol;
+  serverPortForwardingSection.hidden = !sshProtocol;
   for (const input of [serverForwardLocalPortInput, serverForwardRemoteHostInput, serverForwardRemotePortInput]) {
-    input.disabled = protocol !== "ssh";
+    input.disabled = !sshProtocol;
   }
   if (serial && serverSerialPortInput.options.length === 0) {
     void refreshSerialPortOptions(serverHostInput.value);
@@ -4370,13 +4427,6 @@ function openServerModal(profile?: ServerProfileSummary): void {
     serverProxyOverrideInput.value = profile.proxyOverride ?? "";
     serverIconInput.value = profile.icon;
     serverApplicationBadgeInput.value = profile.applicationBadge ?? "";
-    serverTerminalThemeInput.value = profile.terminalOverrides?.theme ?? "";
-    serverTerminalFontInput.value = profile.terminalOverrides?.fontFamily ?? "";
-    serverTerminalSizeInput.value = profile.terminalOverrides?.fontSize ? String(profile.terminalOverrides.fontSize) : "";
-    serverTerminalLineHeightInput.value = profile.terminalOverrides?.lineHeight ? String(profile.terminalOverrides.lineHeight) : "";
-    serverTerminalBackgroundInput.value = profile.terminalOverrides?.background ?? currentSettings.background;
-    serverTerminalForegroundInput.value = profile.terminalOverrides?.foreground ?? currentSettings.foreground;
-    serverTerminalCursorInput.value = profile.terminalOverrides?.cursor ?? currentSettings.cursor;
     for (const option of serverPreTasksInput.options) option.selected = profile.preConnectTaskIds.includes(option.value);
     for (const option of serverPostTasksInput.options) option.selected = profile.postConnectTaskIds.includes(option.value);
   } else {
@@ -5228,15 +5278,6 @@ serverForm.addEventListener("submit", async (event) => {
     serverFormError.textContent = errorMessage(error);
     return;
   }
-  const terminalOverrides: TerminalAppearanceOverrides = {
-    theme: (serverTerminalThemeInput.value || undefined) as TerminalAppearanceOverrides["theme"],
-    fontFamily: serverTerminalFontInput.value.trim() || undefined,
-    fontSize: serverTerminalSizeInput.value ? Number(serverTerminalSizeInput.value) : undefined,
-    lineHeight: serverTerminalLineHeightInput.value ? Number(serverTerminalLineHeightInput.value) : undefined,
-    background: serverTerminalThemeInput.value === "custom" ? serverTerminalBackgroundInput.value : undefined,
-    foreground: serverTerminalThemeInput.value === "custom" ? serverTerminalForegroundInput.value : undefined,
-    cursor: serverTerminalThemeInput.value === "custom" ? serverTerminalCursorInput.value : undefined,
-  };
   const profile: ServerProfileInput = {
     id: editingProfileId ?? undefined,
     category: connectionCategory,
@@ -5268,18 +5309,16 @@ serverForm.addEventListener("submit", async (event) => {
     inheritFolderDefaults: serverInheritFolderInput.checked,
     domain: serverDomainInput.value.trim() || undefined,
     readyTimeoutSeconds: serverTimeoutInput.value ? Number(serverTimeoutInput.value) : undefined,
-    keepaliveSeconds: serverKeepaliveInput.value ? Number(serverKeepaliveInput.value) : undefined,
-    keepAliveEnabled: serverKeepaliveEnabledInput.checked,
+    keepaliveSeconds: protocol === "ssh" && serverKeepaliveInput.value ? Number(serverKeepaliveInput.value) : undefined,
+    keepAliveEnabled: protocol === "ssh" && serverKeepaliveEnabledInput.checked,
     persistUntilAppCloses: serverPersistInput.checked,
     autoReconnect: serverAutoReconnectInput.checked,
     enableLegacySshAlgorithms: protocol === "ssh" && serverLegacySshInput.checked,
-    jumpHost: serverJumpHostInput.value.trim() || undefined,
+    jumpHost: protocol === "ssh" ? serverJumpHostInput.value.trim() || undefined : undefined,
     proxyOverride: serverProxyOverrideInput.value.trim() || undefined,
     icon: (serverIconInput.value || undefined) as DeviceIcon | undefined,
     applicationBadge: serverApplicationBadgeInput.value.trim() || undefined,
     indicatorColor: serverIndicatorColorInput.value,
-    terminalOverrides: Object.values(terminalOverrides).some((value) => value !== undefined)
-      ? terminalOverrides : undefined,
     preConnectTaskIds: [...serverPreTasksInput.selectedOptions].map((option) => option.value),
     postConnectTaskIds: [...serverPostTasksInput.selectedOptions].map((option) => option.value),
     totpSecret: serverTotpSecretInput.value || undefined,
