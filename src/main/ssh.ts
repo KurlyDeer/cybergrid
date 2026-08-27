@@ -108,9 +108,9 @@ export class SshController {
 
           this.emitStatus(session, "connected", `Connected to ${config.host}.`);
           // Wake appliance shells so the MOTD and first prompt are emitted before
-          // vendor probes run. Cisco/FortiOS/ProCurve commonly wait for this CR.
-          stream.write("\r");
-          const probeTimer = setTimeout(() => void this.detectSwitchModel(session), 350);
+          // vendor probes run. Console-oriented appliances commonly wait for CRLF.
+          stream.write("\r\n");
+          const probeTimer = setTimeout(() => void this.detectSwitchModel(session), 1_500);
           probeTimer.unref();
         },
       );
@@ -502,6 +502,7 @@ export class SshController {
         // interactive shell. Fingerprinting is best-effort and never disrupts it.
       }
     }
+    if (!session.closed) this.emitSwitchModel(session, "unknown", "Unknown");
   }
 
   private execProbe(session: SshSession, command: string, timeoutMs: number): Promise<string> {

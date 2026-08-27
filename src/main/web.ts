@@ -29,6 +29,12 @@ export class WebController {
 
   constructor(private readonly windowProvider: () => BrowserWindow | null) {}
 
+  ownsWebContents(contents: WebContents): boolean {
+    return [...this.sessions.values()].some((session) => (
+      !session.closed && session.view.webContents === contents
+    ));
+  }
+
   async connect(config: WebConnectionConfig, sender: WebContents): Promise<string> {
     const window = this.windowProvider();
     if (!window) {

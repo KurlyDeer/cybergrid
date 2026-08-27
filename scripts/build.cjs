@@ -20,6 +20,7 @@ const common = {
 async function bundleApplication() {
   await mkdir(join(outputRoot, "main"), { recursive: true });
   await mkdir(rendererOutput, { recursive: true });
+  await mkdir(join(rendererOutput, "assets"), { recursive: true });
 
   await Promise.all([
     build({
@@ -84,6 +85,10 @@ async function bundleApplication() {
     copyFile(join(sourceRoot, "renderer", "launcher.html"), join(rendererOutput, "launcher.html")),
     copyFile(join(sourceRoot, "renderer", "detached.html"), join(rendererOutput, "detached.html")),
     copyFile(join(sourceRoot, "renderer", "startup.js"), join(rendererOutput, "startup.js")),
+    copyFile(
+      join(sourceRoot, "assets", "cybergrid-mark.svg"),
+      join(rendererOutput, "assets", "cybergrid-mark.svg"),
+    ),
     copyFile(
       join(projectRoot, "node_modules", "xterm", "css", "xterm.css"),
       join(rendererOutput, "xterm.css"),

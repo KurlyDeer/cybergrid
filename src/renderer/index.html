@@ -101,14 +101,11 @@
       }
 
       .startup-skeleton-logo {
-        display: grid;
         width: 38px;
         height: 38px;
-        place-items: center;
         border-radius: 9px;
-        background: #23d5ab;
-        color: #102019;
-        font-size: 12px;
+        object-fit: contain;
+        box-shadow: 0 8px 28px rgba(2, 6, 23, 0.38);
       }
 
       .startup-skeleton-lines {
@@ -247,19 +244,16 @@
 
       .brand-mark,
       .vault-logo {
-        display: grid;
-        place-items: center;
-        border: 1px solid var(--accent);
+        display: block;
+        border: 1px solid color-mix(in srgb, #94a3b8 40%, transparent);
         border-radius: 8px;
-        color: var(--accent);
-        font-weight: 800;
-        box-shadow: 0 0 20px var(--accent-soft);
+        object-fit: contain;
+        box-shadow: 0 10px 28px rgba(2, 6, 23, 0.32);
       }
 
       .brand-mark {
         width: 30px;
         height: 30px;
-        font-size: 13px;
       }
 
       .sidebar-toolbar {
@@ -2338,7 +2332,7 @@
   <body>
     <div class="startup-skeleton" id="startup-skeleton" role="status" aria-live="polite">
       <section class="startup-skeleton-card" aria-label="CyberGrid is starting">
-        <div class="startup-skeleton-brand"><span class="startup-skeleton-logo">CG</span><span>CYBERGRID</span></div>
+        <div class="startup-skeleton-brand"><img class="startup-skeleton-logo" src="./assets/cybergrid-mark.svg" alt="" /><span>CYBERGRID</span></div>
         <div class="startup-skeleton-lines" aria-hidden="true">
           <div class="startup-skeleton-line"></div>
           <div class="startup-skeleton-line short"></div>
@@ -2350,7 +2344,7 @@
     <main class="app-shell" id="app-shell" inert>
       <aside class="sidebar" aria-label="Saved server profiles">
         <div class="brand">
-          <span class="brand-mark">CG</span>
+          <img class="brand-mark" src="./assets/cybergrid-mark.svg" alt="" />
           <span>CYBERGRID</span>
         </div>
 
@@ -2504,7 +2498,7 @@
 
     <div class="vault-overlay" id="vault-overlay">
       <section class="vault-card" aria-labelledby="vault-title">
-        <div class="vault-logo">CG</div>
+        <img class="vault-logo" src="./assets/cybergrid-mark.svg" alt="" />
         <h1 id="vault-title">Unlock CyberGrid</h1>
         <p id="vault-subtitle">Enter your master password to decrypt saved servers and credentials.</p>
         <form id="vault-form">
@@ -2834,7 +2828,8 @@
             <section class="settings-panel" data-settings-panel="general">
               <h3>General / Startup</h3>
               <p>Control startup, tray behavior, and the desktop process model.</p>
-              <div class="checkbox-field"><input id="minimize-to-tray" type="checkbox" /><label class="checkbox-label" for="minimize-to-tray">Minimize and close to system tray</label></div>
+              <div class="checkbox-field"><input id="minimize-to-taskbar" type="checkbox" checked disabled /><label class="checkbox-label" for="minimize-to-taskbar">Minimize (_) to the Windows taskbar</label></div>
+              <div class="checkbox-field"><input id="minimize-to-tray" type="checkbox" /><label class="checkbox-label" for="minimize-to-tray">Hide to system tray when the X close button is clicked</label></div>
               <div class="checkbox-field"><input id="start-minimized" type="checkbox" /><label class="checkbox-label" for="start-minimized">Start minimized to the system tray</label></div>
               <div class="checkbox-field"><input id="launch-at-login" type="checkbox" /><label class="checkbox-label" for="launch-at-login">Launch CyberGrid when I sign in</label></div>
               <div class="checkbox-field"><input id="confirm-exit-active-sessions" type="checkbox" /><label class="checkbox-label" for="confirm-exit-active-sessions">Confirm on exit with active sessions</label></div>
@@ -2981,7 +2976,7 @@
           </article>
           <article class="help-topic" data-help-panel="security" hidden>
             <h3>Vault Security &amp; Disaster Recovery</h3>
-            <p>CyberGrid stores the encrypted vault, preferences, workspace layout, and audit logs in the operating system's per-user application-data directory—not beside the executable.</p>
+            <p>CyberGrid stores the encrypted vault, preferences, workspace layout, RDP runtime files, backups, and audit logs in the operating system's per-user application-data directory—not beside the executable.</p>
             <ul><li><strong>Master Password enabled:</strong> the password derives the AES-256-GCM vault key with scrypt and is required after launch or auto-lock.</li><li><strong>Master Password disabled:</strong> a random automatic key is protected by the signed-in user's operating-system credential service through Electron safeStorage.</li><li><strong>Auto-lock:</strong> configure the inactivity timeout and clipboard clearing interval in Settings &gt; Security.</li><li><strong>Workspace restore:</strong> only saved profile identifiers, the active position, and layout are persisted; decrypted credentials are never written to the workspace snapshot.</li><li><strong>DR runbook:</strong> Settings &gt; Security exports inventory, topology, notes, and configuration history as a fully encrypted offline HTML file. Store its passphrase separately.</li></ul>
             <h4>Operational backup</h4><p>Keep the encrypted vault, the OS-protected key or master password, and DR runbook backups in access-controlled locations. Test recovery periodically on an isolated workstation.</p>
           </article>

@@ -153,6 +153,22 @@ void servicesReady.catch(() => undefined);
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 app.setAppUserModelId("com.kurlydeer.cybergrid");
 
+app.on("certificate-error", (event, webContents, url, _error, _certificate, callback) => {
+  let isEmbeddedWebConsole = false;
+  try {
+    isEmbeddedWebConsole = new URL(url).protocol === "https:" &&
+      Boolean(webController?.ownsWebContents(webContents));
+  } catch {
+    isEmbeddedWebConsole = false;
+  }
+  if (isEmbeddedWebConsole) {
+    event.preventDefault();
+    callback(true);
+    return;
+  }
+  callback(false);
+});
+
 function scheduleUpdateCheck(): void {
   if (!app.isPackaged) return;
   const timer = setTimeout(() => {
@@ -211,7 +227,8 @@ async function requestApplicationQuit(parent = mainWindow): Promise<void> {
         ? await dialog.showMessageBox(parent, {
             type: "warning",
             title: "Exit CyberGrid?",
-            message: `You have ${count} active sessions open. Are you sure you want to close all sessions and exit CyberGrid?`,
+            message: "Close active sessions and exit?",
+            detail: `You have ${count} active sessions open. Closing CyberGrid will disconnect all of them.`,
             buttons: ["Close All & Exit", "Cancel"],
             defaultId: 1,
             cancelId: 1,
@@ -220,7 +237,8 @@ async function requestApplicationQuit(parent = mainWindow): Promise<void> {
         : await dialog.showMessageBox({
             type: "warning",
             title: "Exit CyberGrid?",
-            message: `You have ${count} active sessions open. Are you sure you want to close all sessions and exit CyberGrid?`,
+            message: "Close active sessions and exit?",
+            detail: `You have ${count} active sessions open. Closing CyberGrid will disconnect all of them.`,
             buttons: ["Close All & Exit", "Cancel"],
             defaultId: 1,
             cancelId: 1,
@@ -502,11 +520,6 @@ function createMainWindow(): BrowserWindow {
   };
   window.once("ready-to-show", revealWindow);
   window.webContents.once("dom-ready", () => setImmediate(revealWindow));
-  window.on("minimize", () => {
-    if (preferencesController?.get().minimizeToTray && !isQuitting) {
-      setImmediate(() => window.hide());
-    }
-  });
   window.on("close", (event) => {
     if (preferencesController?.get().minimizeToTray && !isQuitting) {
       event.preventDefault();
@@ -3024,7 +3037,7 @@ async function initializeBackgroundServices(): Promise<void> {
   );
   await initializeVaultAccess();
 
-  rdpController = new RdpController(join(app.getPath("temp"), "CyberGrid", "rdp"));
+  rdpController = new RdpController(userDataFile("runtime", "rdp"));
   webController = new WebController(() => mainWindow);
   registerIpcHandlers();
   try {

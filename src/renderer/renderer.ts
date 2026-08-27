@@ -144,7 +144,7 @@ interface WorkspaceTab {
 }
 
 const DEFAULT_SETTINGS: AppPreferences = {
-  minimizeToTray: true,
+  minimizeToTray: false,
   startMinimized: false,
   launchAtLogin: false,
   confirmExitWithActiveSessions: true,
@@ -1981,11 +1981,11 @@ function installSwitchToolsDrawer(tab: WorkspaceTab, profile?: ServerProfileSumm
 
   const drawer = document.createElement("aside");
   drawer.className = "switch-tools-drawer";
-  drawer.setAttribute("aria-label", "Switch tools");
+  drawer.setAttribute("aria-label", "Session Tools");
   drawer.setAttribute("aria-hidden", "true");
   drawer.inert = true;
   const header = createTextElement("header", "switch-tools-header", "");
-  const title = createTextElement("strong", "", "Switch Tools");
+  const title = createTextElement("strong", "", "Session Tools");
   const close = document.createElement("button");
   close.type = "button";
   close.textContent = ">";
@@ -2008,7 +2008,6 @@ function installSwitchToolsDrawer(tab: WorkspaceTab, profile?: ServerProfileSumm
     ["auto", "Auto-Detect"],
     ["cisco", "Cisco IOS"],
     ["fortinet", "FortiOS"],
-    ["hp", "HP ProCurve"],
     ["generic", "Linux / Generic"],
   ] as const) {
     const option = document.createElement("option");
@@ -4400,7 +4399,7 @@ function updateProfileFields(resetDefaults = false): void {
   serverBaudRateInput.required = false;
   serverCredentialProfileField.hidden = true;
   serverUsernameField.hidden = false;
-  serverDomainInput.closest<HTMLElement>(".field")?.removeAttribute("hidden");
+  serverDomainInput.closest<HTMLElement>(".field")?.toggleAttribute("hidden", protocol !== "rdp");
   serverUsernameInput.required = false;
   serverAuthField.hidden = true;
   serverPasswordSection.hidden = false;

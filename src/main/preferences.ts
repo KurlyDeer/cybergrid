@@ -11,7 +11,7 @@ interface PreferencesFile {
 }
 
 export const DEFAULT_APP_PREFERENCES: AppPreferences = {
-  minimizeToTray: true,
+  minimizeToTray: false,
   startMinimized: false,
   launchAtLogin: false,
   confirmExitWithActiveSessions: true,

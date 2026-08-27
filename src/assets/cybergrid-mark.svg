@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+  <title id="title">CyberGrid</title>
+  <desc id="desc">A minimalist grid and geometric G monogram.</desc>
+  <rect width="1024" height="1024" rx="224" fill="#0b1220"/>
+  <g fill="none" stroke="#64748b" stroke-width="28" stroke-linecap="round" opacity=".72">
+    <path d="M224 224h576M224 800h576M224 224v576M800 224v576"/>
+  </g>
+  <g fill="#cbd5e1">
+    <circle cx="224" cy="224" r="42"/><circle cx="800" cy="224" r="42"/>
+    <circle cx="224" cy="800" r="42"/><circle cx="800" cy="800" r="42"/>
+  </g>
+  <path d="M700 328H492c-132 0-214 71-214 184s82 184 214 184h208"
+        fill="none" stroke="#f8fafc" stroke-width="72" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M700 512H548v142h152" fill="none" stroke="#94a3b8" stroke-width="72"
+        stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
