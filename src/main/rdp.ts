@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { access, mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { BrowserWindow, type WebContents } from "electron";
 import {
   IPC_CHANNELS,
@@ -26,6 +26,8 @@ interface RdpSession {
   sender: WebContents;
   configurationPath: string;
   hostProcess?: ChildProcess;
+  credentialTarget?: string;
+  cmdkeyPath?: string;
   native?: Win32Bindings;
   windowHandle?: NativeWindowHandle;
   bounds: RdpBounds;
@@ -36,12 +38,9 @@ interface RdpSession {
 
 const GWL_STYLE = -16;
 const WS_CHILD = 0x40000000;
-const WS_POPUP = 0x80000000;
-const WS_CAPTION = 0x00c00000;
-const WS_THICKFRAME = 0x00040000;
-const WS_SYSMENU = 0x00080000;
-const WS_MINIMIZEBOX = 0x00020000;
-const WS_MAXIMIZEBOX = 0x00010000;
+const WS_CLIPCHILDREN = 0x02000000;
+const WS_VISIBLE = 0x10000000;
+const EMBEDDED_RDP_STYLE = WS_CHILD | WS_CLIPCHILDREN | WS_VISIBLE;
 const SW_HIDE = 0;
 const SW_SHOW = 5;
 const SWP_NOZORDER = 0x0004;
@@ -62,7 +61,6 @@ function loadWin32(): Promise<Win32Bindings> {
     const enumWindowsProc = koffi.proto("__stdcall", "EnumWindowsProc", "bool", [hwndType, "intptr_t"]);
     const callbackPointer = koffi.pointer(enumWindowsProc);
     const enumWindows = user32.func("__stdcall", "EnumWindows", "bool", [callbackPointer, "intptr_t"]);
-    const enumChildWindows = user32.func("__stdcall", "EnumChildWindows", "bool", [hwndType, callbackPointer, "intptr_t"]);
     const getWindowThreadProcessId = user32.func(
       "__stdcall",
       "GetWindowThreadProcessId",
@@ -70,8 +68,8 @@ function loadWin32(): Promise<Win32Bindings> {
       [hwndType, koffi.out(koffi.pointer("uint32_t"))],
     );
     const getClassName = user32.func("__stdcall", "GetClassNameA", "int", [hwndType, "char *", "int"]);
-    const getWindowLong = user32.func("__stdcall", "GetWindowLongA", "int32_t", [hwndType, "int"]);
-    const setWindowLong = user32.func("__stdcall", "SetWindowLongA", "int32_t", [hwndType, "int", "int32_t"]);
+    const getWindowLongPtr = user32.func("__stdcall", "GetWindowLongPtrA", "intptr_t", [hwndType, "int"]);
+    const setWindowLongPtr = user32.func("__stdcall", "SetWindowLongPtrA", "intptr_t", [hwndType, "int", "intptr_t"]);
     const setParent = user32.func("__stdcall", "SetParent", hwndType, [hwndType, hwndType]);
     const setWindowPos = user32.func(
       "__stdcall",
@@ -97,29 +95,17 @@ function loadWin32(): Promise<Win32Bindings> {
     return {
       findMstscWindow(processId: number): NativeWindowHandle | undefined {
         let found: NativeWindowHandle | undefined;
-        const inspect = (windowHandle: NativeWindowHandle): boolean => {
-          if (processIdForWindow(windowHandle) !== processId) return true;
-          if (classNameForWindow(windowHandle) === "UIMainClass") {
-            found = windowHandle;
-            return false;
-          }
-          return true;
-        };
         enumWindows((topLevelWindow: NativeWindowHandle) => {
-          if (found) return false;
           if (processIdForWindow(topLevelWindow) !== processId) return true;
-          if (!inspect(topLevelWindow)) return false;
-          enumChildWindows(topLevelWindow, inspect, 0);
-          return !found;
+          if (classNameForWindow(topLevelWindow) !== "TscShellContainerClass") return true;
+          found = topLevelWindow;
+          return false;
         }, 0);
         return found;
       },
       embed(windowHandle: NativeWindowHandle, parentHandle: bigint): void {
-        const currentStyle = Number(getWindowLong(windowHandle, GWL_STYLE)) >>> 0;
-        const strippedStyle = currentStyle & ~WS_POPUP & ~WS_CAPTION & ~WS_THICKFRAME &
-          ~WS_SYSMENU & ~WS_MINIMIZEBOX & ~WS_MAXIMIZEBOX;
-        const childStyle = (strippedStyle | WS_CHILD) >>> 0;
-        setWindowLong(windowHandle, GWL_STYLE, childStyle | 0);
+        getWindowLongPtr(windowHandle, GWL_STYLE);
+        setWindowLongPtr(windowHandle, GWL_STYLE, EMBEDDED_RDP_STYLE);
         setParent(windowHandle, parentHandle);
         setWindowPos(windowHandle, null, 0, 0, 1, 1, SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
         updateWindow(windowHandle);
@@ -170,8 +156,9 @@ export class RdpController {
     const systemRoot = process.env.SystemRoot;
     if (!systemRoot) throw new Error("Windows SystemRoot is unavailable; mstsc.exe could not be located.");
     const mstscPath = join(systemRoot, "System32", "mstsc.exe");
-    await access(mstscPath).catch(() => {
-      throw new Error("Windows Remote Desktop is not installed.");
+    const cmdkeyPath = join(systemRoot, "System32", "cmdkey.exe");
+    await Promise.all([access(mstscPath), access(cmdkeyPath)]).catch(() => {
+      throw new Error("Windows Remote Desktop or Credential Manager tooling is not installed.");
     });
 
     const sessionId = randomUUID();
@@ -186,6 +173,7 @@ export class RdpController {
       visible: false,
       hostReady: false,
       closed: false,
+      cmdkeyPath,
     };
     this.sessions.set(sessionId, session);
     this.emitStatus(session, "launching", `Embedding Windows Remote Desktop for ${config.host}...`);
@@ -195,6 +183,10 @@ export class RdpController {
     }
 
     try {
+      const decodedUsername = this.formatUsername(config.username, config.domain);
+      if (config.password && decodedUsername) {
+        session.credentialTarget = this.injectCredential(cmdkeyPath, config.host, decodedUsername, config.password);
+      }
       const child = spawn(mstscPath, [configurationPath], { windowsHide: false, stdio: "ignore" });
       session.hostProcess = child;
       child.once("error", (error) => this.closeSession(session, "error", error.message, false));
@@ -258,6 +250,11 @@ export class RdpController {
     if (session) this.closeSession(session, "closed", "RDP session closed by user.", true);
   }
 
+  kill(sessionId: string): void {
+    const session = this.sessions.get(sessionId);
+    if (session) this.closeSession(session, "closed", "RDP process terminated by user.", true);
+  }
+
   disconnectAll(): void {
     for (const session of [...this.sessions.values()]) this.closeSession(session, "closed", "CyberGrid is closing.", true);
   }
@@ -274,7 +271,9 @@ export class RdpController {
       if (session.hostProcess?.exitCode !== null) break;
       await delay(100);
     }
-    if (!windowHandle || session.closed) throw new Error("The Windows RDP UIMainClass window was not available for embedding.");
+    if (!windowHandle || session.closed) {
+      throw new Error("The spawned Windows RDP process did not expose a matching TscShellContainerClass window.");
+    }
 
     session.native = native;
     session.windowHandle = windowHandle;
@@ -317,7 +316,7 @@ export class RdpController {
       `smart sizing:i:${smartSizing}`, `dynamic resolution:i:${smartSizing}`, "desktopwidth:i:1920", "desktopheight:i:1080",
       "desktopscalefactor:i:100", "devicescalefactor:i:100",
       `full address:s:${address}:${config.port}`, `username:s:${username}`,
-      "prompt for credentials on client:i:1", "authentication level:i:2", "enablecredsspsupport:i:1",
+      `prompt for credentials on client:i:${config.password && username ? 0 : 1}`, "authentication level:i:2", "enablecredsspsupport:i:1",
       `audiomode:i:${audioMode}`, "audiocapturemode:i:0",
       "redirectclipboard:i:1", "redirectprinters:i:0", "redirectcomports:i:0", "redirectsmartcards:i:0",
       "drivestoredirect:s:", "networkautodetect:i:1", "bandwidthautodetect:i:1", "compression:i:1",
@@ -326,10 +325,76 @@ export class RdpController {
   }
 
   private formatUsername(username: string, domain?: string): string {
-    const cleanUsername = username.trim().replace(/^~+/, "");
-    const cleanDomain = domain?.trim();
+    const cleanUsername = this.decodeCredentialComponent(username.trim(), "RDP username").replace(/^~+/, "");
+    const cleanDomain = domain
+      ? this.decodeCredentialComponent(domain.trim(), "RDP domain")
+      : undefined;
     if (!cleanDomain || cleanDomain === "." || cleanUsername.includes("\\")) return cleanUsername;
     return `${cleanDomain}\\${cleanUsername}`;
+  }
+
+  private decodeCredentialComponent(value: string, label: string): string {
+    try {
+      return decodeURIComponent(value);
+    } catch {
+      throw new Error(`${label} contains invalid URL encoding.`);
+    }
+  }
+
+  private injectCredential(cmdkeyPath: string, host: string, username: string, password: string): string {
+    const target = `TERMSRV/${host.replace(/^\[|\]$/g, "")}`;
+    try {
+      // execFileSync preserves each value as one argument. Unlike execSync with
+      // a composed command string, shell metacharacters in credentials cannot
+      // be interpreted as commands.
+      execFileSync(cmdkeyPath, [`/generic:${target}`, `/user:${username}`, `/pass:${password}`], {
+        windowsHide: true,
+        stdio: "ignore",
+        timeout: 5_000,
+      });
+    } catch {
+      throw new Error("Windows Credential Manager rejected the RDP credentials.");
+    }
+    return target;
+  }
+
+  private removeCredential(session: RdpSession): void {
+    if (!session.cmdkeyPath || !session.credentialTarget) return;
+    const target = session.credentialTarget;
+    session.credentialTarget = undefined;
+    try {
+      execFileSync(session.cmdkeyPath, [`/delete:${target}`], {
+        windowsHide: true,
+        stdio: "ignore",
+        timeout: 5_000,
+      });
+    } catch {
+      // Credential deletion is best-effort during Windows shutdown, but the
+      // target is cleared from session memory so it cannot be reused here.
+    }
+  }
+
+  private terminateProcess(session: RdpSession): void {
+    const processId = session.hostProcess?.pid;
+    if (!processId || session.hostProcess?.exitCode !== null) return;
+    const systemRoot = process.env.SystemRoot;
+    if (systemRoot) {
+      try {
+        execFileSync(join(systemRoot, "System32", "taskkill.exe"), ["/PID", String(processId), "/T", "/F"], {
+          windowsHide: true,
+          stdio: "ignore",
+          timeout: 5_000,
+        });
+        return;
+      } catch {
+        // Fall through to Node's direct process termination API.
+      }
+    }
+    try {
+      process.kill(processId, "SIGKILL");
+    } catch {
+      // The process may already have exited between the status check and kill.
+    }
   }
 
   private disconnectForSender(sender: WebContents): void {
@@ -353,12 +418,18 @@ export class RdpController {
     session.closed = true;
     this.sessions.delete(session.id);
     if (terminate) {
-      if (session.native && session.windowHandle) session.native.close(session.windowHandle);
-      if (session.hostProcess && session.hostProcess.exitCode === null) {
-        const timer = setTimeout(() => session.hostProcess?.kill(), 1_500);
-        timer.unref();
+      try {
+        if (session.native && session.windowHandle) session.native.close(session.windowHandle);
+      } catch {
+        // Forced PID termination below remains authoritative.
+      }
+      try {
+        this.terminateProcess(session);
+      } catch {
+        // Teardown must continue so temporary credentials are never stranded.
       }
     }
+    this.removeCredential(session);
     void rm(session.configurationPath, { force: true }).catch(() => undefined);
   }
 }

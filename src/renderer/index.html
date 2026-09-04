@@ -2352,9 +2352,9 @@
       .server-tree { padding: 2px 3px 8px; }
       .server-group { margin-bottom: 0; }
       .server-list .server-group { margin-left: 9px; }
-      .folder-header { min-height: 22px; grid-template-columns: 10px minmax(0, 1fr) auto; gap: 4px; padding: 1px 4px; border-radius: 2px; }
+      .folder-header { position: relative; min-height: 22px; grid-template-columns: 10px minmax(0, 1fr); gap: 4px; padding: 1px 35px 1px 4px; border-radius: 2px; }
       .folder-name { font-size: 10px; letter-spacing: .035em; }
-      .folder-count { min-width: 14px; padding: 0 3px; background: transparent; font-size: 9px; }
+      .folder-header > .folder-count.folder-count-badge { position: absolute; right: 10px; min-width: 20px; padding: 2px 6px; border-radius: 999px; background: var(--accent); color: var(--background); font-size: 9px; font-weight: 900; line-height: 14px; text-align: center; }
       .server-row { min-height: 22px; grid-template-columns: minmax(0, 1fr) 18px; }
       .server-item { min-height: 22px; gap: 4px; padding: 1px 4px; border: 0; border-radius: 2px; }
       .server-item:hover, .server-item:focus-visible, .server-item.selected { border: 0; }

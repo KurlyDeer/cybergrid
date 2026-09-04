@@ -1509,7 +1509,7 @@ function createRdpTab(label: string, config: RdpConnectionConfig): WorkspaceTab 
   disconnectButton.type = "button";
   disconnectButton.textContent = "Close RDP session";
   disconnectButton.addEventListener("click", () => {
-    if (tab.rdpSessionId) void window.cybergrid.rdp.disconnect(tab.rdpSessionId);
+    void closeTab(tab.id);
   });
   canvas.append(mark, title, message, note, disconnectButton);
   viewport.append(canvas);
@@ -1645,6 +1645,7 @@ async function closeTab(id: string): Promise<void> {
   if (tab.rdpSessionId) {
     rdpSessions.delete(tab.rdpSessionId);
     window.cybergrid.rdp.setVisible(tab.rdpSessionId, false);
+    window.cybergrid.rdp.kill(tab.rdpSessionId);
     await window.cybergrid.rdp.disconnect(tab.rdpSessionId).catch(() => undefined);
     queuedRdpStatus.delete(tab.rdpSessionId);
   }
@@ -2526,7 +2527,15 @@ function parseQuickConnect(value: string): QuickConnection {
   }
   if (protocol === "rdp") {
     if (!username) throw new Error("RDP Quick Connect requires a username.");
-    return { protocol, config: { host, port: Number(url.port || 3389), username } };
+    return {
+      protocol,
+      config: {
+        host,
+        port: Number(url.port || 3389),
+        username,
+        password: decodeURIComponent(url.password) || quickPasswordInput.value || undefined,
+      },
+    };
   }
   if (protocol === "vnc") return { protocol, config: { host, port: Number(url.port || 5900), password: decodeURIComponent(url.password) || quickPasswordInput.value || undefined } };
   return { protocol, config: { protocol, host, port: Number(url.port || 23) } };
@@ -3768,7 +3777,7 @@ function renderProfiles(): void {
     folder.append(
       createTextElement("span", "folder-chevron", collapsedGroups.has(node.path) ? ">" : "v"),
       createTextElement("span", "folder-name", `${defaults?.icon ? `${DEVICE_ICON_LABELS[defaults.icon]} · ` : ""}${node.name}`),
-      createTextElement("span", "folder-count", String(count(node))),
+      createTextElement("span", "folder-count folder-count-badge", String(count(node))),
     );
     folder.addEventListener("click", (event) => selectTreeItem(treeKey, event));
     folder.addEventListener("dblclick", () => {

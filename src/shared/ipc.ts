@@ -16,6 +16,7 @@ export const IPC_CHANNELS = {
   rdpIsSupported: "cybergrid:rdp:is-supported",
   rdpConnect: "cybergrid:rdp:connect",
   rdpDisconnect: "cybergrid:rdp:disconnect",
+  rdpKill: "kill-rdp",
   rdpSetBounds: "cybergrid:rdp:set-bounds",
   rdpSetVisible: "cybergrid:rdp:set-visible",
   rdpStatus: "cybergrid:rdp:status",
@@ -210,6 +211,7 @@ export interface RdpConnectionConfig {
   host: string;
   port: number;
   username: string;
+  password?: string;
   domain?: string;
   smartSizing?: boolean;
   colorDepth?: 15 | 16 | 24 | 32;
@@ -968,6 +970,7 @@ export interface CyberGridApi {
     isSupported(): Promise<boolean>;
     connect(config: RdpConnectionConfig): Promise<string>;
     disconnect(sessionId: string): Promise<void>;
+    kill(sessionId: string): void;
     setBounds(sessionId: string, bounds: RdpBounds): void;
     setVisible(sessionId: string, visible: boolean): void;
     onStatus(listener: (event: RdpStatusEvent) => void): Unsubscribe;

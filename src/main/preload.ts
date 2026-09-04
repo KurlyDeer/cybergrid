@@ -69,6 +69,7 @@ const IPC_CHANNELS: typeof import("../shared/ipc").IPC_CHANNELS = {
   rdpIsSupported: "cybergrid:rdp:is-supported",
   rdpConnect: "cybergrid:rdp:connect",
   rdpDisconnect: "cybergrid:rdp:disconnect",
+  rdpKill: "kill-rdp",
   rdpSetBounds: "cybergrid:rdp:set-bounds",
   rdpSetVisible: "cybergrid:rdp:set-visible",
   rdpStatus: "cybergrid:rdp:status",
@@ -229,6 +230,7 @@ const api: CyberGridApi = {
     isSupported: () => ipcRenderer.invoke(IPC_CHANNELS.rdpIsSupported),
     connect: (config) => ipcRenderer.invoke(IPC_CHANNELS.rdpConnect, config),
     disconnect: (sessionId) => ipcRenderer.invoke(IPC_CHANNELS.rdpDisconnect, sessionId),
+    kill: (sessionId) => ipcRenderer.send(IPC_CHANNELS.rdpKill, sessionId),
     setBounds: (sessionId: string, bounds: RdpBounds) =>
       ipcRenderer.send(IPC_CHANNELS.rdpSetBounds, sessionId, bounds),
     setVisible: (sessionId: string, visible: boolean) =>

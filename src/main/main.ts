@@ -943,6 +943,10 @@ function normalizeRdpConfig(value: unknown): RdpConnectionConfig {
     maxLength: 256,
     singleLine: true,
   });
+  const password = readString(value.password, "RDP password", {
+    maxLength: 4_096,
+    trim: false,
+  });
   const defaults = preferencesController?.get();
   const colorDepth = value.colorDepth === 15 || value.colorDepth === 16 || value.colorDepth === 24 || value.colorDepth === 32
     ? value.colorDepth
@@ -954,6 +958,7 @@ function normalizeRdpConfig(value: unknown): RdpConnectionConfig {
     host,
     port: target.port ?? readPort(value.port, 3389),
     username: (username as string).replace(/^~+/, ""),
+    password,
     domain,
     smartSizing: typeof value.smartSizing === "boolean" ? value.smartSizing : defaults?.rdpSmartSizing ?? true,
     colorDepth,
@@ -2086,6 +2091,9 @@ async function connectProfile(
           host,
           port,
           username,
+          password: profile.authType === "password"
+            ? resolveEnvironmentTokens(profile.password, "RDP password")
+            : undefined,
           domain: profile.domain,
           smartSizing: rdpOptions.rdpSmartSizing,
           colorDepth: rdpOptions.rdpColorDepth,
@@ -2301,6 +2309,15 @@ function registerIpcHandlers(): void {
   ipcMain.handle(IPC_CHANNELS.rdpDisconnect, (event, sessionId: unknown) => {
     assertTrustedSender(event);
     requireRdp().disconnect(readUuid(sessionId, "RDP session ID"));
+  });
+
+  ipcMain.on(IPC_CHANNELS.rdpKill, (event, sessionId: unknown) => {
+    if (!isTrustedSender(event)) return;
+    try {
+      requireRdp().kill(readUuid(sessionId, "RDP session ID"));
+    } catch (error) {
+      console.warn("Rejected RDP process termination request:", error);
+    }
   });
 
   ipcMain.on(IPC_CHANNELS.rdpSetBounds, (event, sessionId: unknown, bounds: unknown) => {
