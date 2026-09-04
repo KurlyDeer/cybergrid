@@ -20,8 +20,7 @@ import {
 
 const execFileAsync = promisify(execFile);
 const MAX_SCAN_HOSTS = 1_024;
-const HOST_CONCURRENCY = 32;
-const SOCKET_TIMEOUT_MS = 750;
+const SOCKET_TIMEOUT_MS = 2_000;
 const DNS_TIMEOUT_MS = 900;
 const MAX_BANNER_BYTES = 2_048;
 
@@ -33,6 +32,11 @@ const ADMIN_PORTS: ReadonlyArray<{ port: number; protocol: AdministrationProtoco
   { port: 3389, protocol: "rdp" },
   { port: 5900, protocol: "vnc" },
 ];
+
+const MAX_ACTIVE_TCP_SOCKETS = 50;
+// Each host probes every administration port concurrently. Deriving the worker
+// count from that fan-out guarantees the scan never exceeds the socket cap.
+const HOST_CONCURRENCY = Math.max(1, Math.floor(MAX_ACTIVE_TCP_SOCKETS / ADMIN_PORTS.length));
 
 interface ScanSession {
   sender: WebContents;

@@ -133,14 +133,17 @@ async function dnsLookup(host: string): Promise<CommandResult> {
 function portCheck(host: string, port: number): Promise<CommandResult> {
   return new Promise((resolve) => {
     const socket = new Socket();
+    let settled = false;
     const finish = (success: boolean, output: string): void => {
+      if (settled) return;
+      settled = true;
       socket.removeAllListeners();
       socket.destroy();
       resolve({ success, output });
     };
-    socket.setTimeout(4_000);
+    socket.setTimeout(2_000);
     socket.once("connect", () => finish(true, `${host}:${port} accepted a TCP connection.`));
-    socket.once("timeout", () => finish(false, `${host}:${port} timed out after 4000 ms.`));
+    socket.once("timeout", () => finish(false, `${host}:${port} timed out after 2000 ms.`));
     socket.once("error", (error) => finish(false, `${host}:${port} ${error.message}`));
     socket.connect(port, host);
   });

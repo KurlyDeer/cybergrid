@@ -111,6 +111,7 @@ process.on("unhandledRejection", (reason) => reportFatalError("unhandled promise
 
 app.commandLine.appendSwitch("disable-gpu-process-crash-limit");
 app.commandLine.appendSwitch("openssl-legacy-provider");
+app.setName("CyberGrid");
 
 const auditController = new AuditController();
 const streamController = new StreamController(auditController);

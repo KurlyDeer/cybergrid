@@ -178,10 +178,14 @@
 
       .sidebar {
         display: flex;
+        min-width: 0;
+        max-width: 100%;
         min-height: 0;
         flex-direction: column;
+        overflow-x: hidden;
         border-right: 1px solid var(--border);
         background: #0a111a;
+        white-space: nowrap;
       }
 
       :root[data-theme="monochrome"] .sidebar {
@@ -304,13 +308,21 @@
       }
 
       .server-tree {
+        width: 100%;
+        min-width: 0;
+        max-width: 100%;
+        overflow-x: hidden;
         padding: 8px 10px 18px;
       }
 
       .sidebar-scroll {
+        width: 100%;
+        min-width: 0;
+        max-width: 100%;
         min-height: 0;
         flex: 1;
-        overflow: auto;
+        overflow-x: hidden;
+        overflow-y: auto;
       }
 
       .sidebar-empty,
@@ -325,12 +337,18 @@
       }
 
       .server-group {
+        width: 100%;
+        min-width: 0;
+        max-width: 100%;
+        overflow-x: hidden;
         margin-bottom: 8px;
       }
 
       .folder-header {
         display: grid;
         width: 100%;
+        min-width: 0;
+        max-width: 100%;
         grid-template-columns: 14px minmax(0, 1fr) auto;
         gap: 6px;
         align-items: center;
@@ -385,8 +403,12 @@
 
       .server-row {
         display: grid;
+        width: 100%;
+        min-width: 0;
+        max-width: 100%;
         grid-template-columns: minmax(0, 1fr) 28px;
         align-items: center;
+        overflow-x: hidden;
       }
 
       .server-row.dragging {
@@ -395,9 +417,12 @@
 
       .server-item {
         display: flex;
+        width: 100%;
         min-width: 0;
+        max-width: 100%;
         align-items: center;
         gap: 10px;
+        overflow: hidden;
         padding: 9px 8px 9px 12px;
         border: 1px solid transparent;
         border-radius: 8px;
@@ -556,23 +581,23 @@
       }
 
       html[data-compact-tree="true"] .server-tree {
-        min-width: max-content;
+        min-width: 0;
         padding: 4px 6px 12px;
       }
       html[data-compact-tree="true"] .server-group { margin-bottom: 0; }
       html[data-compact-tree="true"] .server-list .server-group { margin-left: 10px; }
       html[data-compact-tree="true"] .folder-header {
         min-height: 22px;
-        grid-template-columns: 10px minmax(max-content, 1fr) auto;
+        grid-template-columns: 10px minmax(0, 1fr) auto;
         gap: 4px;
         padding: 1px 4px;
         border-radius: 3px;
       }
       html[data-compact-tree="true"] .folder-name {
-        overflow: visible;
+        overflow: hidden;
         font-size: 10px;
         letter-spacing: 0.035em;
-        text-overflow: clip;
+        text-overflow: ellipsis;
       }
       html[data-compact-tree="true"] .folder-count {
         min-width: 14px;
@@ -582,10 +607,10 @@
       }
       html[data-compact-tree="true"] .server-row {
         min-height: 22px;
-        grid-template-columns: max-content 20px;
+        grid-template-columns: minmax(0, 1fr) 20px;
       }
       html[data-compact-tree="true"] .server-item {
-        min-width: max-content;
+        min-width: 0;
         min-height: 22px;
         gap: 4px;
         padding: 1px 4px;
@@ -604,12 +629,14 @@
         font-size: 6px;
       }
       html[data-compact-tree="true"] .server-dot { width: 5px; height: 5px; box-shadow: none; }
-      html[data-compact-tree="true"] .server-meta { display: block; overflow: visible; }
+      html[data-compact-tree="true"] .server-meta { display: block; min-width: 0; overflow: hidden; }
       html[data-compact-tree="true"] .server-name {
-        overflow: visible;
+        display: block;
+        overflow: hidden;
         font-size: 11px;
         line-height: 18px;
-        text-overflow: clip;
+        text-overflow: ellipsis;
+        white-space: nowrap;
       }
       html[data-compact-tree="true"] .server-host { display: none; }
       html[data-compact-tree="true"] .node-badge {
@@ -1448,12 +1475,15 @@
       .diagnostic-inline {
         display: grid;
         gap: 6px;
-        margin: 3px 5px 8px 11px;
+        width: min(390px, calc(100vw - 40px));
+        margin: 0;
         padding: 8px;
         border: 1px solid var(--border);
         border-left: 2px solid var(--muted);
         border-radius: 7px;
-        background: color-mix(in srgb, var(--panel-raised) 75%, transparent);
+        background: color-mix(in srgb, var(--panel-raised) 96%, #000);
+        box-shadow: 0 18px 54px rgba(0, 0, 0, .46);
+        pointer-events: auto;
       }
 
       .diagnostic-inline.success {
@@ -2115,7 +2145,17 @@
       .node-badge { margin-left: auto; padding: 1px 5px; border-radius: 999px; background: var(--node-color, var(--accent)); color: #07110e; font-size: 8px; font-weight: 900; }
       .server-item.selected { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); background: var(--accent-soft); }
       .folder-header.selected { background: var(--accent-soft); color: var(--accent); }
-      .essentials-credentials { display: grid; gap: 8px; }
+      .connection-fields-grid {
+        display: grid;
+        min-width: 0;
+        grid-column: 1 / -1;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        gap: 16px;
+        align-items: start;
+      }
+      .connection-fields-grid > .field { min-width: 0; margin: 0; }
+      .connection-fields-grid #server-domain-field { grid-column: 1 / -1; }
+      .essentials-credentials { display: grid; min-width: 0; grid-column: 1 / -1; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
       .password-input { display: grid; grid-template-columns: minmax(0, 1fr) 30px; gap: 4px; }
       .password-input .password-visibility-toggle { width: 30px; min-height: 28px; padding: 0; border: 1px solid var(--border); border-radius: 4px; background: var(--panel-raised); color: var(--muted); cursor: pointer; }
       .password-input .password-visibility-toggle:hover { border-color: var(--accent); color: var(--accent); }
@@ -2125,7 +2165,7 @@
       .category-card strong { display: block; margin-bottom: 4px; color: var(--text); font-size: 12px; }
       .category-card span { font-size: 10px; line-height: 1.35; }
       .category-card.active { border-color: var(--accent); background: var(--accent-soft); color: var(--text); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent); }
-      .connection-section-title { grid-column: 1 / -1; margin: 8px 0 -2px; color: var(--muted); font-size: 10px; font-weight: 900; letter-spacing: .12em; text-transform: uppercase; }
+      .connection-section-title { grid-column: 1 / -1; margin: 0; color: var(--muted); font-size: 10px; font-weight: 900; letter-spacing: .12em; text-transform: uppercase; }
       .advanced-settings { grid-column: 1 / -1; border: 1px solid var(--border); border-radius: 9px; background: color-mix(in srgb, var(--panel-raised) 50%, transparent); }
       .advanced-settings > summary { padding: 12px 14px; color: var(--accent); cursor: pointer; font-size: 11px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
       .advanced-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding: 2px 14px 14px; }
@@ -2220,7 +2260,9 @@
       .dr-export-card { display: grid; gap: 12px; margin-top: 20px; padding: 14px; border: 1px solid var(--border); border-radius: 9px; background: color-mix(in srgb, var(--panel-raised) 70%, transparent); }
       .dr-export-card h4 { margin: 0; font-size: 12px; }
       .dr-export-card p, .dr-export-status { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
-      .update-toast-region { position: fixed; z-index: 1800; top: 14px; right: 14px; display: grid; width: min(390px, calc(100vw - 28px)); gap: 10px; pointer-events: none; }
+      .workspace-notification-overlay { position: fixed; z-index: 9999; right: 20px; bottom: 20px; display: grid; width: min(390px, calc(100vw - 40px)); max-height: calc(100vh - 40px); gap: 10px; overflow-y: auto; pointer-events: none; }
+      .update-toast-region,
+      .diagnostic-notification-region { display: grid; min-width: 0; gap: 10px; pointer-events: none; }
       .update-toast { pointer-events: auto; overflow: hidden; border: 1px solid color-mix(in srgb, var(--accent) 58%, var(--border)); border-radius: 11px; background: color-mix(in srgb, var(--panel-raised) 94%, #000); box-shadow: 0 18px 54px rgba(0, 0, 0, .46); animation: update-toast-in 180ms ease-out; }
       .update-toast-content { display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 11px; padding: 14px; }
       .update-toast-mark { display: grid; width: 34px; height: 34px; place-items: center; border: 1px solid var(--accent); border-radius: 8px; background: var(--accent-soft); color: var(--accent); font-size: 10px; font-weight: 900; }
@@ -2303,13 +2345,13 @@
       .connection-dialog .modal-header { padding: 10px 12px 8px; }
       .connection-dialog .modal-header h2 { font-size: 16px; }
       .connection-dialog .modal-header p { margin-top: 3px; font-size: 10px; }
-      .connection-dialog .modal-body { gap: 8px; padding: 8px 12px; }
+      .connection-dialog .modal-body { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: start; padding: 16px; }
       .connection-dialog .modal-actions { padding: 7px 12px; }
       .category-picker { gap: 5px; }
       .category-card { min-height: 48px; padding: 6px 8px; border-radius: 4px; }
       .category-card strong { margin-bottom: 2px; font-size: 11px; }
       .category-card span { font-size: 9px; }
-      .connection-section-title { margin: 3px 0 -1px; font-size: 9px; }
+      .connection-section-title { margin: 0; font-size: 9px; }
       .advanced-settings { border-radius: 4px; }
       .advanced-settings > summary { padding: 8px 10px; font-size: 10px; }
       .advanced-grid { gap: 8px; padding: 0 10px 10px; }
@@ -2494,7 +2536,10 @@
     </main>
 
     <div class="server-context-menu" id="server-context-menu" role="menu" hidden></div>
-    <section class="update-toast-region" id="update-toast-region" aria-label="Application update notifications" aria-live="polite"></section>
+    <aside class="workspace-notification-overlay" aria-label="Application notifications">
+      <section class="update-toast-region" id="update-toast-region" aria-label="Application update notifications" aria-live="polite"></section>
+      <section class="diagnostic-notification-region" id="diagnostic-notification-region" aria-label="Network diagnostic notifications" aria-live="polite"></section>
+    </aside>
 
     <div class="vault-overlay" id="vault-overlay">
       <section class="vault-card" aria-labelledby="vault-title">
@@ -2530,17 +2575,19 @@
             <button class="category-card" type="button" data-connection-category="web"><strong>+ Web Console</strong><span>HTTPS for iDRAC, iLO, and firewalls</span></button>
           </div>
           <div class="connection-section-title">Essentials</div>
-          <div class="field"><label for="server-name">Connection name (optional)</label><input id="server-name" maxlength="100" placeholder="Defaults to hostname / IP" autocomplete="off" /></div>
-          <div class="field" id="server-host-field"><label for="server-host" id="server-host-label">IP / Hostname</label><input id="server-host" required maxlength="2048" placeholder="admin@server.example.net:22" autocomplete="off" /></div>
-          <div class="field" id="server-domain-field"><label for="server-domain">Domain (optional)</label><input id="server-domain" maxlength="256" placeholder="CORP" autocomplete="off" /></div>
-          <div class="field" id="server-serial-port-field" hidden><label for="server-serial-port">COM port</label><div class="serial-port-picker"><select id="server-serial-port"></select><button class="secondary-button" id="refresh-serial-ports" type="button">Refresh</button></div><span class="field-hint" id="server-serial-port-status">Local ports are detected on demand.</span></div>
-          <div class="field" id="server-local-shell-field" hidden><label for="server-local-shell">Local shell</label><select id="server-local-shell"><option value="powershell">PowerShell</option><option value="cmd">Command Prompt</option><option value="wsl">WSL</option></select></div>
-          <div class="field"><label for="server-protocol">Protocol</label><select id="server-protocol"><option value="rdp">Windows RDP</option><option value="ssh">SSH</option><option value="serial">Serial COM</option><option value="https">Web Console</option><option value="vnc">VNC</option><option value="local">Local Terminal</option><option value="telnet" hidden>Telnet (imported legacy)</option><option value="raw" hidden>RAW TCP (imported legacy)</option><option value="http" hidden>HTTP Web (imported legacy)</option></select></div>
-          <div class="essentials-credentials">
-            <div class="field" id="server-username-field"><label for="server-username">Username</label><input id="server-username" maxlength="256" autocomplete="username" /></div>
-            <div class="field" id="server-password-section"><label for="server-password">Password</label><div class="password-input"><input id="server-password" type="password" maxlength="4096" autocomplete="new-password" /><button class="password-visibility-toggle" id="server-password-toggle" type="button" aria-label="Show password" title="Show password">&#128065;</button></div></div>
+          <div class="connection-fields-grid">
+            <div class="field"><label for="server-name">Connection name (optional)</label><input id="server-name" maxlength="100" placeholder="Defaults to hostname / IP" autocomplete="off" /></div>
+            <div class="field" id="server-host-field"><label for="server-host" id="server-host-label">IP / Hostname</label><input id="server-host" required maxlength="2048" placeholder="admin@server.example.net:22" autocomplete="off" /></div>
+            <div class="field"><label for="server-protocol">Protocol</label><select id="server-protocol"><option value="rdp">Windows RDP</option><option value="ssh">SSH</option><option value="serial">Serial COM</option><option value="https">Web Console</option><option value="vnc">VNC</option><option value="local">Local Terminal</option><option value="telnet" hidden>Telnet (imported legacy)</option><option value="raw" hidden>RAW TCP (imported legacy)</option><option value="http" hidden>HTTP Web (imported legacy)</option></select></div>
+            <div class="field"><label for="server-port">Port override (optional)</label><input id="server-port" type="number" min="1" max="65535" placeholder="Use protocol default" /></div>
+            <div class="field" id="server-domain-field"><label for="server-domain">Domain (optional)</label><input id="server-domain" maxlength="256" placeholder="CORP" autocomplete="off" /></div>
+            <div class="field" id="server-serial-port-field" hidden><label for="server-serial-port">COM port</label><div class="serial-port-picker"><select id="server-serial-port"></select><button class="secondary-button" id="refresh-serial-ports" type="button">Refresh</button></div><span class="field-hint" id="server-serial-port-status">Local ports are detected on demand.</span></div>
+            <div class="field" id="server-local-shell-field" hidden><label for="server-local-shell">Local shell</label><select id="server-local-shell"><option value="powershell">PowerShell</option><option value="cmd">Command Prompt</option><option value="wsl">WSL</option></select></div>
+            <div class="essentials-credentials">
+              <div class="field" id="server-username-field"><label for="server-username">Username</label><input id="server-username" maxlength="256" autocomplete="username" /></div>
+              <div class="field" id="server-password-section"><label for="server-password">Password</label><div class="password-input"><input id="server-password" type="password" maxlength="4096" autocomplete="new-password" /><button class="password-visibility-toggle" id="server-password-toggle" type="button" aria-label="Show password" title="Show password">&#128065;</button></div></div>
+            </div>
           </div>
-          <div class="field"><label for="server-port">Port override (optional)</label><input id="server-port" type="number" min="1" max="65535" placeholder="Use protocol default" /></div>
           <div class="auth-section" id="server-serial-section" hidden>
             <div class="field"><label for="server-baud-rate">Baud rate</label><select id="server-baud-rate"><option value="9600">9600</option><option value="19200">19200</option><option value="38400">38400</option><option value="115200">115200</option></select></div>
             <div class="field"><label for="server-data-bits">Data bits</label><select id="server-data-bits"><option>8</option><option>7</option><option>6</option><option>5</option></select></div>

@@ -253,6 +253,7 @@ const appShell = elementById<HTMLElement>("app-shell");
 const startupSkeleton = elementById<HTMLElement>("startup-skeleton");
 const startupStatus = elementById<HTMLElement>("startup-status");
 const updateToastRegion = elementById<HTMLElement>("update-toast-region");
+const diagnosticNotificationRegion = elementById<HTMLElement>("diagnostic-notification-region");
 const quickConnectForm = elementById<HTMLFormElement>("quick-connect-form");
 const quickConnectInput = elementById<HTMLInputElement>("quick-connect-uri");
 const quickPasswordInput = elementById<HTMLInputElement>("quick-connect-password");
@@ -3269,7 +3270,7 @@ function openTabContextMenu(event: MouseEvent, tab: WorkspaceTab): void {
 async function executeProfileDiagnostic(profile: ServerProfileSummary, kind: DiagnosticKind): Promise<void> {
   diagnosticResults.set(profile.id, "running");
   closeServerContextMenu();
-  renderProfiles();
+  renderDiagnosticNotifications();
   try {
     diagnosticResults.set(profile.id, await window.cybergrid.diagnostics.run(profile.id, kind));
   } catch (error) {
@@ -3283,7 +3284,7 @@ async function executeProfileDiagnostic(profile: ServerProfileSummary, kind: Dia
       checkedAt: new Date().toISOString(),
     });
   }
-  renderProfiles();
+  renderDiagnosticNotifications();
 }
 
 async function launchProfileExternalDiagnostic(
@@ -3504,13 +3505,21 @@ function diagnosticElement(profileId: string): HTMLElement | undefined {
   closeButton.title = "Dismiss diagnostic result";
   closeButton.addEventListener("click", () => {
     diagnosticResults.delete(profileId);
-    renderProfiles();
+    renderDiagnosticNotifications();
   });
   header.append(closeButton);
   const output = document.createElement("pre");
   output.textContent = diagnostic.output;
   panel.append(header, output);
   return panel;
+}
+
+function renderDiagnosticNotifications(): void {
+  diagnosticNotificationRegion.replaceChildren();
+  for (const profileId of diagnosticResults.keys()) {
+    const diagnostic = diagnosticElement(profileId);
+    if (diagnostic) diagnosticNotificationRegion.append(diagnostic);
+  }
 }
 
 interface ProfileFolderNode {
@@ -3654,8 +3663,6 @@ function renderProfiles(): void {
     });
     row.append(button, remove);
     list.append(row);
-    const diagnostic = diagnosticElement(profile.id);
-    if (diagnostic) list.append(diagnostic);
   };
 
   const renderFolder = (node: ProfileFolderNode, parent: HTMLElement): void => {
