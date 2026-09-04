@@ -15,7 +15,7 @@ import {
 } from "electron";
 import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { lookup } from "node:dns/promises";
-import { basename, join, posix, resolve, sep } from "node:path";
+import { basename, isAbsolute, join, posix, resolve, sep } from "node:path";
 import {
   IPC_CHANNELS,
   type AppMenuCommand,
@@ -286,7 +286,7 @@ function installApplicationMenu(): void {
 async function getSshController(): Promise<SshController> {
   if (sshController) return sshController;
   sshControllerPromise ??= import("./ssh.js").then(({ SshController }) => {
-    const controller = new SshController(auditController, userDataFile("backups"));
+    const controller = new SshController(auditController);
     sshController = controller;
     return controller;
   });
@@ -522,14 +522,27 @@ function createMainWindow(): BrowserWindow {
   window.once("ready-to-show", revealWindow);
   window.webContents.once("dom-ready", () => setImmediate(revealWindow));
   window.on("close", (event) => {
-    if (preferencesController?.get().minimizeToTray && !isQuitting) {
-      event.preventDefault();
-      window.hide();
-    } else if (!isQuitting && trayStateSnapshot.sessions.length > 0 &&
-      (preferencesController?.get().confirmExitWithActiveSessions ?? true)) {
-      event.preventDefault();
-      void requestApplicationQuit(window);
+    if (isQuitting) return;
+    const count = trayStateSnapshot.sessions.length;
+    if (count > 0 && (preferencesController?.get().confirmExitWithActiveSessions ?? true)) {
+      const response = dialog.showMessageBoxSync(window, {
+        type: "warning",
+        title: "Exit CyberGrid?",
+        message: "Close active sessions and exit?",
+        detail: `You have ${count} active sessions open. Closing CyberGrid will disconnect all of them.`,
+        buttons: ["Close All & Exit", "Cancel"],
+        defaultId: 1,
+        cancelId: 1,
+        noLink: true,
+      });
+      if (response !== 0) {
+        event.preventDefault();
+        return;
+      }
     }
+    quitConfirmed = true;
+    isQuitting = true;
+    setImmediate(() => app.quit());
   });
   window.on("session-end", () => {
     sessionEnding = true;
@@ -1613,7 +1626,9 @@ function normalizeTerminalOverrides(value: unknown): TerminalAppearanceOverrides
   if (value === undefined || value === null) return undefined;
   if (!isRecord(value)) throw new Error("Invalid terminal appearance override.");
   const result: TerminalAppearanceOverrides = {};
-  if (value.theme === "dark" || value.theme === "light" || value.theme === "monochrome" || value.theme === "custom") {
+  if (value.theme === "dark" || value.theme === "light" || value.theme === "monochrome" ||
+      value.theme === "dracula" || value.theme === "solarized-dark" || value.theme === "monokai" ||
+      value.theme === "custom") {
     result.theme = value.theme;
   }
   result.fontFamily = readString(value.fontFamily, "Override font family", {
@@ -1692,7 +1707,8 @@ function normalizePreferences(value: unknown): AppPreferences {
     throw new Error("Ping interval must be between 10 and 600 seconds.");
   }
   const theme = value.theme;
-  if (theme !== "dark" && theme !== "light" && theme !== "monochrome" && theme !== "custom") {
+  if (theme !== "dark" && theme !== "light" && theme !== "monochrome" && theme !== "dracula" &&
+      theme !== "solarized-dark" && theme !== "monokai" && theme !== "custom") {
     throw new Error("Invalid terminal theme.");
   }
   const proxyMode = value.proxyMode;
@@ -1718,6 +1734,12 @@ function normalizePreferences(value: unknown): AppPreferences {
     }
   }
   const masterPasswordEnabled = value.masterPasswordEnabled === true;
+  const backupDirectory = readString(value.backupDirectory, "Backup directory", {
+    required: true,
+    maxLength: 2_048,
+    singleLine: true,
+  }) as string;
+  if (!isAbsolute(backupDirectory)) throw new Error("Backup directory must be an absolute path.");
   const toolPaths = isRecord(value.externalToolPaths) ? value.externalToolPaths : {};
   return {
     minimizeToTray: value.minimizeToTray === true,
@@ -1753,6 +1775,7 @@ function normalizePreferences(value: unknown): AppPreferences {
       singleLine: true,
     }) ?? "",
     healthCheckIntervalSeconds,
+    backupDirectory: resolve(backupDirectory),
     externalToolPaths: {
       wireshark: readString(toolPaths.wireshark, "Wireshark path", { maxLength: 2_048, singleLine: true }) ?? "",
       winscp: readString(toolPaths.winscp, "WinSCP path", { maxLength: 2_048, singleLine: true }) ?? "",
@@ -2174,6 +2197,7 @@ function registerIpcHandlers(): void {
     return (await getSshController()).quickBackup(
       readUuid(sessionId, "SSH session ID"),
       profile.name,
+      requirePreferences().get().backupDirectory,
     );
   });
 
@@ -2886,6 +2910,24 @@ function registerIpcHandlers(): void {
         { name: "SSH private keys", extensions: ["pem", "key", "ppk"] },
         { name: "All files", extensions: ["*"] },
       ],
+    });
+    return result.canceled ? null : (result.filePaths[0] ?? null);
+  });
+
+  ipcMain.handle(IPC_CHANNELS.selectBackupDirectory, async (event, currentPath: unknown) => {
+    assertTrustedSender(event);
+    if (!mainWindow) return null;
+    const requestedPath = readString(currentPath, "Current backup directory", {
+      maxLength: 2_048,
+      singleLine: true,
+    });
+    const defaultPath = requestedPath && isAbsolute(requestedPath)
+      ? requestedPath
+      : requirePreferences().get().backupDirectory;
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: "Select CyberGrid configuration backup directory",
+      defaultPath,
+      properties: ["openDirectory", "createDirectory"],
     });
     return result.canceled ? null : (result.filePaths[0] ?? null);
   });

@@ -170,10 +170,14 @@ const DEFAULT_SETTINGS: AppPreferences = {
   proxyUrl: "",
   proxyBypassRules: "<local>",
   healthCheckIntervalSeconds: 30,
+  backupDirectory: "",
   externalToolPaths: { wireshark: "", winscp: "", nmap: "", powershell: "powershell.exe" },
 };
 const SETTINGS_KEY = "cybergrid:terminal-settings:v1";
 const QUICK_SNIPPET_TOOLBAR_KEY = "cybergrid:quick-snippet-toolbar:v1";
+const SIDEBAR_WIDTH_KEY = "cybergrid:sidebar-width:v1";
+const SIDEBAR_MIN_WIDTH = 200;
+const SIDEBAR_MAX_WIDTH = 600;
 
 const tabs = new Map<string, WorkspaceTab>();
 const sshSessions = new Map<string, WorkspaceTab>();
@@ -262,7 +266,8 @@ const contentArea = elementById<HTMLDivElement>("content-area");
 const terminalStack = elementById<HTMLDivElement>("terminal-stack");
 const connectionState = elementById<HTMLDivElement>("connection-state");
 const profileTree = elementById<HTMLDivElement>("profile-tree");
-const sidebarScroll = elementById<HTMLDivElement>("sidebar-scroll");
+const sidebarScroll = elementById<HTMLDivElement>("sidebar-container");
+const sidebarResizer = elementById<HTMLDivElement>("sidebar-resizer");
 const assetList = elementById<HTMLDivElement>("asset-list");
 const assetCount = elementById<HTMLSpanElement>("asset-count");
 const scanButton = elementById<HTMLButtonElement>("scan-button");
@@ -545,6 +550,8 @@ const proxyUrlInput = elementById<HTMLInputElement>("proxy-url");
 const proxyBypassInput = elementById<HTMLInputElement>("proxy-bypass-rules");
 const proxyManualFields = elementById<HTMLDivElement>("proxy-manual-fields");
 const healthCheckIntervalInput = elementById<HTMLInputElement>("health-check-interval");
+const backupDirectoryInput = elementById<HTMLInputElement>("backup-directory");
+const browseBackupDirectoryButton = elementById<HTMLButtonElement>("browse-backup-directory");
 const toolWiresharkPathInput = elementById<HTMLInputElement>("tool-wireshark-path");
 const toolWinscpPathInput = elementById<HTMLInputElement>("tool-winscp-path");
 const toolNmapPathInput = elementById<HTMLInputElement>("tool-nmap-path");
@@ -584,6 +591,44 @@ const ipamOpenSshButton = elementById<HTMLButtonElement>("ipam-open-ssh");
 
 const serverContextMenu = elementById<HTMLDivElement>("server-context-menu");
 
+function setSidebarWidth(width: number, persist = false): void {
+  const clamped = Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, Math.round(width)));
+  document.documentElement.style.setProperty("--sidebar-width", `${clamped}px`);
+  sidebarResizer.setAttribute("aria-valuenow", String(clamped));
+  if (persist) localStorage.setItem(SIDEBAR_WIDTH_KEY, String(clamped));
+}
+
+const storedSidebarWidth = Number(localStorage.getItem(SIDEBAR_WIDTH_KEY));
+if (Number.isFinite(storedSidebarWidth)) setSidebarWidth(storedSidebarWidth);
+
+let resizingSidebar = false;
+sidebarResizer.addEventListener("mousedown", (event) => {
+  if (event.button !== 0 || appShell.classList.contains("sidebar-hidden")) return;
+  resizingSidebar = true;
+  sidebarResizer.classList.add("resizing");
+  document.body.classList.add("sidebar-resizing");
+  event.preventDefault();
+});
+window.addEventListener("mousemove", (event) => {
+  if (!resizingSidebar) return;
+  setSidebarWidth(event.clientX - appShell.getBoundingClientRect().left);
+});
+window.addEventListener("mouseup", () => {
+  if (!resizingSidebar) return;
+  resizingSidebar = false;
+  sidebarResizer.classList.remove("resizing");
+  document.body.classList.remove("sidebar-resizing");
+  const width = Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--sidebar-width"));
+  if (Number.isFinite(width)) setSidebarWidth(width, true);
+});
+sidebarResizer.addEventListener("dblclick", () => setSidebarWidth(238, true));
+sidebarResizer.addEventListener("keydown", (event) => {
+  if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+  const current = Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--sidebar-width"));
+  setSidebarWidth(current + (event.key === "ArrowRight" ? 16 : -16), true);
+  event.preventDefault();
+});
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
@@ -598,7 +643,8 @@ function loadLegacySettings(): AppPreferences {
     if (!isRecord(parsed)) {
       return { ...DEFAULT_SETTINGS };
     }
-    const theme = parsed.theme === "light" || parsed.theme === "monochrome" || parsed.theme === "custom"
+    const theme = parsed.theme === "light" || parsed.theme === "monochrome" || parsed.theme === "dracula" ||
+      parsed.theme === "solarized-dark" || parsed.theme === "monokai" || parsed.theme === "custom"
       ? parsed.theme
       : "dark";
     const fontSize = Number(parsed.fontSize);
@@ -651,6 +697,36 @@ function terminalTheme(settings: AppPreferences): ITheme {
       brightMagenta: "#ffffff",
       brightCyan: "#ffffff",
       brightWhite: "#ffffff",
+    };
+  }
+
+  if (settings.theme === "dracula") {
+    return {
+      background: "#282a36", foreground: "#f8f8f2", cursor: "#f8f8f2", cursorAccent: "#282a36",
+      selectionBackground: "#44475a", black: "#21222c", red: "#ff5555", green: "#50fa7b",
+      yellow: "#f1fa8c", blue: "#6272a4", magenta: "#ff79c6", cyan: "#8be9fd", white: "#f8f8f2",
+      brightBlack: "#6272a4", brightRed: "#ff6e6e", brightGreen: "#69ff94", brightYellow: "#ffffa5",
+      brightBlue: "#d6acff", brightMagenta: "#ff92df", brightCyan: "#a4ffff", brightWhite: "#ffffff",
+    };
+  }
+
+  if (settings.theme === "solarized-dark") {
+    return {
+      background: "#002b36", foreground: "#839496", cursor: "#93a1a1", cursorAccent: "#002b36",
+      selectionBackground: "#073642", black: "#073642", red: "#dc322f", green: "#859900",
+      yellow: "#b58900", blue: "#268bd2", magenta: "#d33682", cyan: "#2aa198", white: "#eee8d5",
+      brightBlack: "#586e75", brightRed: "#cb4b16", brightGreen: "#586e75", brightYellow: "#657b83",
+      brightBlue: "#839496", brightMagenta: "#6c71c4", brightCyan: "#93a1a1", brightWhite: "#fdf6e3",
+    };
+  }
+
+  if (settings.theme === "monokai") {
+    return {
+      background: "#272822", foreground: "#f8f8f2", cursor: "#f8f8f0", cursorAccent: "#272822",
+      selectionBackground: "#49483e", black: "#272822", red: "#f92672", green: "#a6e22e",
+      yellow: "#f4bf75", blue: "#66d9ef", magenta: "#ae81ff", cyan: "#a1efe4", white: "#f8f8f2",
+      brightBlack: "#75715e", brightRed: "#f92672", brightGreen: "#a6e22e", brightYellow: "#e6db74",
+      brightBlue: "#66d9ef", brightMagenta: "#ae81ff", brightCyan: "#a1efe4", brightWhite: "#f9f8f5",
     };
   }
 
@@ -737,16 +813,8 @@ function applySettings(settings: AppPreferences): void {
   currentSettings = settings;
   document.documentElement.dataset.theme = settings.theme;
   document.documentElement.dataset.compactTree = settings.compactTreeView ? "true" : "false";
-  document.documentElement.style.setProperty(
-    "--accent",
-    settings.theme === "custom"
-      ? settings.accent
-      : settings.theme === "light"
-        ? "#087f6a"
-        : settings.theme === "monochrome"
-          ? "#ffffff"
-          : DEFAULT_SETTINGS.accent,
-  );
+  if (settings.theme === "custom") document.documentElement.style.setProperty("--accent", settings.accent);
+  else document.documentElement.style.removeProperty("--accent");
   for (const tab of tabs.values()) {
     applyTerminalAppearance(tab, tab.policy?.terminalAppearance);
   }
@@ -827,6 +895,23 @@ function showUpdateToast(stage: "available" | "downloaded", event: AppUpdateEven
 
   toast.append(content, actions);
   updateToastRegion.append(toast);
+}
+
+function showActionToast(title: string, message: string): void {
+  const toast = document.createElement("article");
+  toast.className = "update-toast";
+  toast.setAttribute("role", "status");
+  const content = document.createElement("div");
+  content.className = "update-toast-content";
+  content.append(
+    createTextElement("span", "update-toast-mark", "OK"),
+    createTextElement("div", "update-toast-copy", ""),
+  );
+  const copy = content.lastElementChild as HTMLDivElement;
+  copy.append(createTextElement("strong", "", title), createTextElement("p", "", message));
+  toast.append(content);
+  updateToastRegion.append(toast);
+  window.setTimeout(() => toast.remove(), 5_000);
 }
 
 let updateStatusToastTimer: number | null = null;
@@ -2088,6 +2173,7 @@ function installSwitchToolsDrawer(tab: WorkspaceTab, profile?: ServerProfileSumm
       try {
         const result = await window.cybergrid.ssh.quickBackup(tab.sessionId, profile.id);
         status.textContent = `${result.vendor.toUpperCase()} backup saved:\n${result.path}`;
+        showActionToast("Configuration backup saved", result.path);
       } catch (error) {
         status.textContent = errorMessage(error);
       } finally {
@@ -4542,6 +4628,7 @@ function populateSettingsForm(settings: AppPreferences): void {
   proxyUrlInput.value = settings.proxyUrl;
   proxyBypassInput.value = settings.proxyBypassRules;
   healthCheckIntervalInput.value = String(settings.healthCheckIntervalSeconds);
+  backupDirectoryInput.value = settings.backupDirectory;
   toolWiresharkPathInput.value = settings.externalToolPaths.wireshark;
   toolWinscpPathInput.value = settings.externalToolPaths.winscp;
   toolNmapPathInput.value = settings.externalToolPaths.nmap;
@@ -5435,6 +5522,10 @@ for (const button of settingsModal.querySelectorAll<HTMLButtonElement>("[data-se
 themeInput.addEventListener("change", () => {
   customPaletteFields.hidden = themeInput.value !== "custom";
 });
+browseBackupDirectoryButton.addEventListener("click", async () => {
+  const selected = await window.cybergrid.system.selectBackupDirectory(backupDirectoryInput.value.trim());
+  if (selected) backupDirectoryInput.value = selected;
+});
 proxyModeInput.addEventListener("change", updateProxyFields);
 masterPasswordEnabledInput.addEventListener("change", updateMasterPasswordFields);
 cancelSettingsButton.addEventListener("click", () => settingsModal.close());
@@ -5516,6 +5607,7 @@ settingsForm.addEventListener("submit", async (event) => {
     proxyUrl: proxyUrlInput.value.trim(),
     proxyBypassRules: proxyBypassInput.value.trim(),
     healthCheckIntervalSeconds: Math.min(600, Math.max(10, Math.round(Number(healthCheckIntervalInput.value)))),
+    backupDirectory: backupDirectoryInput.value.trim() || currentSettings.backupDirectory,
     externalToolPaths: {
       wireshark: toolWiresharkPathInput.value.trim(),
       winscp: toolWinscpPathInput.value.trim(),

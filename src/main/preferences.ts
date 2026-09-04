@@ -1,8 +1,9 @@
 import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
 import type { AppPreferences } from "../shared/ipc";
 
-const PREFERENCES_VERSION = 2 as const;
+const PREFERENCES_VERSION = 3 as const;
 const MAX_PREFERENCES_BYTES = 64 * 1024;
 
 interface PreferencesFile {
@@ -37,6 +38,7 @@ export const DEFAULT_APP_PREFERENCES: AppPreferences = {
   proxyUrl: "",
   proxyBypassRules: "<local>",
   healthCheckIntervalSeconds: 30,
+  backupDirectory: join(homedir(), "Documents", "CyberGrid_Backups"),
   externalToolPaths: {
     wireshark: "",
     winscp: "",
@@ -66,7 +68,7 @@ function storedColor(value: unknown, fallback: string): string {
 function parseStoredPreferences(value: unknown): AppPreferences {
   if (!isRecord(value)) return clonePreferences(DEFAULT_APP_PREFERENCES);
   const preferences = value.preferences;
-  if ((value.version !== 1 && value.version !== PREFERENCES_VERSION) || !isRecord(preferences)) {
+  if ((value.version !== 1 && value.version !== 2 && value.version !== PREFERENCES_VERSION) || !isRecord(preferences)) {
     return clonePreferences(DEFAULT_APP_PREFERENCES);
   }
   return {
@@ -92,7 +94,8 @@ function parseStoredPreferences(value: unknown): AppPreferences {
       Number(preferences.clipboardClearSeconds) >= 0 && Number(preferences.clipboardClearSeconds) <= 300
       ? Number(preferences.clipboardClearSeconds)
       : DEFAULT_APP_PREFERENCES.clipboardClearSeconds,
-    theme: preferences.theme === "light" || preferences.theme === "monochrome" || preferences.theme === "custom"
+    theme: preferences.theme === "light" || preferences.theme === "monochrome" || preferences.theme === "dracula" ||
+      preferences.theme === "solarized-dark" || preferences.theme === "monokai" || preferences.theme === "custom"
       ? preferences.theme
       : "dark",
     fontFamily: storedString(
@@ -147,6 +150,11 @@ function parseStoredPreferences(value: unknown): AppPreferences {
       Number(preferences.healthCheckIntervalSeconds) >= 10 && Number(preferences.healthCheckIntervalSeconds) <= 600
       ? Number(preferences.healthCheckIntervalSeconds)
       : DEFAULT_APP_PREFERENCES.healthCheckIntervalSeconds,
+    backupDirectory: storedString(
+      preferences.backupDirectory,
+      DEFAULT_APP_PREFERENCES.backupDirectory,
+      2_048,
+    ) || DEFAULT_APP_PREFERENCES.backupDirectory,
     externalToolPaths: isRecord(preferences.externalToolPaths) ? {
       wireshark: storedString(preferences.externalToolPaths.wireshark, "", 2_048),
       winscp: storedString(preferences.externalToolPaths.winscp, "", 2_048),

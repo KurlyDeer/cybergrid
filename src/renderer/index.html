@@ -12,6 +12,7 @@
     <style>
       :root {
         color-scheme: dark;
+        --sidebar-width: 238px;
         --background: #080d14;
         --panel: #0d1520;
         --panel-raised: #111c29;
@@ -46,6 +47,42 @@
         --accent: #087f6a;
         --accent-soft: rgba(8, 127, 106, 0.13);
         --danger: #c7354a;
+      }
+
+      :root[data-theme="dracula"] {
+        --background: #282a36;
+        --panel: #21222c;
+        --panel-raised: #343746;
+        --border: #44475a;
+        --text: #f8f8f2;
+        --muted: #a7a3b8;
+        --accent: #bd93f9;
+        --accent-soft: rgba(189, 147, 249, 0.15);
+        --danger: #ff5555;
+      }
+
+      :root[data-theme="solarized-dark"] {
+        --background: #002b36;
+        --panel: #073642;
+        --panel-raised: #0b3b46;
+        --border: #31535c;
+        --text: #eee8d5;
+        --muted: #93a1a1;
+        --accent: #2aa198;
+        --accent-soft: rgba(42, 161, 152, 0.16);
+        --danger: #dc322f;
+      }
+
+      :root[data-theme="monokai"] {
+        --background: #272822;
+        --panel: #1e1f1c;
+        --panel-raised: #3e3d32;
+        --border: #49483e;
+        --text: #f8f8f2;
+        --muted: #a6a69c;
+        --accent: #a6e22e;
+        --accent-soft: rgba(166, 226, 46, 0.14);
+        --danger: #f92672;
       }
 
       * {
@@ -161,14 +198,14 @@
 
       .app-shell {
         display: grid;
-        grid-template-columns: 270px minmax(0, 1fr);
+        grid-template-columns: var(--sidebar-width) 5px minmax(0, 1fr);
         width: 100%;
         height: 100%;
         transition: grid-template-columns 160ms ease;
       }
 
       .app-shell.sidebar-hidden {
-        grid-template-columns: 0 minmax(0, 1fr);
+        grid-template-columns: 0 0 minmax(0, 1fr);
       }
 
       .app-shell.sidebar-hidden .sidebar {
@@ -176,16 +213,37 @@
         visibility: hidden;
       }
 
+      .sidebar-resizer {
+        position: relative;
+        z-index: 4;
+        width: 5px;
+        min-width: 5px;
+        cursor: col-resize;
+        background: transparent;
+        touch-action: none;
+      }
+
+      .sidebar-resizer::after {
+        position: absolute;
+        inset: 0 2px;
+        background: var(--border);
+        content: "";
+        transition: background 120ms ease;
+      }
+
+      .sidebar-resizer:hover::after,
+      .sidebar-resizer.resizing::after { background: var(--accent); }
+      .app-shell.sidebar-hidden .sidebar-resizer { visibility: hidden; }
+      body.sidebar-resizing { cursor: col-resize; user-select: none; }
+
       .sidebar {
         display: flex;
         min-width: 0;
         max-width: 100%;
         min-height: 0;
         flex-direction: column;
-        overflow-x: hidden;
         border-right: 1px solid var(--border);
         background: #0a111a;
-        white-space: nowrap;
       }
 
       :root[data-theme="monochrome"] .sidebar {
@@ -311,7 +369,6 @@
         width: 100%;
         min-width: 0;
         max-width: 100%;
-        overflow-x: hidden;
         padding: 8px 10px 18px;
       }
 
@@ -321,8 +378,19 @@
         max-width: 100%;
         min-height: 0;
         flex: 1;
+      }
+
+      #sidebar-container {
         overflow-x: hidden;
         overflow-y: auto;
+        overflow-y: overlay;
+        white-space: nowrap;
+      }
+
+      #sidebar-container *::-webkit-scrollbar {
+        display: none;
+        width: 0;
+        height: 0;
       }
 
       .sidebar-empty,
@@ -340,7 +408,6 @@
         width: 100%;
         min-width: 0;
         max-width: 100%;
-        overflow-x: hidden;
         margin-bottom: 8px;
       }
 
@@ -408,7 +475,6 @@
         max-width: 100%;
         grid-template-columns: minmax(0, 1fr) 28px;
         align-items: center;
-        overflow-x: hidden;
       }
 
       .server-row.dragging {
@@ -422,7 +488,6 @@
         max-width: 100%;
         align-items: center;
         gap: 10px;
-        overflow: hidden;
         padding: 9px 8px 9px 12px;
         border: 1px solid transparent;
         border-radius: 8px;
@@ -2123,7 +2188,7 @@
       .folder-inheritance-note { color: var(--muted); font-size: 12px; }
 
       /* Command-center density and browser-native tree virtualization. */
-      .app-shell { grid-template-columns: 248px minmax(0, 1fr); }
+      .app-shell { grid-template-columns: var(--sidebar-width) 5px minmax(0, 1fr); }
       .server-group,
       .server-row { content-visibility: auto; contain-intrinsic-size: 38px; }
       .server-list .server-group { margin: 0 0 0 12px; border-left: 1px solid color-mix(in srgb, var(--border) 72%, transparent); }
@@ -2276,7 +2341,8 @@
       @keyframes update-toast-in { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: translateY(0); } }
 
       /* High-density sysadmin workspace: keep controls legible while giving sessions the canvas. */
-      .app-shell { grid-template-columns: 238px minmax(0, 1fr); }
+      .app-shell { grid-template-columns: var(--sidebar-width) 5px minmax(0, 1fr); }
+      .app-shell.sidebar-hidden { grid-template-columns: 0 0 minmax(0, 1fr); }
       .brand { height: 42px; gap: 7px; padding: 0 9px; font-size: 12px; }
       .brand-mark { width: 24px; height: 24px; border-radius: 5px; font-size: 10px; }
       .sidebar-toolbar { min-height: 30px; padding: 3px 5px 2px 8px; }
@@ -2390,7 +2456,7 @@
           <span>CYBERGRID</span>
         </div>
 
-        <div class="sidebar-scroll" id="sidebar-scroll">
+        <div class="sidebar-scroll" id="sidebar-container">
           <div class="sidebar-toolbar">
             <h1>Connections</h1>
             <div class="sidebar-toolbar-actions">
@@ -2412,6 +2478,8 @@
           <div class="sidebar-hint">Double-click a server to connect</div>
         </div>
       </aside>
+
+      <div class="sidebar-resizer" id="sidebar-resizer" role="separator" aria-label="Resize connections sidebar" aria-orientation="vertical" aria-valuemin="200" aria-valuemax="600" aria-valuenow="238" tabindex="0"></div>
 
       <section class="workspace">
         <form class="quick-connect-bar" id="quick-connect-form">
@@ -2666,7 +2734,7 @@
           <div class="field"><label for="folder-defaults-icon">Folder / child icon</label><select id="folder-defaults-icon"><option value="">No override</option><option value="windows">Windows Server</option><option value="ubuntu">Ubuntu / Debian</option><option value="redhat">Red Hat / CentOS</option><option value="macos">macOS</option><option value="bare-metal">Bare Metal</option><option value="vmware">VMware</option><option value="hyperv">Hyper-V</option><option value="cisco">Cisco Switch</option><option value="fortinet">Fortinet Firewall</option><option value="router">Router</option><option value="database">Database</option><option value="web-server">Web Server</option><option value="server">Generic Server</option></select></div>
           <div class="field"><label for="folder-defaults-badge">Application badge</label><input id="folder-defaults-badge" maxlength="4" placeholder="ERP" /></div>
           <div class="field color-field"><label for="folder-defaults-color">Indicator color</label><input id="folder-defaults-color" type="color" value="#23d5ab" /></div>
-          <div class="field"><label for="folder-defaults-terminal-theme">Terminal scheme</label><select id="folder-defaults-terminal-theme"><option value="">Global default</option><option value="dark">CyberGrid Dark</option><option value="light">CyberGrid Light</option><option value="monochrome">Monochrome</option><option value="custom">Custom colors</option></select></div>
+              <div class="field"><label for="folder-defaults-terminal-theme">Terminal scheme</label><select id="folder-defaults-terminal-theme"><option value="">Global default</option><option value="dark">CyberGrid Default</option><option value="dracula">Dracula</option><option value="solarized-dark">Solarized Dark</option><option value="monokai">Monokai</option><option value="light">CyberGrid Light</option><option value="monochrome">Monochrome</option><option value="custom">Custom colors</option></select></div>
           <div class="field"><label for="folder-defaults-terminal-font">Terminal font</label><input id="folder-defaults-terminal-font" maxlength="200" placeholder="Global default" /></div>
           <div class="field"><label for="folder-defaults-terminal-size">Terminal font size</label><input id="folder-defaults-terminal-size" type="number" min="10" max="28" /></div>
           <div class="field"><label for="folder-defaults-line-height">Terminal line height</label><input id="folder-defaults-line-height" type="number" min="1" max="2" step="0.05" /></div>
@@ -2866,7 +2934,7 @@
         <div class="settings-layout">
           <nav class="settings-nav" aria-label="Settings sections">
             <button type="button" data-settings-tab="general">General / Startup</button>
-            <button type="button" data-settings-tab="terminal">Terminal / SSH</button>
+            <button type="button" data-settings-tab="terminal">Appearance / Terminal / SSH</button>
             <button type="button" data-settings-tab="rdp">RDP &amp; Remote Desktop</button>
             <button type="button" data-settings-tab="security">Vault &amp; Security</button>
             <button type="button" data-settings-tab="network">Network &amp; Tools</button>
@@ -2876,18 +2944,18 @@
               <h3>General / Startup</h3>
               <p>Control startup, tray behavior, and the desktop process model.</p>
               <div class="checkbox-field"><input id="minimize-to-taskbar" type="checkbox" checked disabled /><label class="checkbox-label" for="minimize-to-taskbar">Minimize (_) to the Windows taskbar</label></div>
-              <div class="checkbox-field"><input id="minimize-to-tray" type="checkbox" /><label class="checkbox-label" for="minimize-to-tray">Hide to system tray when the X close button is clicked</label></div>
-              <div class="checkbox-field"><input id="start-minimized" type="checkbox" /><label class="checkbox-label" for="start-minimized">Start minimized to the system tray</label></div>
+              <div class="checkbox-field"><input id="minimize-to-tray" type="checkbox" /><label class="checkbox-label" for="minimize-to-tray">Enable system-tray quick actions while CyberGrid is running</label></div>
+              <div class="checkbox-field"><input id="start-minimized" type="checkbox" /><label class="checkbox-label" for="start-minimized">Start minimized</label></div>
               <div class="checkbox-field"><input id="launch-at-login" type="checkbox" /><label class="checkbox-label" for="launch-at-login">Launch CyberGrid when I sign in</label></div>
               <div class="checkbox-field"><input id="confirm-exit-active-sessions" type="checkbox" /><label class="checkbox-label" for="confirm-exit-active-sessions">Confirm on exit with active sessions</label></div>
               <div class="checkbox-field"><input id="compact-tree-view" type="checkbox" /><label class="checkbox-label" for="compact-tree-view">Compact Tree View (22px rows, full server names)</label></div>
               <div class="checkbox-field"><input id="single-instance" type="checkbox" checked disabled /><label class="checkbox-label" for="single-instance">Enforce a single application instance</label></div>
             </section>
             <section class="settings-panel" data-settings-panel="terminal" hidden>
-              <h3>Terminal / SSH</h3>
+              <h3>Appearance / Terminal / SSH</h3>
               <p>Global rendering and transport defaults apply to every open and future terminal session.</p>
               <div class="settings-grid">
-                <div class="field"><label for="theme-mode">Theme</label><select id="theme-mode"><option value="dark">CyberGrid Dark</option><option value="light">CyberGrid Light</option><option value="monochrome">High-contrast monochrome</option><option value="custom">Custom palette</option></select></div>
+                <div class="field"><label for="theme-mode">Pre-made theme</label><select id="theme-mode"><option value="dark">CyberGrid Default</option><option value="dracula">Dracula</option><option value="solarized-dark">Solarized Dark</option><option value="monokai">Monokai</option><option value="light">CyberGrid Light</option><option value="monochrome">High-contrast monochrome</option><option value="custom">Custom palette</option></select></div>
                 <div class="checkbox-field"><input id="terminal-cursor-blink" type="checkbox" /><label class="checkbox-label" for="terminal-cursor-blink">Blinking cursor</label></div>
                 <div class="field full-width"><label for="terminal-font-family">Terminal font family</label><input id="terminal-font-family" maxlength="200" /></div>
                 <div class="field"><label for="terminal-font-size">Font size</label><input id="terminal-font-size" type="number" min="10" max="28" required /></div>
@@ -2947,6 +3015,7 @@
               <div class="settings-grid">
                 <div class="field"><label for="health-check-interval">Ping interval (seconds)</label><input id="health-check-interval" type="number" min="10" max="600" /></div>
                 <div class="field"><label for="tool-powershell-path">PowerShell</label><input id="tool-powershell-path" maxlength="2048" placeholder="powershell.exe" /></div>
+                <div class="field full-width"><label for="backup-directory">Backup directory</label><div class="path-picker"><input id="backup-directory" maxlength="2048" placeholder="%USERPROFILE%\\Documents\\CyberGrid_Backups" /><button class="secondary-button" id="browse-backup-directory" type="button">Browse</button></div><span class="field-hint">Automated switch snapshots are written here as timestamped .cfg files.</span></div>
                 <div class="field full-width"><label for="tool-wireshark-path">Wireshark executable</label><input id="tool-wireshark-path" maxlength="2048" /></div>
                 <div class="field full-width"><label for="tool-winscp-path">WinSCP executable</label><input id="tool-winscp-path" maxlength="2048" /></div>
                 <div class="field full-width"><label for="tool-nmap-path">Nmap executable</label><input id="tool-nmap-path" maxlength="2048" /></div>

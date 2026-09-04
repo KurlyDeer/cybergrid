@@ -61,6 +61,7 @@ export const IPC_CHANNELS = {
   preferencesGet: "cybergrid:preferences:get",
   preferencesUpdate: "cybergrid:preferences:update",
   preferencesActivity: "cybergrid:preferences:activity",
+  selectBackupDirectory: "cybergrid:dialog:select-backup-directory",
   diagnosticsRun: "cybergrid:diagnostics:run",
   diagnosticsLaunch: "cybergrid:diagnostics:launch",
   vaultLocked: "cybergrid:app:vault-locked",
@@ -822,7 +823,14 @@ export interface CredentialProfileSummary {
   updatedAt: string;
 }
 
-export type TerminalThemeName = "dark" | "light" | "monochrome" | "custom";
+export type TerminalThemeName =
+  | "dark"
+  | "light"
+  | "monochrome"
+  | "dracula"
+  | "solarized-dark"
+  | "monokai"
+  | "custom";
 export type ProxyMode = "system" | "direct" | "manual";
 
 export interface AppPreferences {
@@ -852,6 +860,7 @@ export interface AppPreferences {
   proxyUrl: string;
   proxyBypassRules: string;
   healthCheckIntervalSeconds: number;
+  backupDirectory: string;
   externalToolPaths: {
     wireshark: string;
     winscp: string;
@@ -1070,6 +1079,7 @@ export interface CyberGridApi {
   system: {
     whenReady(): Promise<void>;
     selectPrivateKey(): Promise<string | null>;
+    selectBackupDirectory(currentPath?: string): Promise<string | null>;
     onVaultLocked(listener: (reason: string) => void): Unsubscribe;
     onTrayQuickConnect(listener: (profileId: string) => void): Unsubscribe;
     captureScreenshot(request: ScreenshotRequest): Promise<ScreenshotResult>;

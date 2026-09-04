@@ -11,166 +11,151 @@ import {
   type RdpStatusEvent,
 } from "../shared/ipc";
 
+type NativeWindowHandle = unknown;
+
+interface Win32Bindings {
+  findMstscWindow(processId: number): NativeWindowHandle | undefined;
+  embed(windowHandle: NativeWindowHandle, parentHandle: bigint): void;
+  move(windowHandle: NativeWindowHandle, bounds: RdpBounds): void;
+  setVisible(windowHandle: NativeWindowHandle, visible: boolean): void;
+  close(windowHandle: NativeWindowHandle): void;
+}
+
 interface RdpSession {
   id: string;
   sender: WebContents;
   configurationPath: string;
   hostProcess?: ChildProcess;
+  native?: Win32Bindings;
+  windowHandle?: NativeWindowHandle;
   bounds: RdpBounds;
   visible: boolean;
   hostReady: boolean;
   closed: boolean;
-  stderr: string;
 }
 
-const RDP_HOST_SCRIPT = String.raw`param(
-  [Parameter(Mandatory=$true)][UInt64]$ParentHandle,
-  [Parameter(Mandatory=$true)][string]$ConfigurationPath
-)
-$ErrorActionPreference = 'Stop'
-Add-Type -TypeDefinition @"
-using System;
-using System.Runtime.InteropServices;
-using System.Text;
-public static class CyberGridRdpHost {
-  private const int GWL_STYLE = -16;
-  private const int GWL_EXSTYLE = -20;
-  private const int GWLP_HWNDPARENT = -8;
-  private const long WS_CHILD = 0x40000000L;
-  private const long WS_POPUP = 0x80000000L;
-  private const long WS_CAPTION = 0x00C00000L;
-  private const long WS_THICKFRAME = 0x00040000L;
-  private const long WS_SYSMENU = 0x00080000L;
-  private const long WS_MINIMIZEBOX = 0x00020000L;
-  private const long WS_MAXIMIZEBOX = 0x00010000L;
-  private const long WS_EX_DLGMODALFRAME = 0x00000001L;
-  private const long WS_EX_WINDOWEDGE = 0x00000100L;
-  private const long WS_EX_CLIENTEDGE = 0x00000200L;
-  private const long WS_EX_STATICEDGE = 0x00020000L;
-  private const long WS_EX_APPWINDOW = 0x00040000L;
-  private const long WS_EX_TOOLWINDOW = 0x00000080L;
-  private const uint SWP_NOMOVE = 0x0002;
-  private const uint SWP_NOSIZE = 0x0001;
-  private const uint SWP_NOZORDER = 0x0004;
-  private const uint SWP_NOACTIVATE = 0x0010;
-  private const uint SWP_FRAMECHANGED = 0x0020;
-  private const uint WM_CLOSE = 0x0010;
-  [StructLayout(LayoutKind.Sequential)] private struct Point { public int X; public int Y; }
-  private delegate bool EnumWindowsProc(IntPtr hwnd, IntPtr state);
-  [DllImport("user32.dll")] private static extern bool EnumWindows(EnumWindowsProc callback, IntPtr state);
-  [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint processId);
-  [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr hwnd);
-  [DllImport("user32.dll", CharSet=CharSet.Unicode)] private static extern int GetClassName(IntPtr hwnd, StringBuilder className, int maxCount);
-  [DllImport("user32.dll", EntryPoint="GetWindowLongPtrW")] private static extern IntPtr GetWindowLongPtr(IntPtr hwnd, int index);
-  [DllImport("user32.dll", EntryPoint="SetWindowLongPtrW")] private static extern IntPtr SetWindowLongPtr(IntPtr hwnd, int index, IntPtr value);
-  [DllImport("user32.dll")] private static extern bool SetWindowPos(IntPtr hwnd, IntPtr after, int x, int y, int width, int height, uint flags);
-  [DllImport("user32.dll")] private static extern bool ClientToScreen(IntPtr hwnd, ref Point point);
-  [DllImport("user32.dll")] private static extern bool UpdateWindow(IntPtr hwnd);
-  [DllImport("user32.dll")] private static extern bool ShowWindow(IntPtr hwnd, int command);
-  [DllImport("user32.dll")] private static extern bool PostMessage(IntPtr hwnd, uint message, IntPtr wParam, IntPtr lParam);
-  public static IntPtr FindWindow(uint processId) {
-    IntPtr found = IntPtr.Zero;
-    IntPtr fallback = IntPtr.Zero;
-    EnumWindows(delegate(IntPtr hwnd, IntPtr state) {
-      uint owner;
-      GetWindowThreadProcessId(hwnd, out owner);
-      if (owner != processId || !IsWindowVisible(hwnd)) return true;
-      if (fallback == IntPtr.Zero) fallback = hwnd;
-      StringBuilder className = new StringBuilder(256);
-      GetClassName(hwnd, className, className.Capacity);
-      if (String.Equals(className.ToString(), "TscShellContainerClass", StringComparison.Ordinal)) {
-        found = hwnd;
-        return false;
-      }
-      return true;
-    }, IntPtr.Zero);
-    return found != IntPtr.Zero ? found : fallback;
-  }
-  public static void Own(IntPtr child, IntPtr parent) {
-    long style = GetWindowLongPtr(child, GWL_STYLE).ToInt64();
-    style = (style | WS_POPUP) & ~WS_CHILD & ~WS_CAPTION & ~WS_THICKFRAME & ~WS_SYSMENU & ~WS_MINIMIZEBOX & ~WS_MAXIMIZEBOX;
-    SetWindowLongPtr(child, GWL_STYLE, new IntPtr(style));
-    long exStyle = GetWindowLongPtr(child, GWL_EXSTYLE).ToInt64();
-    exStyle = (exStyle | WS_EX_TOOLWINDOW) & ~WS_EX_APPWINDOW & ~WS_EX_DLGMODALFRAME & ~WS_EX_WINDOWEDGE & ~WS_EX_CLIENTEDGE & ~WS_EX_STATICEDGE;
-    SetWindowLongPtr(child, GWL_EXSTYLE, new IntPtr(exStyle));
-    SetWindowLongPtr(child, GWLP_HWNDPARENT, parent);
-    SetWindowPos(child, IntPtr.Zero, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
-    UpdateWindow(child);
-    UpdateWindow(parent);
-  }
-  public static void Move(IntPtr hwnd, IntPtr parent, int x, int y, int width, int height) {
-    Point origin = new Point { X = x, Y = y };
-    if (!ClientToScreen(parent, ref origin)) throw new InvalidOperationException("Could not translate the RDP viewport to screen coordinates.");
-    SetWindowPos(hwnd, IntPtr.Zero, origin.X, origin.Y, Math.Max(1, width), Math.Max(1, height), SWP_NOZORDER | SWP_NOACTIVATE);
-    UpdateWindow(hwnd);
-    UpdateWindow(parent);
-  }
-  public static void SetVisible(IntPtr hwnd, bool visible) {
-    ShowWindow(hwnd, visible ? 5 : 0);
-    if (visible) UpdateWindow(hwnd);
-  }
-  public static void Close(IntPtr hwnd) { PostMessage(hwnd, WM_CLOSE, IntPtr.Zero, IntPtr.Zero); }
-}
-"@
+const GWL_STYLE = -16;
+const WS_CHILD = 0x40000000;
+const WS_POPUP = 0x80000000;
+const WS_CAPTION = 0x00c00000;
+const WS_THICKFRAME = 0x00040000;
+const WS_SYSMENU = 0x00080000;
+const WS_MINIMIZEBOX = 0x00020000;
+const WS_MAXIMIZEBOX = 0x00010000;
+const SW_HIDE = 0;
+const SW_SHOW = 5;
+const SWP_NOZORDER = 0x0004;
+const SWP_NOACTIVATE = 0x0010;
+const SWP_FRAMECHANGED = 0x0020;
+const SWP_SHOWWINDOW = 0x0040;
+const WM_CLOSE = 0x0010;
 
-$mstsc = Join-Path $env:SystemRoot 'System32\mstsc.exe'
-$quotedConfiguration = '"' + $ConfigurationPath.Replace('"', '\"') + '"'
-$rdp = Start-Process -FilePath $mstsc -ArgumentList $quotedConfiguration -PassThru
-$windowHandle = [IntPtr]::Zero
-$deadline = [DateTime]::UtcNow.AddSeconds(20)
-while ([DateTime]::UtcNow -lt $deadline -and $windowHandle -eq [IntPtr]::Zero -and -not $rdp.HasExited) {
-  Start-Sleep -Milliseconds 100
-  $rdp.Refresh()
-  $windowHandle = [CyberGridRdpHost]::FindWindow([uint32]$rdp.Id)
-}
-if ($windowHandle -eq [IntPtr]::Zero) { throw 'The Windows RDP client did not expose an embeddable window.' }
-$parentWindow = [IntPtr]::new([Int64]$ParentHandle)
-[CyberGridRdpHost]::Own($windowHandle, $parentWindow)
-[CyberGridRdpHost]::Move($windowHandle, $parentWindow, 0, 0, 1, 1)
-[CyberGridRdpHost]::SetVisible($windowHandle, $false)
-[Console]::Out.WriteLine('READY')
-[Console]::Out.Flush()
+let win32Promise: Promise<Win32Bindings> | undefined;
 
-try {
-  $read = [Console]::In.ReadLineAsync()
-  while (-not $rdp.HasExited) {
-    if ($read.Wait(100)) {
-      $line = $read.Result
-      if ($null -eq $line) { break }
-      $parts = $line.Split(' ')
-      switch ($parts[0]) {
-        'BOUNDS' {
-          if ($parts.Length -eq 5) {
-            [CyberGridRdpHost]::Move($windowHandle, $parentWindow, [int]$parts[1], [int]$parts[2], [int]$parts[3], [int]$parts[4])
+function loadWin32(): Promise<Win32Bindings> {
+  if (process.platform !== "win32") {
+    return Promise.reject(new Error("Embedded RDP sessions are available on Windows only."));
+  }
+  win32Promise ??= import("koffi").then((koffi) => {
+    const user32 = koffi.load("user32.dll");
+    const hwndType = koffi.pointer("HWND", koffi.opaque());
+    const enumWindowsProc = koffi.proto("__stdcall", "EnumWindowsProc", "bool", [hwndType, "intptr_t"]);
+    const callbackPointer = koffi.pointer(enumWindowsProc);
+    const enumWindows = user32.func("__stdcall", "EnumWindows", "bool", [callbackPointer, "intptr_t"]);
+    const enumChildWindows = user32.func("__stdcall", "EnumChildWindows", "bool", [hwndType, callbackPointer, "intptr_t"]);
+    const getWindowThreadProcessId = user32.func(
+      "__stdcall",
+      "GetWindowThreadProcessId",
+      "uint32_t",
+      [hwndType, koffi.out(koffi.pointer("uint32_t"))],
+    );
+    const getClassName = user32.func("__stdcall", "GetClassNameA", "int", [hwndType, "char *", "int"]);
+    const getWindowLong = user32.func("__stdcall", "GetWindowLongA", "int32_t", [hwndType, "int"]);
+    const setWindowLong = user32.func("__stdcall", "SetWindowLongA", "int32_t", [hwndType, "int", "int32_t"]);
+    const setParent = user32.func("__stdcall", "SetParent", hwndType, [hwndType, hwndType]);
+    const setWindowPos = user32.func(
+      "__stdcall",
+      "SetWindowPos",
+      "bool",
+      [hwndType, hwndType, "int", "int", "int", "int", "uint32_t"],
+    );
+    const updateWindow = user32.func("__stdcall", "UpdateWindow", "bool", [hwndType]);
+    const showWindow = user32.func("__stdcall", "ShowWindow", "bool", [hwndType, "int"]);
+    const postMessage = user32.func("__stdcall", "PostMessageA", "bool", [hwndType, "uint32_t", "uintptr_t", "intptr_t"]);
+
+    const processIdForWindow = (windowHandle: NativeWindowHandle): number => {
+      const output = Buffer.alloc(4);
+      getWindowThreadProcessId(windowHandle, output);
+      return output.readUInt32LE(0);
+    };
+    const classNameForWindow = (windowHandle: NativeWindowHandle): string => {
+      const output = Buffer.alloc(256);
+      const length = Number(getClassName(windowHandle, output, output.length));
+      return length > 0 ? output.toString("utf8", 0, length) : "";
+    };
+
+    return {
+      findMstscWindow(processId: number): NativeWindowHandle | undefined {
+        let found: NativeWindowHandle | undefined;
+        const inspect = (windowHandle: NativeWindowHandle): boolean => {
+          if (processIdForWindow(windowHandle) !== processId) return true;
+          if (classNameForWindow(windowHandle) === "UIMainClass") {
+            found = windowHandle;
+            return false;
           }
-        }
-        'SHOW' { [CyberGridRdpHost]::SetVisible($windowHandle, $true) }
-        'HIDE' { [CyberGridRdpHost]::SetVisible($windowHandle, $false) }
-        'PARENT' {
-          if ($parts.Length -eq 2) {
-            $parentWindow = [IntPtr]::new([Int64]$parts[1])
-            [CyberGridRdpHost]::Own($windowHandle, $parentWindow)
-          }
-        }
-        'CLOSE' { break }
-      }
-      if ($parts[0] -eq 'CLOSE') { break }
-      $read = [Console]::In.ReadLineAsync()
-    }
-    $rdp.Refresh()
-  }
-} finally {
-  if (-not $rdp.HasExited) {
-    [CyberGridRdpHost]::Close($windowHandle)
-    if (-not $rdp.WaitForExit(1500)) { $rdp.Kill() }
-  }
+          return true;
+        };
+        enumWindows((topLevelWindow: NativeWindowHandle) => {
+          if (found) return false;
+          if (processIdForWindow(topLevelWindow) !== processId) return true;
+          if (!inspect(topLevelWindow)) return false;
+          enumChildWindows(topLevelWindow, inspect, 0);
+          return !found;
+        }, 0);
+        return found;
+      },
+      embed(windowHandle: NativeWindowHandle, parentHandle: bigint): void {
+        const currentStyle = Number(getWindowLong(windowHandle, GWL_STYLE)) >>> 0;
+        const strippedStyle = currentStyle & ~WS_POPUP & ~WS_CAPTION & ~WS_THICKFRAME &
+          ~WS_SYSMENU & ~WS_MINIMIZEBOX & ~WS_MAXIMIZEBOX;
+        const childStyle = (strippedStyle | WS_CHILD) >>> 0;
+        setWindowLong(windowHandle, GWL_STYLE, childStyle | 0);
+        setParent(windowHandle, parentHandle);
+        setWindowPos(windowHandle, null, 0, 0, 1, 1, SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+        updateWindow(windowHandle);
+        updateWindow(parentHandle);
+      },
+      move(windowHandle: NativeWindowHandle, bounds: RdpBounds): void {
+        setWindowPos(
+          windowHandle,
+          null,
+          Math.round(bounds.x),
+          Math.round(bounds.y),
+          Math.max(1, Math.round(bounds.width)),
+          Math.max(1, Math.round(bounds.height)),
+          SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW,
+        );
+        updateWindow(windowHandle);
+      },
+      setVisible(windowHandle: NativeWindowHandle, visible: boolean): void {
+        showWindow(windowHandle, visible ? SW_SHOW : SW_HIDE);
+        if (visible) updateWindow(windowHandle);
+      },
+      close(windowHandle: NativeWindowHandle): void {
+        postMessage(windowHandle, WM_CLOSE, 0, 0);
+      },
+    };
+  });
+  return win32Promise;
 }
-`;
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolveDelay) => setTimeout(resolveDelay, milliseconds));
+}
 
 export class RdpController {
   private readonly sessions = new Map<string, RdpSession>();
   private readonly observedSenders = new WeakSet<WebContents>();
-  private hostScriptPromise?: Promise<string>;
 
   constructor(private readonly temporaryDirectory: string) {}
 
@@ -185,9 +170,8 @@ export class RdpController {
     const systemRoot = process.env.SystemRoot;
     if (!systemRoot) throw new Error("Windows SystemRoot is unavailable; mstsc.exe could not be located.");
     const mstscPath = join(systemRoot, "System32", "mstsc.exe");
-    const powershellPath = join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
-    await Promise.all([access(mstscPath), access(powershellPath)]).catch(() => {
-      throw new Error("Windows Remote Desktop or Windows PowerShell is not installed.");
+    await access(mstscPath).catch(() => {
+      throw new Error("Windows Remote Desktop is not installed.");
     });
 
     const sessionId = randomUUID();
@@ -202,7 +186,6 @@ export class RdpController {
       visible: false,
       hostReady: false,
       closed: false,
-      stderr: "",
     };
     this.sessions.set(sessionId, session);
     this.emitStatus(session, "launching", `Embedding Windows Remote Desktop for ${config.host}...`);
@@ -212,50 +195,21 @@ export class RdpController {
     }
 
     try {
-      const hostScriptPath = await this.ensureHostScript();
-      const child = spawn(powershellPath, [
-        "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
-        "-File", hostScriptPath, "-ParentHandle", this.nativeHandle(parentWindow),
-        "-ConfigurationPath", configurationPath,
-      ], { windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
+      const child = spawn(mstscPath, [configurationPath], { windowsHide: false, stdio: "ignore" });
       session.hostProcess = child;
-      let output = "";
-      child.stdout?.setEncoding("utf8");
-      child.stdout?.on("data", (chunk: string) => {
-        output += chunk;
-        const lines = output.split(/\r?\n/);
-        output = lines.pop() ?? "";
-        for (const line of lines) {
-          if (line.trim() === "READY" && !session.closed) {
-            session.hostReady = true;
-            if (!parentWindow.isDestroyed() && !parentWindow.webContents.isDestroyed()) {
-              parentWindow.webContents.invalidate();
-            }
-            this.applyGeometry(session);
-            setImmediate(() => {
-              if (!parentWindow.isDestroyed() && !parentWindow.webContents.isDestroyed()) {
-                parentWindow.webContents.invalidate();
-              }
-            });
-            this.emitStatus(session, "running", `RDP session embedded for ${config.host}.`);
-          }
-        }
-      });
-      child.stderr?.setEncoding("utf8");
-      child.stderr?.on("data", (chunk: string) => {
-        session.stderr = `${session.stderr}${chunk}`.slice(-4_096);
-      });
       child.once("error", (error) => this.closeSession(session, "error", error.message, false));
       child.once("exit", (code) => {
         if (session.closed) return;
-        const detail = session.stderr.trim();
         const normal = session.hostReady && (code === 0 || code === null);
         this.closeSession(
           session,
           normal ? "closed" : "error",
-          normal ? "Embedded RDP session closed." : detail || `RDP host exited with code ${code}.`,
+          normal ? "Embedded RDP session closed." : `Windows RDP exited with code ${code}.`,
           false,
         );
+      });
+      void this.attachNativeWindow(session, parentWindow).catch((error: unknown) => {
+        this.closeSession(session, "error", error instanceof Error ? error.message : String(error), true);
       });
     } catch (error) {
       this.closeSession(session, "error", error instanceof Error ? error.message : String(error), true);
@@ -281,9 +235,7 @@ export class RdpController {
   refreshForWindow(window: BrowserWindow): void {
     if (window.isDestroyed()) return;
     for (const session of this.sessions.values()) {
-      if (!session.closed && BrowserWindow.fromWebContents(session.sender) === window) {
-        this.applyGeometry(session);
-      }
+      if (!session.closed && BrowserWindow.fromWebContents(session.sender) === window) this.applyGeometry(session);
     }
   }
 
@@ -292,13 +244,9 @@ export class RdpController {
     const parentWindow = BrowserWindow.fromWebContents(sender);
     if (!session || session.closed || !parentWindow || parentWindow.isDestroyed()) return false;
     session.sender = sender;
-    if (session.hostReady && session.hostProcess?.stdin?.writable) {
-      session.hostProcess.stdin.write(`PARENT ${this.nativeHandle(parentWindow)}\n`);
-      setImmediate(() => {
-        if (!parentWindow.isDestroyed() && !parentWindow.webContents.isDestroyed()) {
-          parentWindow.webContents.invalidate();
-        }
-      });
+    if (session.hostReady && session.native && session.windowHandle) {
+      session.native.embed(session.windowHandle, this.nativeHandle(parentWindow));
+      this.repaint(parentWindow);
     }
     this.applyGeometry(session);
     this.emitStatus(session, session.hostReady ? "running" : "launching", "RDP session moved to a detached window.");
@@ -311,33 +259,51 @@ export class RdpController {
   }
 
   disconnectAll(): void {
-    for (const session of [...this.sessions.values()]) {
-      this.closeSession(session, "closed", "CyberGrid is closing.", true);
+    for (const session of [...this.sessions.values()]) this.closeSession(session, "closed", "CyberGrid is closing.", true);
+  }
+
+  private async attachNativeWindow(session: RdpSession, parentWindow: BrowserWindow): Promise<void> {
+    const processId = session.hostProcess?.pid;
+    if (!processId) throw new Error("Windows RDP did not provide a process identifier.");
+    const native = await loadWin32();
+    const deadline = Date.now() + 20_000;
+    let windowHandle: NativeWindowHandle | undefined;
+    while (!session.closed && Date.now() < deadline) {
+      windowHandle = native.findMstscWindow(processId);
+      if (windowHandle) break;
+      if (session.hostProcess?.exitCode !== null) break;
+      await delay(100);
     }
+    if (!windowHandle || session.closed) throw new Error("The Windows RDP UIMainClass window was not available for embedding.");
+
+    session.native = native;
+    session.windowHandle = windowHandle;
+    native.embed(windowHandle, this.nativeHandle(parentWindow));
+    session.hostReady = true;
+    this.applyGeometry(session);
+    this.repaint(parentWindow);
+    this.emitStatus(session, "running", "RDP session embedded in the active CyberGrid tab.");
   }
 
-  private ensureHostScript(): Promise<string> {
-    this.hostScriptPromise ??= (async () => {
-      await mkdir(this.temporaryDirectory, { recursive: true, mode: 0o700 });
-      const path = join(this.temporaryDirectory, "cybergrid-rdp-host.ps1");
-      await writeFile(path, RDP_HOST_SCRIPT, { encoding: "utf8", mode: 0o600 });
-      return path;
-    })();
-    return this.hostScriptPromise;
-  }
-
-  private nativeHandle(window: BrowserWindow): string {
+  private nativeHandle(window: BrowserWindow): bigint {
     const buffer = window.getNativeWindowHandle();
-    if (buffer.length >= 8) return buffer.readBigUInt64LE(0).toString();
-    if (buffer.length >= 4) return String(buffer.readUInt32LE(0));
+    if (buffer.length >= 8) return buffer.readBigUInt64LE(0);
+    if (buffer.length >= 4) return BigInt(buffer.readUInt32LE(0));
     throw new Error("CyberGrid could not read its native window handle.");
   }
 
   private applyGeometry(session: RdpSession): void {
-    if (!session.hostReady || !session.hostProcess?.stdin?.writable) return;
-    const { x, y, width, height } = session.bounds;
-    session.hostProcess.stdin.write(`BOUNDS ${Math.round(x)} ${Math.round(y)} ${Math.max(1, Math.round(width))} ${Math.max(1, Math.round(height))}\n`);
-    session.hostProcess.stdin.write(session.visible ? "SHOW\n" : "HIDE\n");
+    if (!session.hostReady || !session.native || !session.windowHandle) return;
+    session.native.move(session.windowHandle, session.bounds);
+    session.native.setVisible(session.windowHandle, session.visible);
+  }
+
+  private repaint(window: BrowserWindow): void {
+    if (window.isDestroyed() || window.webContents.isDestroyed()) return;
+    window.webContents.invalidate();
+    setImmediate(() => {
+      if (!window.isDestroyed() && !window.webContents.isDestroyed()) window.webContents.invalidate();
+    });
   }
 
   private createConfiguration(config: RdpConnectionConfig): string {
@@ -386,10 +352,12 @@ export class RdpController {
     }
     session.closed = true;
     this.sessions.delete(session.id);
-    if (terminate && session.hostProcess && !session.hostProcess.killed) {
-      session.hostProcess.stdin?.write("CLOSE\n");
-      const timer = setTimeout(() => session.hostProcess?.kill(), 2_000);
-      timer.unref();
+    if (terminate) {
+      if (session.native && session.windowHandle) session.native.close(session.windowHandle);
+      if (session.hostProcess && session.hostProcess.exitCode === null) {
+        const timer = setTimeout(() => session.hostProcess?.kill(), 1_500);
+        timer.unref();
+      }
     }
     void rm(session.configurationPath, { force: true }).catch(() => undefined);
   }

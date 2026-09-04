@@ -34,6 +34,7 @@ async function bundleApplication() {
         "node-pty",
         "@serialport/bindings-cpp",
         "better-sqlite3",
+        "koffi",
         "fast-xml-parser",
         "mac-oui-lookup",
         "ws",

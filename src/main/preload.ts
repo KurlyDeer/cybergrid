@@ -114,6 +114,7 @@ const IPC_CHANNELS: typeof import("../shared/ipc").IPC_CHANNELS = {
   preferencesGet: "cybergrid:preferences:get",
   preferencesUpdate: "cybergrid:preferences:update",
   preferencesActivity: "cybergrid:preferences:activity",
+  selectBackupDirectory: "cybergrid:dialog:select-backup-directory",
   diagnosticsRun: "cybergrid:diagnostics:run",
   diagnosticsLaunch: "cybergrid:diagnostics:launch",
   vaultLocked: "cybergrid:app:vault-locked",
@@ -419,6 +420,8 @@ const api: CyberGridApi = {
   system: {
     whenReady: () => ipcRenderer.invoke(IPC_CHANNELS.appReady),
     selectPrivateKey: () => ipcRenderer.invoke(IPC_CHANNELS.selectPrivateKey),
+    selectBackupDirectory: (currentPath?: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.selectBackupDirectory, currentPath),
     captureScreenshot: (request: ScreenshotRequest) => ipcRenderer.invoke(IPC_CHANNELS.sessionCaptureScreenshot, request),
     loadWorkspace: () => ipcRenderer.invoke(IPC_CHANNELS.workspaceLoad),
     saveWorkspace: (snapshot: WorkspaceSnapshot) => ipcRenderer.invoke(IPC_CHANNELS.workspaceSave, snapshot),

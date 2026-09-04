@@ -1,9 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
-import { join } from "node:path";
 import { createServer, type Server } from "node:net";
 import type { WebContents } from "electron";
 import { AuditController, type AuditSessionContext } from "./audit";
+import { saveConfigBackup } from "./backup/config-backup";
 import {
   IPC_CHANNELS,
   type SftpDirectoryListing,
@@ -47,7 +46,6 @@ export class SshController {
 
   constructor(
     private readonly audit: AuditController,
-    private readonly backupDirectory: string,
   ) {}
 
   async connect(
@@ -149,7 +147,7 @@ export class SshController {
       privateKey: config.privateKey,
       passphrase: config.passphrase,
       readyTimeout: config.readyTimeout ?? 15_000,
-      keepaliveInterval: config.keepaliveInterval ?? 10_000,
+      keepaliveInterval: Math.max(10_000, config.keepaliveInterval ?? 10_000),
       keepaliveCountMax: 3,
       // Network appliances frequently expose password authentication only through
       // keyboard-interactive. Keep it enabled even when credentials were entered
@@ -213,29 +211,27 @@ export class SshController {
     return true;
   }
 
-  async quickBackup(sessionId: string, displayName: string): Promise<SwitchBackupResult> {
+  async quickBackup(
+    sessionId: string,
+    displayName: string,
+    backupDirectory: string,
+  ): Promise<SwitchBackupResult> {
     const session = this.getOpenSession(sessionId);
+    await this.prepareApplianceTerminal(session);
     let versionOutput = await this.captureCommand(session, "show version", 12_000);
     let vendor = this.detectSwitchVendor(versionOutput);
-    if (vendor === "unknown" && /(?:unknown|invalid|not found|unrecognized)/i.test(versionOutput)) {
+    if (vendor === "unknown") {
       versionOutput += await this.captureCommand(session, "get system status", 12_000);
       vendor = this.detectSwitchVendor(versionOutput);
     }
 
     const command = vendor === "fortinet" ? "show full-configuration" : "show running-config";
-    const output = await this.captureCommand(session, command, 45_000, 1_500);
-    if (!output.trim()) throw new Error("The switch returned no configuration output.");
-
-    await mkdir(this.backupDirectory, { recursive: true, mode: 0o700 });
-    const timestamp = new Date().toISOString().replace(/:/g, "-").replace(/\.\d{3}Z$/, "Z");
-    const safeName = displayName
-      .normalize("NFKD")
-      .replace(/[^a-z0-9._-]+/gi, "_")
-      .replace(/^_+|_+$/g, "")
-      .slice(0, 80) || "Switch";
-    const path = join(this.backupDirectory, `${safeName}_${timestamp}.cfg`);
-    await writeFile(path, output, { encoding: "utf8", mode: 0o600 });
-    return { path, vendor, command, capturedBytes: Buffer.byteLength(output, "utf8") };
+    const output = this.cleanCapturedCommand(
+      await this.captureCommand(session, command, 60_000, 1_500),
+      command,
+    );
+    const saved = saveConfigBackup(backupDirectory, displayName, output);
+    return { ...saved, vendor, command };
   }
 
   async listDirectory(sessionId: string, remotePath: string): Promise<SftpDirectoryListing> {
@@ -437,10 +433,12 @@ export class SshController {
       let output = "";
       let settled = false;
       let idleTimer: NodeJS.Timeout | undefined;
+      let promptTimer: NodeJS.Timeout | undefined;
       let timeout: NodeJS.Timeout | undefined;
       const cleanup = (): void => {
         if (timeout) clearTimeout(timeout);
         if (idleTimer) clearTimeout(idleTimer);
+        if (promptTimer) clearTimeout(promptTimer);
         stream.off("data", onData);
         stream.off("error", onError);
       };
@@ -452,8 +450,17 @@ export class SshController {
       };
       const onData = (data: Buffer): void => {
         output += data.toString("utf8");
+        if (Buffer.byteLength(output, "utf8") > 16 * 1024 * 1024) {
+          onError(new Error("SSH command output exceeded the 16 MB safety limit."));
+          return;
+        }
+        if (/(?:--More--|Press any key to continue|More:)/i.test(output.slice(-256))) stream.write(" ");
         if (idleTimer) clearTimeout(idleTimer);
         idleTimer = setTimeout(finish, idleMs);
+        if (this.hasReturnedPrompt(output)) {
+          if (promptTimer) clearTimeout(promptTimer);
+          promptTimer = setTimeout(finish, 120);
+        }
       };
       const onError = (error: Error): void => {
         if (settled) return;
@@ -464,8 +471,44 @@ export class SshController {
       stream.on("data", onData);
       stream.on("error", onError);
       timeout = setTimeout(finish, timeoutMs);
-      stream.write(`${command}\r`);
+      stream.write(`${command}\r\n`);
     });
+  }
+
+  private async prepareApplianceTerminal(session: SshSession): Promise<void> {
+    try {
+      await this.captureCommand(session, "terminal length 0", 4_000, 500);
+    } catch {
+      // FortiOS and other shells may reject this Cisco command. Their returned
+      // prompt still confirms that it is safe to proceed with vendor probing.
+    }
+    await new Promise<void>((resolveDelay) => {
+      const timer = setTimeout(resolveDelay, 500);
+      timer.unref();
+    });
+  }
+
+  private stripTerminalControls(output: string): string {
+    return output
+      .replace(/\u001b(?:[@-_]|\[[0-?]*[ -/]*[@-~])/g, "")
+      .replace(/\r/g, "");
+  }
+
+  private hasReturnedPrompt(output: string): boolean {
+    const lines = this.stripTerminalControls(output).split("\n");
+    const finalLine = [...lines].reverse().find((line) => line.trim().length > 0)?.trim() ?? "";
+    return /^[^\n]{0,160}[>#]\s*$/.test(finalLine);
+  }
+
+  private cleanCapturedCommand(output: string, command: string): string {
+    const lines = this.stripTerminalControls(output).split("\n");
+    while (lines.length > 0 && !lines[0]?.trim()) lines.shift();
+    const commandIndex = lines.findIndex((line) => line.trim() === command);
+    if (commandIndex >= 0) lines.splice(commandIndex, 1);
+    while (lines.length > 0 && !lines.at(-1)?.trim()) lines.pop();
+    if (lines.length > 0 && /^[^\n]{0,160}[>#]\s*$/.test(lines.at(-1)?.trim() ?? "")) lines.pop();
+    const cleaned = lines.join("\n").trimEnd();
+    return cleaned ? `${cleaned}\n` : "";
   }
 
   private detectSwitchVendor(output: string): SwitchBackupResult["vendor"] {
@@ -483,6 +526,7 @@ export class SshController {
       this.emitSwitchModel(session, bannerIdentity.vendor, bannerIdentity.model);
       return;
     }
+    await this.prepareApplianceTerminal(session);
     const commands = [
       "show version | include Cisco|IOS|Model|Forti|ProCurve",
       "show version",
@@ -491,7 +535,7 @@ export class SshController {
     for (const command of commands) {
       if (session.closed) return;
       try {
-        const output = await this.execProbe(session, command, 7_000);
+        const output = await this.captureCommand(session, command, 7_000, 700);
         const identity = this.parseSwitchIdentity(output);
         if (identity) {
           this.emitSwitchModel(session, identity.vendor, identity.model);
@@ -503,32 +547,6 @@ export class SshController {
       }
     }
     if (!session.closed) this.emitSwitchModel(session, "unknown", "Unknown");
-  }
-
-  private execProbe(session: SshSession, command: string, timeoutMs: number): Promise<string> {
-    return new Promise<string>((resolve, reject) => {
-      let settled = false;
-      let output = "";
-      const timeout = setTimeout(() => finish(), timeoutMs);
-      timeout.unref();
-      const finish = (error?: Error): void => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timeout);
-        if (error) reject(error);
-        else resolve(output.slice(0, 128_000));
-      };
-      session.client.exec(command, (error, channel) => {
-        if (error) {
-          finish(error);
-          return;
-        }
-        channel.on("data", (data: Buffer) => { output += data.toString("utf8"); });
-        channel.stderr.on("data", (data: Buffer) => { output += data.toString("utf8"); });
-        channel.once("error", finish);
-        channel.once("close", () => finish());
-      });
-    });
   }
 
   private parseSwitchIdentity(output: string): { vendor: SwitchBackupResult["vendor"]; model: string } | undefined {
