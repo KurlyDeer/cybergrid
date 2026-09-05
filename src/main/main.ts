@@ -501,6 +501,7 @@ app.on("render-process-gone", (_event, contents, details) => {
 
 function createMainWindow(): BrowserWindow {
   const window = new BrowserWindow({
+    icon: applicationFile("icon.ico"),
     width: 1440,
     height: 900,
     minWidth: 980,
@@ -598,6 +599,7 @@ function destroyQuickLauncher(): void {
 
 function createQuickLauncherWindow(): BrowserWindow {
   const window = new BrowserWindow({
+    icon: applicationFile("icon.ico"),
     width: 620,
     height: 360,
     show: false,
@@ -670,6 +672,7 @@ async function createDetachedSessionWindow(
   if (!outside) return false;
   const window = new BrowserWindow({
     width: 1080,
+    icon: applicationFile("icon.ico"),
     height: 720,
     minWidth: 640,
     minHeight: 360,
@@ -1689,8 +1692,8 @@ function normalizePreferences(value: unknown): AppPreferences {
   if (!Number.isInteger(fontSize) || fontSize < 10 || fontSize > 28) {
     throw new Error("Terminal font size must be between 10 and 28 pixels.");
   }
-  if (!Number.isFinite(terminalLineHeight) || terminalLineHeight < 1 || terminalLineHeight > 2) {
-    throw new Error("Terminal line height must be between 1.0 and 2.0.");
+  if (!Number.isFinite(terminalLineHeight) || terminalLineHeight < 0.5 || terminalLineHeight > 3) {
+    throw new Error("Terminal line height must be between 0.5 and 3.0.");
   }
   if (!Number.isInteger(sshKeepAliveSeconds) || sshKeepAliveSeconds < 0 || sshKeepAliveSeconds > 300) {
     throw new Error("SSH keep-alive must be between 0 and 300 seconds.");
@@ -1710,7 +1713,7 @@ function normalizePreferences(value: unknown): AppPreferences {
     throw new Error("Clipboard clearing must be between 0 and 300 seconds.");
   }
   if (!Number.isInteger(healthCheckIntervalSeconds) || healthCheckIntervalSeconds < 10 || healthCheckIntervalSeconds > 600) {
-    throw new Error("Ping interval must be between 10 and 600 seconds.");
+    throw new Error("TCP health interval must be between 10 and 600 seconds.");
   }
   const theme = value.theme;
   if (theme !== "dark" && theme !== "light" && theme !== "monochrome" && theme !== "dracula" &&
@@ -1927,7 +1930,7 @@ async function refreshTrayMenu(): Promise<void> {
 }
 
 function createSystemTray(): void {
-  trayController = new SystemTrayController(app.getVersion(), {
+  trayController = new SystemTrayController(app.getVersion(), applicationFile("icon.png"), {
     showWindow: showMainWindow,
     lockVault: () => lockApplication("Credential vault locked from the system tray.", true),
     unlockVault: showMainWindow,
@@ -2857,17 +2860,18 @@ function registerIpcHandlers(): void {
       if (!isRecord(target)) throw new Error("Invalid health-monitor target.");
       const profileId = readUuid(target.profileId, "health profile ID");
       const profile = requireVault().getConnectionProfile(profileId);
-      let host = "invalid.invalid";
+      let host = "";
       try {
         host = resolveEnvironmentTokens(profile.host, "Health-check host") as string;
       } catch {
         // A teammate may not have populated a profile's local token yet. Keep the
-        // remaining health sweep active and report this target as unreachable.
+        // remaining health sweep active and leave this unresolved target idle.
       }
       return {
         profileId,
         host,
         protocol: profile.protocol,
+        port: profile.port,
       };
     });
     healthController.setTargets(

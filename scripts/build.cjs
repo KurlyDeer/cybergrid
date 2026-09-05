@@ -1,6 +1,7 @@
 const { copyFile, mkdir } = require("node:fs/promises");
 const { join } = require("node:path");
 const { build } = require("esbuild");
+const { generateBrandAssets } = require("./generate-brand-assets.cjs");
 
 const projectRoot = join(__dirname, "..");
 const sourceRoot = join(projectRoot, "src");
@@ -18,6 +19,7 @@ const common = {
 };
 
 async function bundleApplication() {
+  await generateBrandAssets(outputRoot);
   await mkdir(join(outputRoot, "main"), { recursive: true });
   await mkdir(rendererOutput, { recursive: true });
   await mkdir(join(rendererOutput, "assets"), { recursive: true });
@@ -87,8 +89,8 @@ async function bundleApplication() {
     copyFile(join(sourceRoot, "renderer", "detached.html"), join(rendererOutput, "detached.html")),
     copyFile(join(sourceRoot, "renderer", "startup.js"), join(rendererOutput, "startup.js")),
     copyFile(
-      join(sourceRoot, "assets", "cybergrid-mark.svg"),
-      join(rendererOutput, "assets", "cybergrid-mark.svg"),
+      join(sourceRoot, "assets", "logo.svg"),
+      join(rendererOutput, "assets", "logo.svg"),
     ),
     copyFile(
       join(projectRoot, "node_modules", "xterm", "css", "xterm.css"),

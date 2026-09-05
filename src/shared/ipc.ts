@@ -501,12 +501,14 @@ export interface HealthTarget {
   profileId: string;
   host: string;
   protocol: ConnectionProtocol;
+  port?: number;
 }
 
 export interface HealthStatusEvent {
   profileId: string;
   status: "checking" | "online" | "offline" | "unsupported";
   latencyMs?: number;
+  port?: number;
   checkedAt: string;
 }
 

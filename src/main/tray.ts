@@ -23,12 +23,13 @@ export class SystemTrayController {
 
   constructor(
     private readonly version: string,
+    private readonly iconPath: string,
     private readonly actions: SystemTrayActions,
   ) {}
 
   create(initialState: SystemTrayState): void {
     if (this.tray) return;
-    this.tray = new Tray(this.createImage());
+    this.tray = new Tray(nativeImage.createFromPath(this.iconPath).resize({ width: 16, height: 16 }));
     this.tray.setToolTip(`CyberGrid v${this.version} remote connection manager`);
     this.tray.on("click", this.actions.showWindow);
     this.update(initialState);
@@ -88,26 +89,4 @@ export class SystemTrayController {
     this.tray = null;
   }
 
-  private createImage(): Electron.NativeImage {
-    const size = 16;
-    const bitmap = Buffer.alloc(size * size * 4);
-    const setPixel = (x: number, y: number, alpha = 255): void => {
-      const offset = (y * size + x) * 4;
-      bitmap[offset] = 171;
-      bitmap[offset + 1] = 213;
-      bitmap[offset + 2] = 35;
-      bitmap[offset + 3] = alpha;
-    };
-    for (let index = 2; index < 14; index += 1) {
-      setPixel(index, 2);
-      setPixel(index, 13);
-      setPixel(2, index);
-      setPixel(13, index);
-    }
-    for (let index = 4; index < 12; index += 1) {
-      setPixel(7, index);
-      setPixel(index, 7);
-    }
-    return nativeImage.createFromBitmap(bitmap, { width: size, height: size, scaleFactor: 1 });
-  }
 }

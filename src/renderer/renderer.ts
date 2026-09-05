@@ -177,7 +177,7 @@ const DEFAULT_SETTINGS: AppPreferences = {
   proxyMode: "system",
   proxyUrl: "",
   proxyBypassRules: "<local>",
-  healthCheckIntervalSeconds: 30,
+  healthCheckIntervalSeconds: 45,
   backupDirectory: "",
   externalToolPaths: { wireshark: "", winscp: "", nmap: "", powershell: "powershell.exe" },
 };
@@ -527,6 +527,8 @@ const cancelAssetButton = elementById<HTMLButtonElement>("cancel-asset-button");
 
 const settingsModal = elementById<HTMLDialogElement>("settings-modal");
 const settingsForm = elementById<HTMLFormElement>("settings-form");
+const applySettingsButton = elementById<HTMLButtonElement>("apply-settings");
+const broadcastInputToggle = elementById<HTMLButtonElement>("broadcast-input-toggle");
 const minimizeToTrayInput = elementById<HTMLInputElement>("minimize-to-tray");
 const startMinimizedInput = elementById<HTMLInputElement>("start-minimized");
 const launchAtLoginInput = elementById<HTMLInputElement>("launch-at-login");
@@ -811,7 +813,7 @@ function applyTerminalAppearance(tab: WorkspaceTab, overrides?: TerminalAppearan
   const settings = terminalSettingsWithOverrides(overrides);
   tab.terminal.options.fontFamily = settings.fontFamily;
   tab.terminal.options.fontSize = settings.fontSize;
-  tab.terminal.options.lineHeight = overrides?.lineHeight ?? settings.terminalLineHeight;
+  tab.terminal.options.lineHeight = Math.max(1, overrides?.lineHeight ?? settings.terminalLineHeight);
   tab.terminal.options.cursorBlink = settings.cursorBlink;
   tab.terminal.options.theme = terminalTheme(settings);
   tab.fitAddon?.fit();
@@ -1331,7 +1333,7 @@ function createTerminalTab(
     cursorStyle: "bar",
     fontFamily: terminalSettings.fontFamily,
     fontSize: terminalSettings.fontSize,
-    lineHeight: appearance?.lineHeight ?? terminalSettings.terminalLineHeight,
+    lineHeight: Math.max(1, appearance?.lineHeight ?? terminalSettings.terminalLineHeight),
     scrollback: 10_000,
     scrollOnUserInput: true,
     smoothScrollDuration: 0,
@@ -1456,9 +1458,12 @@ async function promptForSshCredentials(
 }
 
 function isBroadcastCapable(tab: WorkspaceTab): boolean {
-  return tab.status === "connected" && (
+  if (tab.localInputHandler || tab.reconnecting || tab.reconnectKey) return false;
+  return (tab.status === "connected" || tab.status === "ready" || tab.status === "running") && (
     (tab.kind === "ssh" && Boolean(tab.sessionId)) ||
-    (tab.kind === "serial" && Boolean(tab.serialSessionId))
+    (tab.kind === "serial" && Boolean(tab.serialSessionId)) ||
+    ((tab.kind === "telnet" || tab.kind === "raw") && Boolean(tab.streamSessionId)) ||
+    (tab.kind === "local" && Boolean(tab.localSessionId))
   );
 }
 
@@ -1508,6 +1513,12 @@ function scheduleTrayStateSync(): void {
 function updateBroadcastControls(): void {
   const available = activeBroadcastTabs();
   if (available.length === 0) broadcastMode = false;
+  broadcastInputToggle.disabled = available.length === 0;
+  broadcastInputToggle.setAttribute("aria-pressed", String(broadcastMode));
+  broadcastInputToggle.textContent = broadcastMode ? `Broadcast Input: ON (${selectedBroadcastTabs().length})` : "Broadcast Input: OFF";
+  broadcastInputToggle.title = broadcastMode
+    ? `Keyboard input goes to: ${selectedBroadcastTabs().map((tab) => tab.label).join(", ")}. Click to stop.`
+    : "Send keyboard input to all connected SSH, serial, Telnet, RAW, and local workspace terminals. Login prompts are excluded.";
   renderQuickSnippetToolbar();
   scheduleTrayStateSync();
 }
@@ -3360,8 +3371,10 @@ function applyHealthStatus(dot: HTMLElement, event: HealthStatusEvent | undefine
   dot.classList.remove("checking", "online", "offline", "unsupported");
   if (event) {
     dot.classList.add(event.status);
-    dot.title = event.status === "online" && event.latencyMs
-      ? `Online (${event.latencyMs} ms)`
+    dot.title = event.status === "online" && event.latencyMs !== undefined
+      ? `TCP port ${event.port ?? ""} reachable (${event.latencyMs} ms)`
+      : event.status === "offline" ? `TCP port ${event.port ?? ""} unreachable (1500 ms deadline)`
+      : event.status === "unsupported" ? "Idle — no TCP service to check"
       : event.status.charAt(0).toUpperCase() + event.status.slice(1);
   } else {
     dot.title = "Health check pending";
@@ -3379,6 +3392,7 @@ async function configureHealthMonitor(): Promise<void> {
     profileId: profile.id,
     host: profile.host,
     protocol: profile.protocol,
+    port: profile.port,
   })));
 }
 
@@ -4840,7 +4854,8 @@ async function lockVaultFromUi(): Promise<void> {
   }
 }
 
-function toggleBroadcastMode(): void {
+function toggleBroadcastMode(allTargets = false): void {
+  if (!broadcastMode && allTargets) excludedBroadcastGroups.clear();
   if (broadcastMode) {
     broadcastMode = false;
     connectionState.textContent = "Broadcast mode disabled";
@@ -4853,6 +4868,8 @@ function toggleBroadcastMode(): void {
   updateBroadcastControls();
   tabs.get(activeTabId ?? "")?.terminal?.focus();
 }
+
+broadcastInputToggle.addEventListener("click", () => toggleBroadcastMode(true));
 
 async function disconnectAllSessions(): Promise<void> {
   const sessionTabIds = [...tabs.values()]
@@ -5723,7 +5740,20 @@ drExportButton.addEventListener("click", async () => {
 });
 settingsForm.addEventListener("submit", async (event) => {
   event.preventDefault();
+  if (applySettingsButton.disabled) return;
   settingsError.textContent = "";
+  // Handle validation here: controls on collapsed tabs must never silently block submit.
+  for (const input of [fontSizeInput, terminalLineHeightInput, sshKeepAliveSecondsInput, sshMaxPasswordRetriesInput, healthCheckIntervalInput]) {
+    input.removeAttribute("aria-invalid");
+    if (!Number.isFinite(input.valueAsNumber) || !input.validity.valid) {
+      const label = settingsForm.querySelector<HTMLLabelElement>(`label[for="${input.id}"]`)?.textContent ?? "Value";
+      settingsError.textContent = `${label}: enter a number from ${input.min} to ${input.max} in increments of ${input.step}.`;
+      selectSettingsPanel(input.closest<HTMLElement>("[data-settings-panel]")?.dataset.settingsPanel ?? "terminal");
+      input.setAttribute("aria-invalid", "true");
+      input.focus();
+      return;
+    }
+  }
   const enablingMasterPassword = masterPasswordEnabledInput.checked && !currentSettings.masterPasswordEnabled;
   if (enablingMasterPassword) {
     if (newMasterPasswordInput.value.length < 10) {
@@ -5751,7 +5781,7 @@ settingsForm.addEventListener("submit", async (event) => {
     theme: themeInput.value as AppPreferences["theme"],
     fontFamily: fontFamilyInput.value.trim() || DEFAULT_SETTINGS.fontFamily,
     fontSize: Math.min(28, Math.max(10, Math.round(Number(fontSizeInput.value)))),
-    terminalLineHeight: Math.min(2, Math.max(1, Number(terminalLineHeightInput.value))),
+    terminalLineHeight: Math.round(terminalLineHeightInput.valueAsNumber * 100) / 100,
     cursorBlink: cursorBlinkInput.checked,
     background: backgroundInput.value,
     foreground: foregroundInput.value,
@@ -5774,18 +5804,26 @@ settingsForm.addEventListener("submit", async (event) => {
       powershell: toolPowershellPathInput.value.trim() || "powershell.exe",
     },
   };
+  const previousSettings = currentSettings;
+  applySettingsButton.disabled = true;
   try {
-    currentSettings = await window.cybergrid.preferences.update(
+    applySettings(settings);
+    const persisted = await window.cybergrid.preferences.update(
       settings,
       enablingMasterPassword ? newMasterPasswordInput.value : undefined,
     );
     newMasterPasswordInput.value = "";
     newMasterPasswordConfirmInput.value = "";
-    applySettings(currentSettings);
-    await configureHealthMonitor();
+    applySettings(persisted);
     settingsModal.close();
+    void configureHealthMonitor().catch((error: unknown) => {
+      connectionState.textContent = `Settings saved; health monitor restart failed: ${errorMessage(error)}`;
+    });
   } catch (error) {
+    applySettings(previousSettings);
     settingsError.textContent = errorMessage(error);
+  } finally {
+    applySettingsButton.disabled = false;
   }
 });
 

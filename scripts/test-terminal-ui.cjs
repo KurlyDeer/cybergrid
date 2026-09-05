@@ -20,12 +20,21 @@ function loadSource(file) {
 }
 const { IPC_CHANNELS: channels } = loadSource("src/shared/ipc.ts");
 const { DEFAULT_APP_PREFERENCES: defaults } = loadSource("src/main/preferences.ts");
+const { PreferencesController } = loadSource("src/main/preferences.ts");
+const preferences = new PreferencesController(join(app.getPath("userData"), "preferences.json"));
+let preferenceSaves = 0;
+let failNextPreferenceSave = false;
 let connects = 0;
 const writes = [];
 let window;
 for (const channel of Object.values(channels)) {
   ipcMain.handle(channel, (event, ...args) => {
-    if (channel === channels.preferencesGet) return defaults;
+    if (channel === channels.preferencesGet) return preferences.get();
+    if (channel === channels.preferencesUpdate) {
+      preferenceSaves++;
+      if (failNextPreferenceSave) { failNextPreferenceSave = false; throw new Error("Simulated disk failure"); }
+      return preferences.save(args[0]);
+    }
     if (channel === channels.vaultStatus) return { exists: true, unlocked: true, masterPasswordEnabled: false };
     if (channel.includes(":list-") || channel === channels.serialList) return [];
     if (channel === channels.workspaceLoad) return { version: 1, tabs: [], layout: "single" };
@@ -39,26 +48,56 @@ for (const channel of Object.values(channels)) {
     return null;
   });
 }
-ipcMain.on(channels.sshWrite, (_event, value) => writes.push(value));
+for (const channel of [channels.sshWrite, channels.serialWrite, channels.streamWrite, channels.localWrite]) ipcMain.on(channel, (_event, value) => writes.push(value));
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-async function evaluate(code) { return window.webContents.executeJavaScript(code, true); }
+async function evaluate(code) {
+  try { return await window.webContents.executeJavaScript(code, true); }
+  catch(error) { console.error("Failed UI test step:", code); throw error; }
+}
 async function until(code) {
   for (let i = 0; i < 100; i++) { if (await evaluate(code)) return; await sleep(50); }
   throw new Error(`Timed out: ${code}`);
 }
 app.whenReady().then(async () => {
   const renderer = readFileSync(join(root, "src/renderer/renderer.ts"), "utf8");
-  buildSync({ stdin: { contents: renderer + "\nwindow.__terminalTest = { tabs, connectQuickSsh, closeTab, currentSettings };", loader: "ts", resolveDir: join(root, "src/renderer") }, bundle: true, platform: "browser", format: "iife", outfile: join(root, "build/renderer/renderer-test.js") });
+  buildSync({ stdin: { contents: renderer + "\nwindow.__terminalTest = { tabs, connectQuickSsh, createTerminalTab, closeTab, openSettingsModal, applyHealthStatus, updateBroadcastControls };", loader: "ts", resolveDir: join(root, "src/renderer") }, bundle: true, platform: "browser", format: "iife", outfile: join(root, "build/renderer/renderer-test.js") });
   const html = readFileSync(join(root, "build/renderer/index.html"), "utf8").replace('src="./startup.js"', 'src="./renderer-test.js"');
   writeFileSync(join(root, "build/renderer/renderer-test.html"), html);
   window = new BrowserWindow({ show: false, width: 1280, height: 850, webPreferences: { preload: join(root, "build/main/preload.js"), contextIsolation: true, nodeIntegration: false, backgroundThrottling: false, offscreen: true } });
   await window.loadFile(join(root, "build/renderer/renderer-test.html"));
+  window.webContents.startPainting();
   window.webContents.debugger.attach("1.3");
   await window.webContents.debugger.sendCommand("Emulation.setFocusEmulationEnabled", { enabled: true });
   await until('Boolean(window.__terminalTest && document.querySelector(".welcome-page") && document.getElementById("startup-skeleton").hidden)');
   assert.equal(await evaluate('document.querySelectorAll(".welcome-page .xterm").length'), 0);
   assert.equal(await evaluate('document.querySelectorAll(".welcome-actions button").length'), 3);
   assert.equal(await evaluate('document.getElementById("backup-directory").closest("[data-settings-panel]").dataset.settingsPanel'), "general");
+  assert.equal(await evaluate('[...document.querySelectorAll(".brand-mark,.vault-logo,.startup-skeleton-logo,.welcome-heading img")].every(img=>img.src.endsWith("/assets/logo.svg") && img.complete && img.naturalWidth>0)'), true);
+  for (const [state, color] of [["online", "rgb(78, 226, 138)"], ["offline", null], ["checking", null]]) {
+    const result=await evaluate(`(() => {const dot=document.createElement("span");dot.className="server-dot";document.body.append(dot);window.__terminalTest.applyHealthStatus(dot,{profileId:"fixture",status:"${state}",latencyMs:12,port:8006});const result={color:getComputedStyle(dot).backgroundColor,title:dot.title,className:dot.className};dot.remove();return result;})()`);
+    assert(result.className.includes(state));
+    if(color) assert.equal(result.color,color);
+    if(state==="online") assert.match(result.title,/8006.*12 ms/);
+  }
+  await evaluate('window.__terminalTest.openSettingsModal(); document.getElementById("theme-mode").value="dracula"; document.getElementById("apply-settings").click()');
+  await until('!document.getElementById("settings-modal").open');
+  assert.equal(preferenceSaves, 1);
+  assert.equal(preferences.get().terminalLineHeight, 1.18);
+  assert.equal(await evaluate('document.documentElement.dataset.theme'), "dracula");
+  assert.equal((await new PreferencesController(join(app.getPath("userData"), "preferences.json")).load()).theme, "dracula");
+  await evaluate('window.__terminalTest.openSettingsModal(); document.getElementById("terminal-line-height").value="1.185"; document.getElementById("apply-settings").click()');
+  assert.equal(preferenceSaves, 1);
+  assert.match(await evaluate('document.getElementById("settings-error").textContent'), /increments of 0.01/);
+  for (const value of [0.5, 3, 1.18]) {
+    await evaluate(`window.__terminalTest.openSettingsModal(); document.getElementById("terminal-line-height").value="${value}"; document.getElementById("apply-settings").click()`);
+    await until('!document.getElementById("settings-modal").open');
+    assert.equal(preferences.get().terminalLineHeight, value);
+  }
+  failNextPreferenceSave = true;
+  await evaluate('window.__terminalTest.openSettingsModal(); document.getElementById("theme-mode").value="light"; document.getElementById("apply-settings").click()');
+  await until('document.getElementById("settings-error").textContent.includes("Simulated disk failure")');
+  assert.equal(await evaluate('document.documentElement.dataset.theme'), "dracula");
+  await evaluate('document.getElementById("settings-modal").close()');
   await sleep(300);
   window.webContents.invalidate();
   await sleep(100);
@@ -96,7 +135,21 @@ app.whenReady().then(async () => {
   await evaluate('window.__terminalTest.closeTab(window.testTab.id)');
   assert.equal(await evaluate('window.__terminalTest.tabs.has(window.testTab.id)'), false);
   assert.equal(connects, 2);
-  console.log("PASS: Welcome, General backup path, Cisco groups, model overlay removal, log toggle, copy buffer, same-terminal Space reconnect, close cancellation");
+  // Mixed terminal protocols, excluding inactive channels and local login prompts.
+  await evaluate('window.__terminalTest.createTerminalTab("ssh-target", "ssh").sessionId="broadcast-ssh"; window.__terminalTest.createTerminalTab("serial-target", "serial").serialSessionId="broadcast-serial"; window.__terminalTest.createTerminalTab("raw-target", "raw").streamSessionId="broadcast-raw"; window.__terminalTest.createTerminalTab("local-target", "local").localSessionId="broadcast-local"; for(const t of window.__terminalTest.tabs.values()) if(t.kind!=="welcome") t.status="connected"; window.__terminalTest.updateBroadcastControls(); document.getElementById("broadcast-input-toggle").click(); [...window.__terminalTest.tabs.values()].find(t=>t.kind==="local").terminal.paste("broadcast-fixture")');
+  await sleep(100);
+  assert.equal(writes.filter(event=>event.data==="broadcast-fixture").length, 4);
+  assert.equal(await evaluate('document.getElementById("broadcast-input-toggle").getAttribute("aria-pressed")'), "true");
+  await evaluate('document.getElementById("broadcast-input-toggle").click(); [...window.__terminalTest.tabs.values()].find(t=>t.kind==="local").terminal.paste("single-fixture")');
+  await sleep(100);
+  assert.equal(writes.filter(event=>event.data==="single-fixture").length, 1);
+  await evaluate('[...window.__terminalTest.tabs.values()].find(t=>t.kind==="ssh").status="disconnected"; [...window.__terminalTest.tabs.values()].find(t=>t.kind==="serial").localInputHandler=()=>{}; window.__terminalTest.updateBroadcastControls(); document.getElementById("broadcast-input-toggle").click(); [...window.__terminalTest.tabs.values()].find(t=>t.kind==="local").terminal.paste("filtered-fixture")');
+  await sleep(100);
+  assert.equal(writes.filter(event=>event.data==="filtered-fixture").length,2);
+  await evaluate('[...window.__terminalTest.tabs.values()].find(t=>t.kind==="local").localInputHandler=()=>{}; [...window.__terminalTest.tabs.values()].find(t=>t.kind==="local").terminal.paste("login-fixture")');
+  await sleep(100);
+  assert.equal(writes.filter(event=>event.data==="login-fixture").length,0);
+  console.log("PASS: settings 1.18 and range boundaries, inline validation, theme persistence/rollback, new logos, multi-protocol broadcast ON/OFF, existing terminal regressions");
   window.destroy();
   app.exit(0);
 }).catch((error) => { console.error(error); app.exit(1); });

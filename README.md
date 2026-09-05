@@ -3,7 +3,7 @@
 > A fast, secure command center for terminal, remote desktop, infrastructure inventory, and day-two systems operations.
 
 <p align="center">
-  <img src="src/assets/cybergrid-mark.svg" alt="CyberGrid enterprise grid monogram" width="112" height="112" />
+  <img src="src/assets/logo.svg" alt="CyberGrid enterprise grid monogram" width="112" height="112" />
 </p>
 
 [![Electron](https://img.shields.io/badge/Electron-43-47848F?logo=electron&logoColor=white)](https://www.electronjs.org/)
@@ -27,7 +27,13 @@ Traditional administrator workflows often span mRemoteNG for connection trees, P
 
 CyberGrid does not transmit vault data to a hosted CyberGrid service and includes no product telemetry. Connections, preferences, workspaces, audit transcripts, and vault files remain on the workstation unless an operator explicitly exports or transfers them.
 
-The v1.3.0 identity uses a restrained navy, slate, and white grid monogram across the application shell, vault screen, executable, installer, and shortcuts. The source-of-truth vector lives at `src/assets/cybergrid-mark.svg`; `scripts/generate-brand-assets.ps1` produces the Windows PNG and multi-resolution ICO resources.
+The v1.3.6 identity uses a sharp isometric hexagon with deep navy (`#0F2027`), teal (`#20B2AA`), and transparent channels. `src/assets/logo.svg` is the artwork source for the application, Welcome and vault screens, tray, window icons, executable, and installer. Every clean build runs `scripts/generate-brand-assets.cjs` to regenerate `build/icon.ico` (16, 24, 32, 48, 64, 128, and 256 pixels) and `build/icon.png` directly from that SVG.
+
+## Version 1.3.6 — Settings, Branding & Live Health
+
+- **Settings validation:** Line Height accepts hundredths such as `1.18`. Invalid numbers show an inline error and reveal the relevant Settings tab, rather than silently blocking Apply. Themes apply immediately, persist locally, and roll back visually if saving fails. The stored line-height range is `0.5–3.0`; xterm.js renders values below `1.0` at its supported minimum.
+- **TCP service health:** saved SSH, RDP, web, and other TCP connections are checked with a 1500 ms deadline, eight concurrent sockets, and a 45-second default interval. Port overrides are honored. Green means the service port is reachable, red means unreachable, and gray means pending or not applicable. Hover a green dot for TCP connection latency; this is not ICMP ping or an authentication test.
+- **Broadcast Input:** the top status-bar toggle sends keyboard input to connected SSH, Serial, Telnet, RAW, and local terminals in the current workspace. ON is visibly highlighted with the target count; hover to inspect targets. Interactive login prompts and disconnected sessions are excluded. Use Tools → Broadcast Targets for group filtering. Broadcast commands affect multiple systems—review targets before typing.
 
 ## Version 1.3.5 — Terminal Workflow
 
@@ -68,23 +74,23 @@ The v1.3.0 identity uses a restrained navy, slate, and white grid monogram acros
 
 ## Install CyberGrid on Windows
 
-CyberGrid v1.3.5 produces two x64 Windows packages in `dist/`:
+CyberGrid v1.3.6 produces two x64 Windows packages in `dist/`:
 
-- `CyberGrid-1.3.5-setup-x64.exe` — guided NSIS installer with selectable installation directory, desktop shortcut, Start menu shortcut, and uninstaller.
-- `CyberGrid-1.3.5-portable-x64.exe` — self-contained portable executable.
+- `CyberGrid-1.3.6-setup-x64.exe` — guided NSIS installer with selectable installation directory, desktop shortcut, Start menu shortcut, and uninstaller.
+- `CyberGrid-1.3.6-portable-x64.exe` — self-contained portable executable.
 
 Download the preferred package from the repository's [Releases page](https://github.com/KurlyDeer/cybergrid/releases). For the installer, run the setup executable and follow the wizard. For the portable build, place the executable in a user-writable tools directory and launch it directly.
 
 ### Windows SmartScreen
 
-CyberGrid v1.3.5 packages may display a Windows SmartScreen **Unknown Publisher** warning until the project has an established code-signing reputation. Download CyberGrid only from this repository's Releases page, verify its SHA-256 checksum, and then select **More info → Run anyway** if you trust the verified package. Never bypass SmartScreen for an executable from an unverified mirror or unexpected message attachment.
+CyberGrid v1.3.6 packages may display a Windows SmartScreen **Unknown Publisher** warning until the project has an established code-signing reputation. Download CyberGrid only from this repository's Releases page, verify its SHA-256 checksum, and then select **More info → Run anyway** if you trust the verified package. Never bypass SmartScreen for an executable from an unverified mirror or unexpected message attachment.
 
 ### Verify a release download
 
 Calculate the installer checksum in PowerShell and compare the complete value with the SHA-256 value published in the corresponding GitHub release notes:
 
 ```powershell
-Get-FileHash -LiteralPath ".\CyberGrid-1.3.5-setup-x64.exe" -Algorithm SHA256
+Get-FileHash -LiteralPath ".\CyberGrid-1.3.6-setup-x64.exe" -Algorithm SHA256
 ```
 
 For an additional reputation check, upload the verified installer to [VirusTotal](https://www.virustotal.com/gui/home/upload) if your organization's policy permits public malware-analysis submissions. A detection result is supplementary evidence, not a replacement for matching the release checksum and confirming the download source. Do not upload private or internally customized builds.
@@ -104,7 +110,7 @@ Installed builds check the repository's published release metadata after startup
 
 ### Requirements
 
-- Windows 10/11 x64 for the complete v1.3.5 desktop feature set and native HWND-docked RDP integration.
+- Windows 10/11 x64 for the complete v1.3.6 desktop feature set and native HWND-docked RDP integration.
 - Node.js 22 LTS and npm.
 - Git.
 - Native build prerequisites supported by Electron Builder if a prebuilt native dependency is unavailable.
@@ -128,6 +134,7 @@ npm run typecheck
 # Terminal/log regression tests (UI test uses mock IPC, no real credentials)
 node scripts/test-session-log.cjs
 node scripts/test-terminal-renderer.cjs
+node scripts/test-health-preferences.cjs
 # Run after npm run build; rebuild again before packaging to remove test assets
 npx electron scripts/test-terminal-ui.cjs
 

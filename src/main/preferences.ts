@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { AppPreferences } from "../shared/ipc";
 
-const PREFERENCES_VERSION = 3 as const;
+const PREFERENCES_VERSION = 4 as const;
 const MAX_PREFERENCES_BYTES = 64 * 1024;
 
 interface PreferencesFile {
@@ -37,7 +37,7 @@ export const DEFAULT_APP_PREFERENCES: AppPreferences = {
   proxyMode: "system",
   proxyUrl: "",
   proxyBypassRules: "<local>",
-  healthCheckIntervalSeconds: 30,
+  healthCheckIntervalSeconds: 45,
   backupDirectory: join(homedir(), "Documents", "CyberGrid_Backups"),
   externalToolPaths: {
     wireshark: "",
@@ -68,7 +68,7 @@ function storedColor(value: unknown, fallback: string): string {
 function parseStoredPreferences(value: unknown): AppPreferences {
   if (!isRecord(value)) return clonePreferences(DEFAULT_APP_PREFERENCES);
   const preferences = value.preferences;
-  if ((value.version !== 1 && value.version !== 2 && value.version !== PREFERENCES_VERSION) || !isRecord(preferences)) {
+  if ((value.version !== 1 && value.version !== 2 && value.version !== 3 && value.version !== PREFERENCES_VERSION) || !isRecord(preferences)) {
     return clonePreferences(DEFAULT_APP_PREFERENCES);
   }
   return {
@@ -109,7 +109,7 @@ function parseStoredPreferences(value: unknown): AppPreferences {
       : DEFAULT_APP_PREFERENCES.fontSize,
     terminalLineHeight: typeof preferences.terminalLineHeight === "number" &&
       Number.isFinite(preferences.terminalLineHeight) &&
-      preferences.terminalLineHeight >= 1 && preferences.terminalLineHeight <= 2
+      preferences.terminalLineHeight >= 0.5 && preferences.terminalLineHeight <= 3
       ? Math.round(preferences.terminalLineHeight * 100) / 100
       : DEFAULT_APP_PREFERENCES.terminalLineHeight,
     cursorBlink: typeof preferences.cursorBlink === "boolean"
@@ -148,7 +148,7 @@ function parseStoredPreferences(value: unknown): AppPreferences {
     ),
     healthCheckIntervalSeconds: Number.isInteger(preferences.healthCheckIntervalSeconds) &&
       Number(preferences.healthCheckIntervalSeconds) >= 10 && Number(preferences.healthCheckIntervalSeconds) <= 600
-      ? Number(preferences.healthCheckIntervalSeconds)
+      ? (value.version !== PREFERENCES_VERSION && preferences.healthCheckIntervalSeconds === 30 ? 45 : Number(preferences.healthCheckIntervalSeconds))
       : DEFAULT_APP_PREFERENCES.healthCheckIntervalSeconds,
     backupDirectory: storedString(
       preferences.backupDirectory,
@@ -200,22 +200,21 @@ export class PreferencesController {
   }
 
   async save(preferences: AppPreferences): Promise<AppPreferences> {
-    const previous = this.preferences;
-    this.preferences = clonePreferences(preferences);
+    const next = clonePreferences(preferences);
     const payload: PreferencesFile = {
       version: PREFERENCES_VERSION,
-      preferences: this.preferences,
+      preferences: next,
     };
-    await mkdir(dirname(this.preferencesPath), { recursive: true, mode: 0o700 });
     const temporaryPath = `${this.preferencesPath}.${process.pid}.tmp`;
     try {
+      await mkdir(dirname(this.preferencesPath), { recursive: true, mode: 0o700 });
       await writeFile(temporaryPath, `${JSON.stringify(payload, null, 2)}\n`, {
         encoding: "utf8",
         mode: 0o600,
       });
       await rename(temporaryPath, this.preferencesPath);
+      this.preferences = next;
     } catch (error) {
-      this.preferences = previous;
       await rm(temporaryPath, { force: true }).catch(() => undefined);
       throw error;
     }

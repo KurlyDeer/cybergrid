@@ -530,13 +530,13 @@
         height: 7px;
         flex: 0 0 auto;
         border-radius: 999px;
-        background: var(--accent);
-        box-shadow: 0 0 8px var(--accent-soft);
+        background: var(--muted);
+        box-shadow: none;
       }
 
       .server-dot.checking {
-        background: #e8b94b;
-        box-shadow: 0 0 8px rgba(232, 185, 75, 0.38);
+        background: var(--muted);
+        box-shadow: none;
       }
 
       .server-dot.online {
@@ -2377,6 +2377,9 @@
       .tab-status { width: 5px; height: 5px; }
       .tab-close { width: 18px; height: 18px; border-radius: 3px; }
       .connection-state { max-width: 190px; padding: 0 7px; font-size: 9px; }
+      .broadcast-input-toggle { flex-shrink: 0; margin: 3px 5px; padding: 3px 8px; border: 1px solid var(--border); border-radius: 3px; color: var(--muted); background: var(--panel); font-size: 10px; cursor: pointer; }
+      .broadcast-input-toggle[aria-pressed="true"] { color: #111; background: #efb84c; border-color: #efb84c; font-weight: 700; }
+      .broadcast-input-toggle:disabled { opacity: .5; cursor: default; }
       .terminal-stack.tiled-layout { gap: 1px; padding: 0; }
       .terminal-pane, .terminal-stack.tiled-layout .terminal-pane, .vnc-pane { padding: 0; }
       .terminal-pane.active, .terminal-stack.tiled-layout .terminal-pane.tiled-pane { display: flex; min-width: 0; min-height: 0; align-items: stretch; overflow: hidden; }
@@ -2453,7 +2456,7 @@
   <body>
     <div class="startup-skeleton" id="startup-skeleton" role="status" aria-live="polite">
       <section class="startup-skeleton-card" aria-label="CyberGrid is starting">
-        <div class="startup-skeleton-brand"><img class="startup-skeleton-logo" src="./assets/cybergrid-mark.svg" alt="" /><span>CYBERGRID</span></div>
+        <div class="startup-skeleton-brand"><img class="startup-skeleton-logo" src="./assets/logo.svg" alt="" /><span>CYBERGRID</span></div>
         <div class="startup-skeleton-lines" aria-hidden="true">
           <div class="startup-skeleton-line"></div>
           <div class="startup-skeleton-line short"></div>
@@ -2465,7 +2468,7 @@
     <main class="app-shell" id="app-shell" inert>
       <aside class="sidebar" aria-label="Saved server profiles">
         <div class="brand">
-          <img class="brand-mark" src="./assets/cybergrid-mark.svg" alt="" />
+          <img class="brand-mark" src="./assets/logo.svg" alt="" />
           <span>CYBERGRID</span>
         </div>
 
@@ -2517,6 +2520,7 @@
 
         <div class="tabs-row">
           <div class="tabs" id="tabs" role="tablist" aria-label="Connection sessions"></div>
+          <button id="broadcast-input-toggle" class="broadcast-input-toggle" type="button" aria-pressed="false" disabled title="Broadcast keyboard input to all connected workspace terminals">Broadcast Input: OFF</button>
           <div class="connection-state" id="connection-state">Ready</div>
         </div>
 
@@ -2624,7 +2628,7 @@
 
     <div class="vault-overlay" id="vault-overlay">
       <section class="vault-card" aria-labelledby="vault-title">
-        <img class="vault-logo" src="./assets/cybergrid-mark.svg" alt="" />
+        <img class="vault-logo" src="./assets/logo.svg" alt="" />
         <h1 id="vault-title">Unlock CyberGrid</h1>
         <p id="vault-subtitle">Enter your master password to decrypt saved servers and credentials.</p>
         <form id="vault-form">
@@ -2939,7 +2943,7 @@
     </dialog>
 
     <dialog class="settings-dialog" id="settings-modal" aria-labelledby="settings-modal-title">
-      <form id="settings-form">
+      <form id="settings-form" novalidate>
         <header class="modal-header">
           <h2 id="settings-modal-title">CyberGrid Global Options</h2>
           <p>Centralized connection, terminal, remote-desktop, and security defaults.</p>
@@ -2972,10 +2976,10 @@
                 <div class="field"><label for="theme-mode">Pre-made theme</label><select id="theme-mode"><option value="dark">CyberGrid Default</option><option value="dracula">Dracula</option><option value="solarized-dark">Solarized Dark</option><option value="monokai">Monokai</option><option value="light">CyberGrid Light</option><option value="monochrome">High-contrast monochrome</option><option value="custom">Custom palette</option></select></div>
                 <div class="checkbox-field"><input id="terminal-cursor-blink" type="checkbox" /><label class="checkbox-label" for="terminal-cursor-blink">Blinking cursor</label></div>
                 <div class="field full-width"><label for="terminal-font-family">Terminal font family</label><input id="terminal-font-family" maxlength="200" /></div>
-                <div class="field"><label for="terminal-font-size">Font size</label><input id="terminal-font-size" type="number" min="10" max="28" required /></div>
-                <div class="field"><label for="terminal-line-height">Line height</label><input id="terminal-line-height" type="number" min="1" max="2" step="0.05" required /></div>
-                <div class="field"><label for="ssh-keepalive-seconds">SSH keep-alive interval (seconds)</label><input id="ssh-keepalive-seconds" type="number" min="0" max="300" required /><span class="field-hint">Use 0 to disable transport keep-alives.</span></div>
-                <div class="field"><label for="ssh-max-password-retries">Max password retries</label><input id="ssh-max-password-retries" type="number" min="0" max="100" required /><span class="field-hint">0 keeps prompting until you cancel.</span></div>
+                <div class="field"><label for="terminal-font-size">Font size</label><input id="terminal-font-size" type="number" min="10" max="28" step="1" required /></div>
+                <div class="field"><label for="terminal-line-height">Line height</label><input id="terminal-line-height" type="number" min="0.5" max="3.0" step="0.01" required /><span class="field-hint">Stored range: 0.5–3.0. xterm.js renders values below 1.0 at its minimum of 1.0.</span></div>
+                <div class="field"><label for="ssh-keepalive-seconds">SSH keep-alive interval (seconds)</label><input id="ssh-keepalive-seconds" type="number" min="0" max="300" step="1" required /><span class="field-hint">Transport keep-alives have a minimum interval of 10 seconds.</span></div>
+                <div class="field"><label for="ssh-max-password-retries">Max password retries</label><input id="ssh-max-password-retries" type="number" min="0" max="100" step="1" required /><span class="field-hint">0 keeps prompting until you cancel.</span></div>
                 <div class="custom-palette" id="custom-palette-fields" hidden>
                   <div class="field color-field"><label for="terminal-background">Terminal background</label><input id="terminal-background" type="color" /></div>
                   <div class="field color-field"><label for="terminal-foreground">Terminal foreground</label><input id="terminal-foreground" type="color" /></div>
@@ -3027,7 +3031,7 @@
               </div>
               <h3>Health Monitoring &amp; External Tools</h3>
               <div class="settings-grid">
-                <div class="field"><label for="health-check-interval">Ping interval (seconds)</label><input id="health-check-interval" type="number" min="10" max="600" /></div>
+                <div class="field"><label for="health-check-interval">TCP health interval (seconds)</label><input id="health-check-interval" type="number" min="10" max="600" step="1" required /><span class="field-hint">Default: 45 seconds. Checks the saved service port with a 1500 ms deadline.</span></div>
                 <div class="field"><label for="tool-powershell-path">PowerShell</label><input id="tool-powershell-path" maxlength="2048" placeholder="powershell.exe" /></div>
                 <div class="field full-width"><label for="tool-wireshark-path">Wireshark executable</label><input id="tool-wireshark-path" maxlength="2048" /></div>
                 <div class="field full-width"><label for="tool-winscp-path">WinSCP executable</label><input id="tool-winscp-path" maxlength="2048" /></div>
@@ -3041,7 +3045,7 @@
         <footer class="modal-actions">
           <button class="secondary-button" id="reset-settings-button" type="button">Reset defaults</button>
           <button class="secondary-button" id="cancel-settings-button" type="button">Cancel</button>
-          <button class="primary-button" type="submit">Apply settings</button>
+          <button class="primary-button" id="apply-settings" type="submit">Apply settings</button>
         </footer>
       </form>
     </dialog>

@@ -7,7 +7,7 @@ export function createWelcomeContent(actions: {
   page.className = "welcome-page";
   page.innerHTML = `
     <div class="welcome-heading">
-      <img src="assets/cybergrid-mark.svg" width="52" height="52" alt="" />
+      <img src="assets/logo.svg" width="52" height="52" alt="" />
       <p class="welcome-eyebrow">YOUR INFRASTRUCTURE. ONE WORKSPACE.</p>
       <h1>Welcome to CyberGrid</h1>
       <p class="welcome-subtitle">Multi-Protocol Infrastructure Manager</p>
