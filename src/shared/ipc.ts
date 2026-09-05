@@ -838,14 +838,7 @@ export interface CredentialProfileSummary {
   updatedAt: string;
 }
 
-export type TerminalThemeName =
-  | "dark"
-  | "light"
-  | "monochrome"
-  | "dracula"
-  | "solarized-dark"
-  | "monokai"
-  | "custom";
+export type TerminalThemeName = import("./themes").ThemeName;
 export type ProxyMode = "system" | "direct" | "manual";
 
 export interface AppPreferences {
@@ -903,7 +896,8 @@ export interface AppUpdateEvent {
 }
 
 export interface AppUpdateStatusEvent {
-  stage: "checking" | "download-progress" | "error";
+  stage: "checking" | "download-progress" | "error" | "up-to-date" | "development";
+  interactive?: boolean;
   message: string;
   percent?: number;
   transferred?: number;

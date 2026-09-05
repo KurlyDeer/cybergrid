@@ -1,3 +1,5 @@
+import { GlobalModal } from "./components/global-modal";
+import { normalizeThemeName } from "../shared/themes";
 import { Terminal, type ITheme } from "xterm";
 import { FitAddon } from "xterm-addon-fit";
 import { installTerminalRenderer } from "./terminal/rendering";
@@ -161,7 +163,7 @@ const DEFAULT_SETTINGS: AppPreferences = {
   masterPasswordEnabled: false,
   autoLockMinutes: 15,
   clipboardClearSeconds: 30,
-  theme: "dark",
+  theme: "midnight",
   fontFamily: "Cascadia Mono, JetBrains Mono, Consolas, monospace",
   fontSize: 14,
   terminalLineHeight: 1.18,
@@ -196,6 +198,18 @@ const serialSessions = new Map<string, WorkspaceTab>();
 const localSessions = new Map<string, WorkspaceTab>();
 const vncSessions = new Map<string, WorkspaceTab>();
 const webSessions = new Map<string, WorkspaceTab>();
+const retiredSessions = new Set<string>();
+function retireSession(id?: string): void {
+  if (!id) return;
+  retiredSessions.add(id);
+  if (retiredSessions.size > 512) retiredSessions.delete(retiredSessions.values().next().value!);
+  for (const queue of [queuedSshData, queuedStreamData, queuedSerialData, queuedLocalData,
+    queuedSshStatus, queuedRdpStatus, queuedStreamStatus, queuedSerialStatus, queuedLocalStatus,
+    queuedVncStatus, queuedWebStatus, queuedSwitchModels]) queue.delete(id);
+}
+function boundSessionQueue<T>(queue: Map<string, T>): void {
+  if (queue.size >= 32) queue.delete(queue.keys().next().value!);
+}
 const queuedSshData = new Map<string, string[]>();
 const queuedSshStatus = new Map<string, SshStatusEvent>();
 const queuedSwitchModels = new Map<string, SwitchModelEvent>();
@@ -654,10 +668,7 @@ function loadLegacySettings(): AppPreferences {
     if (!isRecord(parsed)) {
       return { ...DEFAULT_SETTINGS };
     }
-    const theme = parsed.theme === "light" || parsed.theme === "monochrome" || parsed.theme === "dracula" ||
-      parsed.theme === "solarized-dark" || parsed.theme === "monokai" || parsed.theme === "custom"
-      ? parsed.theme
-      : "dark";
+    const theme = normalizeThemeName(parsed.theme) ?? "midnight";
     const fontSize = Number(parsed.fontSize);
     return {
       ...DEFAULT_SETTINGS,
@@ -685,33 +696,33 @@ function loadLegacySettings(): AppPreferences {
 }
 
 function terminalTheme(settings: AppPreferences): ITheme {
-  if (settings.theme === "monochrome") {
+  if (settings.theme === "matrix") {
     return {
       background: "#000000",
-      foreground: "#ffffff",
-      cursor: "#ffffff",
+      foreground: "#39ff84",
+      cursor: "#39ff84",
       cursorAccent: "#000000",
-      selectionBackground: "#ffffff55",
+      selectionBackground: "#39ff8455",
       black: "#000000",
-      red: "#ffffff",
-      green: "#ffffff",
-      yellow: "#ffffff",
-      blue: "#ffffff",
-      magenta: "#ffffff",
-      cyan: "#ffffff",
-      white: "#ffffff",
-      brightBlack: "#808080",
-      brightRed: "#ffffff",
-      brightGreen: "#ffffff",
-      brightYellow: "#ffffff",
-      brightBlue: "#ffffff",
-      brightMagenta: "#ffffff",
-      brightCyan: "#ffffff",
-      brightWhite: "#ffffff",
+      red: "#39ff84",
+      green: "#39ff84",
+      yellow: "#39ff84",
+      blue: "#39ff84",
+      magenta: "#39ff84",
+      cyan: "#39ff84",
+      white: "#39ff84",
+      brightBlack: "#21934e",
+      brightRed: "#39ff84",
+      brightGreen: "#39ff84",
+      brightYellow: "#39ff84",
+      brightBlue: "#39ff84",
+      brightMagenta: "#39ff84",
+      brightCyan: "#39ff84",
+      brightWhite: "#39ff84",
     };
   }
 
-  if (settings.theme === "dracula") {
+  if (settings.theme === "vampire") {
     return {
       background: "#282a36", foreground: "#f8f8f2", cursor: "#f8f8f2", cursorAccent: "#282a36",
       selectionBackground: "#44475a", black: "#21222c", red: "#ff5555", green: "#50fa7b",
@@ -721,7 +732,7 @@ function terminalTheme(settings: AppPreferences): ITheme {
     };
   }
 
-  if (settings.theme === "solarized-dark") {
+  if (settings.theme === "deep-sea") {
     return {
       background: "#002b36", foreground: "#839496", cursor: "#93a1a1", cursorAccent: "#002b36",
       selectionBackground: "#073642", black: "#073642", red: "#dc322f", green: "#859900",
@@ -731,17 +742,17 @@ function terminalTheme(settings: AppPreferences): ITheme {
     };
   }
 
-  if (settings.theme === "monokai") {
+  if (settings.theme === "neon-synth") {
     return {
-      background: "#272822", foreground: "#f8f8f2", cursor: "#f8f8f0", cursorAccent: "#272822",
-      selectionBackground: "#49483e", black: "#272822", red: "#f92672", green: "#a6e22e",
-      yellow: "#f4bf75", blue: "#66d9ef", magenta: "#ae81ff", cyan: "#a1efe4", white: "#f8f8f2",
-      brightBlack: "#75715e", brightRed: "#f92672", brightGreen: "#a6e22e", brightYellow: "#e6db74",
-      brightBlue: "#66d9ef", brightMagenta: "#ae81ff", brightCyan: "#a1efe4", brightWhite: "#f9f8f5",
+      background: "#170d26", foreground: "#f4ddff", cursor: "#40dfff", cursorAccent: "#170d26",
+      selectionBackground: "#51305f", black: "#170d26", red: "#ff5b91", green: "#80ffce",
+      yellow: "#ffdf86", blue: "#40dfff", magenta: "#fa75e8", cyan: "#71efff", white: "#f4ddff",
+      brightBlack: "#b89dcc", brightRed: "#ff89b0", brightGreen: "#adffe0", brightYellow: "#ffe9aa",
+      brightBlue: "#8eefff", brightMagenta: "#ffb1f2", brightCyan: "#a5f7ff", brightWhite: "#ffffff",
     };
   }
 
-  if (settings.theme === "light") {
+  if (settings.theme === "snowblind") {
     return {
       background: "#ffffff",
       foreground: "#172437",
@@ -838,74 +849,23 @@ function errorMessage(error: unknown): string {
     .replace(/^Error:\s*/i, "");
 }
 
+const globalModal = new GlobalModal(() => renderWorkspaceLayout());
+
 function showUpdateToast(stage: "available" | "downloaded", event: AppUpdateEvent): void {
-  updateToastRegion.replaceChildren();
-  const toast = document.createElement("article");
-  toast.className = "update-toast";
-  toast.dataset.updateStage = stage;
-  toast.setAttribute("role", "status");
-
-  const content = document.createElement("div");
-  content.className = "update-toast-content";
-  const mark = createTextElement("span", "update-toast-mark", "UP");
-  const copy = document.createElement("div");
-  copy.className = "update-toast-copy";
-  const title = document.createElement("strong");
-  title.textContent = stage === "available" ? `CyberGrid ${event.version} available` : "CyberGrid update ready";
-  const message = document.createElement("p");
-  message.textContent = stage === "available"
-    ? "A new version of CyberGrid is available."
-    : "Update downloaded. Restart CyberGrid to apply update?";
-  copy.append(title, message);
-  content.append(mark, copy);
-
-  const actions = document.createElement("div");
-  actions.className = "update-toast-actions";
-  const dismiss = document.createElement("button");
-  dismiss.className = "secondary-button";
-  dismiss.type = "button";
-  dismiss.textContent = stage === "available" ? "Dismiss" : "Later";
-  dismiss.addEventListener("click", () => toast.remove());
-  actions.append(dismiss);
-
-  if (stage === "available") {
-    const download = document.createElement("button");
-    download.className = "primary-button";
-    download.type = "button";
-    download.textContent = "Download & Install";
-    download.addEventListener("click", async () => {
-      download.disabled = true;
-      download.textContent = "Starting...";
-      try {
-        await window.cybergrid.system.downloadUpdate();
-      } catch (error) {
-        message.textContent = errorMessage(error);
-        download.disabled = false;
-        download.textContent = "Download & Install";
-      }
-    });
-    actions.append(download);
-  } else {
-    const restart = document.createElement("button");
-    restart.className = "primary-button";
-    restart.type = "button";
-    restart.textContent = "Restart now";
-    restart.addEventListener("click", async () => {
-      restart.disabled = true;
-      restart.textContent = "Restarting...";
-      try {
-        await window.cybergrid.system.installUpdate();
-      } catch (error) {
-        message.textContent = errorMessage(error);
-        restart.disabled = false;
-        restart.textContent = "Restart now";
-      }
-    });
-    actions.append(restart);
-  }
-
-  toast.append(content, actions);
-  updateToastRegion.append(toast);
+  clearUpdateStatusToast();
+  globalModal.show(
+    stage === "available" ? "Update available" : "Restart required",
+    stage === "available" ? `CyberGrid v${event.version} is available. Download it now?`
+      : `CyberGrid v${event.version} is ready. Restart to apply the update?`,
+    [
+      { label: "Later" },
+      { label: stage === "available" ? "Download update" : "Restart now", primary: true, run: () => {
+        if (stage === "downloaded") return window.cybergrid.system.installUpdate();
+        globalModal.close();
+        void window.cybergrid.system.downloadUpdate().catch(() => undefined);
+      } },
+    ],
+  );
 }
 
 function showActionToast(title: string, message: string): void {
@@ -922,49 +882,57 @@ function showActionToast(title: string, message: string): void {
   copy.append(createTextElement("strong", "", title), createTextElement("p", "", message));
   toast.append(content);
   updateToastRegion.append(toast);
-  window.setTimeout(() => toast.remove(), 5_000);
+  window.setTimeout(() => toast.remove(), 3_000);
 }
 
 let updateStatusToastTimer: number | null = null;
+let updateStatusStage: AppUpdateStatusEvent["stage"] | null = null;
+let updateStatusExpiresAt = 0;
 
-function showUpdateStatusToast(event: AppUpdateStatusEvent): void {
+function clearUpdateStatusToast(): void {
   if (updateStatusToastTimer !== null) window.clearTimeout(updateStatusToastTimer);
   updateStatusToastTimer = null;
-  updateToastRegion.replaceChildren();
+  updateStatusStage = null;
+  updateToastRegion.querySelector("[data-update-status]")?.remove();
+}
+
+function showUpdateStatusToast(event: AppUpdateStatusEvent): void {
+  if (event.stage === "up-to-date" || event.stage === "development" || (event.stage === "error" && event.interactive)) {
+    clearUpdateStatusToast();
+    globalModal.show(event.stage === "up-to-date" ? "CyberGrid is up to date"
+      : event.stage === "error" ? "Update unavailable" : "CyberGrid updates", event.message);
+    return;
+  }
+  const now = Date.now();
+  if (updateStatusStage !== event.stage || event.stage === "checking") {
+    clearUpdateStatusToast();
+    updateStatusStage = event.stage;
+    updateStatusExpiresAt = now + 3_000;
+  }
+  // Progress events must not continually reset the passive notification's lifetime.
+  if (now >= updateStatusExpiresAt) return;
+  updateToastRegion.querySelector("[data-update-status]")?.remove();
   const toast = document.createElement("article");
   toast.className = "update-toast";
+  toast.dataset.updateStatus = event.stage;
   toast.setAttribute("role", event.stage === "error" ? "alert" : "status");
-  const content = document.createElement("div");
-  content.className = "update-toast-content";
-  const mark = createTextElement("span", "update-toast-mark", event.stage === "error" ? "!" : "UP");
-  const copy = document.createElement("div");
-  copy.className = "update-toast-copy";
-  const title = document.createElement("strong");
-  title.textContent = event.stage === "checking"
-    ? "Checking for updates"
-    : event.stage === "download-progress"
-      ? "Downloading update"
-      : "Update check failed";
   const message = document.createElement("p");
-  message.textContent = event.message;
-  copy.append(title, message);
+  message.textContent = event.stage === "checking" ? "Checking for updates..." : event.message;
+  toast.append(message);
   if (event.stage === "download-progress") {
     const progress = document.createElement("progress");
     progress.className = "update-download-progress";
     progress.max = 100;
     progress.value = event.percent ?? 0;
-    progress.setAttribute("aria-label", `Update download ${Math.round(event.percent ?? 0)} percent`);
-    copy.append(progress);
+    progress.setAttribute("aria-label", "Update download progress");
+    toast.append(progress);
   }
-  content.append(mark, copy);
-  toast.append(content);
   updateToastRegion.append(toast);
-  if (event.stage !== "download-progress") {
-    updateStatusToastTimer = window.setTimeout(() => {
-      toast.remove();
-      updateStatusToastTimer = null;
-    }, event.stage === "checking" ? 3_000 : event.stage === "error" ? 10_000 : 8_000);
-  }
+  if (updateStatusToastTimer !== null) window.clearTimeout(updateStatusToastTimer);
+  updateStatusToastTimer = window.setTimeout(() => {
+    updateToastRegion.querySelector("[data-update-status]")?.remove();
+    updateStatusToastTimer = null;
+  }, updateStatusExpiresAt - now);
 }
 
 function fuzzyFieldScore(needle: string, value: string): number | null {
@@ -1277,6 +1245,7 @@ function removeDetachedTabView(tab: WorkspaceTab): void {
   const order = [...tabs.keys()];
   const index = order.indexOf(tab.id);
   tabs.delete(tab.id);
+  for (const id of [tab.sessionId, tab.rdpSessionId, tab.streamSessionId, tab.serialSessionId, tab.localSessionId]) retireSession(id);
   recentTerminalTabIds = recentTerminalTabIds.filter((id) => id !== tab.id);
   if (tab.sessionId) sshSessions.delete(tab.sessionId);
   if (tab.rdpSessionId) rdpSessions.delete(tab.rdpSessionId);
@@ -1605,7 +1574,7 @@ function updateLayoutControls(): void {
 }
 
 function renderWorkspaceLayout(): void {
-  const diagnosticsOpen = Boolean(document.querySelector("#global-diagnostics[open], #bug-report[open]"));
+  const diagnosticsOpen = Boolean(document.querySelector("#global-diagnostics[open], #bug-report[open], #global-modal[open]"));
   const active = activeTabId ? tabs.get(activeTabId) : undefined;
   if (layoutMode === "grid" && !active?.terminal) layoutMode = "single";
   updateLayoutControls();
@@ -1670,13 +1639,22 @@ async function closeTab(id: string): Promise<void> {
   const closedIndex = tabOrder.indexOf(id);
   if (tab.reconnectTimer !== undefined) window.clearTimeout(tab.reconnectTimer);
   tab.reconnectKey?.dispose();
-  tab.rendererHandle?.dispose();
   tab.localPromptCancel?.();
+  tab.localPromptCancel = undefined;
+  tab.localInputHandler = undefined;
+  tab.rendererHandle?.dispose();
+  tab.rendererHandle = undefined;
+  // Free GPU contexts and scrollback before any disconnect IPC can block.
+  tab.terminal?.dispose();
+  tab.terminal = undefined;
+  tab.fitAddon = undefined;
   tabs.delete(id);
+  for (const sessionId of [tab.sessionId, tab.rdpSessionId, tab.streamSessionId, tab.serialSessionId,
+    tab.localSessionId, tab.vncSessionId, tab.webSessionId]) retireSession(sessionId);
   recentTerminalTabIds = recentTerminalTabIds.filter((tabId) => tabId !== id);
   if (tab.sessionId) {
     sshSessions.delete(tab.sessionId);
-    await window.cybergrid.ssh.disconnect(tab.sessionId).catch(() => undefined);
+    void window.cybergrid.ssh.disconnect(tab.sessionId).catch(() => undefined);
     queuedSshData.delete(tab.sessionId);
     queuedSshStatus.delete(tab.sessionId);
     queuedSwitchModels.delete(tab.sessionId);
@@ -1685,40 +1663,39 @@ async function closeTab(id: string): Promise<void> {
     rdpSessions.delete(tab.rdpSessionId);
     window.cybergrid.rdp.setVisible(tab.rdpSessionId, false);
     window.cybergrid.rdp.kill(tab.rdpSessionId);
-    await window.cybergrid.rdp.disconnect(tab.rdpSessionId).catch(() => undefined);
+    void window.cybergrid.rdp.disconnect(tab.rdpSessionId).catch(() => undefined);
     queuedRdpStatus.delete(tab.rdpSessionId);
   }
   if (tab.streamSessionId) {
     streamSessions.delete(tab.streamSessionId);
-    await window.cybergrid.stream.disconnect(tab.streamSessionId).catch(() => undefined);
+    void window.cybergrid.stream.disconnect(tab.streamSessionId).catch(() => undefined);
     queuedStreamData.delete(tab.streamSessionId);
     queuedStreamStatus.delete(tab.streamSessionId);
   }
   if (tab.serialSessionId) {
     serialSessions.delete(tab.serialSessionId);
-    await window.cybergrid.serial.disconnect(tab.serialSessionId).catch(() => undefined);
+    void window.cybergrid.serial.disconnect(tab.serialSessionId).catch(() => undefined);
     queuedSerialData.delete(tab.serialSessionId);
     queuedSerialStatus.delete(tab.serialSessionId);
   }
   if (tab.localSessionId) {
     localSessions.delete(tab.localSessionId);
-    await window.cybergrid.local.disconnect(tab.localSessionId).catch(() => undefined);
+    void window.cybergrid.local.disconnect(tab.localSessionId).catch(() => undefined);
     queuedLocalData.delete(tab.localSessionId);
     queuedLocalStatus.delete(tab.localSessionId);
   }
   if (tab.vncSessionId) {
     vncSessions.delete(tab.vncSessionId);
     tab.vncClient?.disconnect();
-    await window.cybergrid.vnc.disconnect(tab.vncSessionId).catch(() => undefined);
+    void window.cybergrid.vnc.disconnect(tab.vncSessionId).catch(() => undefined);
     queuedVncStatus.delete(tab.vncSessionId);
   }
   if (tab.webSessionId) {
     webSessions.delete(tab.webSessionId);
     window.cybergrid.web.setVisible(tab.webSessionId, false);
-    await window.cybergrid.web.disconnect(tab.webSessionId).catch(() => undefined);
+    void window.cybergrid.web.disconnect(tab.webSessionId).catch(() => undefined);
     queuedWebStatus.delete(tab.webSessionId);
   }
-  tab.terminal?.dispose();
   tab.tabElement.remove();
   tab.paneElement.remove();
   if (activeTabId === id) {
@@ -1933,7 +1910,7 @@ function attachRdpSession(tab: WorkspaceTab, sessionId: string): void {
   const status = queuedRdpStatus.get(sessionId);
   if (status) updateRdpTabStatus(tab, status);
   queuedRdpStatus.delete(sessionId);
-  window.cybergrid.rdp.setVisible(sessionId, activeTabId === tab.id && !document.querySelector("#global-diagnostics[open], #bug-report[open]"));
+  window.cybergrid.rdp.setVisible(sessionId, activeTabId === tab.id && !document.querySelector("#global-diagnostics[open], #bug-report[open], #global-modal[open]"));
   requestAnimationFrame(() => updateRdpBounds(tab));
 }
 
@@ -2022,19 +1999,19 @@ function attachWebSession(tab: WorkspaceTab, sessionId: string): void {
   const status = queuedWebStatus.get(sessionId);
   if (status) updateTabStatus(tab, status.status, status.message);
   queuedWebStatus.delete(sessionId);
-  window.cybergrid.web.setVisible(sessionId, activeTabId === tab.id && !document.querySelector("#global-diagnostics[open], #bug-report[open]"));
+  window.cybergrid.web.setVisible(sessionId, activeTabId === tab.id && !document.querySelector("#global-diagnostics[open], #bug-report[open], #global-modal[open]"));
   requestAnimationFrame(() => updateWebBounds(tab));
 }
 
 function queueData(event: { sessionId: string; data: string }, sessions: Map<string, WorkspaceTab>, queue: Map<string, string[]>): void {
+  if (retiredSessions.has(event.sessionId)) return;
   const tab = sessions.get(event.sessionId);
-  if (tab) {
-    tab.terminal?.write(event.data);
-    return;
-  }
+  if (tab) { tab.terminal?.write(event.data); return; }
   const buffered = queue.get(event.sessionId) ?? [];
-  if (buffered.reduce((size, chunk) => size + chunk.length, 0) < 1_000_000) {
-    buffered.push(event.data);
+  const size = buffered.reduce((total, chunk) => total + chunk.length, 0);
+  if (size < 1_000_000) {
+    if (!queue.has(event.sessionId)) boundSessionQueue(queue);
+    buffered.push(event.data.slice(0, 1_000_000 - size));
     queue.set(event.sessionId, buffered);
   }
 }
@@ -2045,6 +2022,8 @@ function handleSerialData(event: SerialDataEvent): void { queueData(event, seria
 function handleLocalData(event: LocalTerminalDataEvent): void { queueData(event, localSessions, queuedLocalData); }
 
 function handleSshStatus(event: SshStatusEvent): void {
+  if (retiredSessions.has(event.sessionId)) return;
+  boundSessionQueue(queuedSshStatus);
   const tab = sshSessions.get(event.sessionId);
   if (!tab) {
     queuedSshStatus.set(event.sessionId, event);
@@ -2107,32 +2086,39 @@ function applySwitchModel(tab: WorkspaceTab, event: SwitchModelEvent): void {
 }
 
 function handleSwitchModel(event: SwitchModelEvent): void {
+  if (retiredSessions.has(event.sessionId)) return;
   const tab = sshSessions.get(event.sessionId);
-  if (tab) applySwitchModel(tab, event); else queuedSwitchModels.set(event.sessionId, event);
+  if (tab) applySwitchModel(tab, event); else { boundSessionQueue(queuedSwitchModels); queuedSwitchModels.set(event.sessionId, event); }
 }
 function handleRdpStatus(event: RdpStatusEvent): void {
+  if (retiredSessions.has(event.sessionId)) return;
   const tab = rdpSessions.get(event.sessionId);
-  if (tab) updateRdpTabStatus(tab, event); else queuedRdpStatus.set(event.sessionId, event);
+  if (tab) updateRdpTabStatus(tab, event); else { boundSessionQueue(queuedRdpStatus); queuedRdpStatus.set(event.sessionId, event); }
 }
 function handleStreamStatus(event: StreamStatusEvent): void {
+  if (retiredSessions.has(event.sessionId)) return;
   const tab = streamSessions.get(event.sessionId);
-  if (tab) updateTabStatus(tab, event.status, event.message); else queuedStreamStatus.set(event.sessionId, event);
+  if (tab) updateTabStatus(tab, event.status, event.message); else { boundSessionQueue(queuedStreamStatus); queuedStreamStatus.set(event.sessionId, event); }
 }
 function handleSerialStatus(event: SerialStatusEvent): void {
+  if (retiredSessions.has(event.sessionId)) return;
   const tab = serialSessions.get(event.sessionId);
-  if (tab) updateTabStatus(tab, event.status, event.message); else queuedSerialStatus.set(event.sessionId, event);
+  if (tab) updateTabStatus(tab, event.status, event.message); else { boundSessionQueue(queuedSerialStatus); queuedSerialStatus.set(event.sessionId, event); }
 }
 function handleLocalStatus(event: LocalTerminalStatusEvent): void {
+  if (retiredSessions.has(event.sessionId)) return;
   const tab = localSessions.get(event.sessionId);
-  if (tab) updateTabStatus(tab, event.status, event.message); else queuedLocalStatus.set(event.sessionId, event);
+  if (tab) updateTabStatus(tab, event.status, event.message); else { boundSessionQueue(queuedLocalStatus); queuedLocalStatus.set(event.sessionId, event); }
 }
 function handleVncStatus(event: VncStatusEvent): void {
+  if (retiredSessions.has(event.sessionId)) return;
   const tab = vncSessions.get(event.sessionId);
-  if (tab) updateTabStatus(tab, event.status, event.message); else queuedVncStatus.set(event.sessionId, event);
+  if (tab) updateTabStatus(tab, event.status, event.message); else { boundSessionQueue(queuedVncStatus); queuedVncStatus.set(event.sessionId, event); }
 }
 function handleWebStatus(event: WebStatusEvent): void {
+  if (retiredSessions.has(event.sessionId)) return;
   const tab = webSessions.get(event.sessionId);
-  if (tab) updateTabStatus(tab, event.status, event.message); else queuedWebStatus.set(event.sessionId, event);
+  if (tab) updateTabStatus(tab, event.status, event.message); else { boundSessionQueue(queuedWebStatus); queuedWebStatus.set(event.sessionId, event); }
 }
 
 function installSwitchToolsDrawer(tab: WorkspaceTab, profile?: ServerProfileSummary): void {

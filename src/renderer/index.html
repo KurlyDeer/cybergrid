@@ -25,67 +25,6 @@
         --danger: #ff6b7a;
       }
 
-      :root[data-theme="monochrome"] {
-        --background: #000000;
-        --panel: #050505;
-        --panel-raised: #101010;
-        --border: #ffffff;
-        --text: #ffffff;
-        --muted: #d0d0d0;
-        --accent: #ffffff;
-        --accent-soft: rgba(255, 255, 255, 0.14);
-        --danger: #ffffff;
-      }
-
-      :root[data-theme="light"] {
-        color-scheme: light;
-        --background: #f4f7fb;
-        --panel: #ffffff;
-        --panel-raised: #eaf0f7;
-        --border: #c5d1df;
-        --text: #172437;
-        --muted: #5e7087;
-        --accent: #087f6a;
-        --accent-soft: rgba(8, 127, 106, 0.13);
-        --danger: #c7354a;
-      }
-
-      :root[data-theme="dracula"] {
-        --background: #282a36;
-        --panel: #21222c;
-        --panel-raised: #343746;
-        --border: #44475a;
-        --text: #f8f8f2;
-        --muted: #a7a3b8;
-        --accent: #bd93f9;
-        --accent-soft: rgba(189, 147, 249, 0.15);
-        --danger: #ff5555;
-      }
-
-      :root[data-theme="solarized-dark"] {
-        --background: #002b36;
-        --panel: #073642;
-        --panel-raised: #0b3b46;
-        --border: #31535c;
-        --text: #eee8d5;
-        --muted: #93a1a1;
-        --accent: #2aa198;
-        --accent-soft: rgba(42, 161, 152, 0.16);
-        --danger: #dc322f;
-      }
-
-      :root[data-theme="monokai"] {
-        --background: #272822;
-        --panel: #1e1f1c;
-        --panel-raised: #3e3d32;
-        --border: #49483e;
-        --text: #f8f8f2;
-        --muted: #a6a69c;
-        --accent: #a6e22e;
-        --accent-soft: rgba(166, 226, 46, 0.14);
-        --danger: #f92672;
-      }
-
       * {
         box-sizing: border-box;
       }
@@ -247,50 +186,50 @@
         background: #0a111a;
       }
 
-      :root[data-theme="monochrome"] .sidebar {
+      :root[data-theme="matrix"] .sidebar {
         background: #000000;
       }
 
-      :root[data-theme="light"] .sidebar {
+      :root[data-theme="snowblind"] .sidebar {
         background: #e9eff6;
       }
 
-      :root[data-theme="light"] .quick-connect-bar input,
-      :root[data-theme="light"] .field input,
-      :root[data-theme="light"] .field select,
-      :root[data-theme="light"] .sftp-path-input,
-      :root[data-theme="light"] .snippets-toolbar input,
-      :root[data-theme="light"] .snippet-form input,
-      :root[data-theme="light"] .snippet-form select,
-      :root[data-theme="light"] .snippet-form textarea,
-      :root[data-theme="light"] .backup-editor textarea,
-      :root[data-theme="light"] .help-topic code {
+      :root[data-theme="snowblind"] .quick-connect-bar input,
+      :root[data-theme="snowblind"] .field input,
+      :root[data-theme="snowblind"] .field select,
+      :root[data-theme="snowblind"] .sftp-path-input,
+      :root[data-theme="snowblind"] .snippets-toolbar input,
+      :root[data-theme="snowblind"] .snippet-form input,
+      :root[data-theme="snowblind"] .snippet-form select,
+      :root[data-theme="snowblind"] .snippet-form textarea,
+      :root[data-theme="snowblind"] .backup-editor textarea,
+      :root[data-theme="snowblind"] .help-topic code {
         background: #ffffff;
       }
 
-      :root[data-theme="light"] .tabs-row,
-      :root[data-theme="light"] .vnc-pane {
+      :root[data-theme="snowblind"] .tabs-row,
+      :root[data-theme="snowblind"] .vnc-pane {
         background: #e9eff6;
       }
 
-      :root[data-theme="light"] .vault-overlay {
+      :root[data-theme="snowblind"] .vault-overlay {
         background: radial-gradient(circle at 50% 42%, var(--accent-soft), transparent 32%), rgba(237, 243, 249, 0.98);
       }
 
-      :root[data-theme="light"] .vault-card,
-      :root[data-theme="light"] .documentation-dialog > .modal-header,
-      :root[data-theme="light"] .documentation-dialog > .modal-actions {
+      :root[data-theme="snowblind"] .vault-card,
+      :root[data-theme="snowblind"] .documentation-dialog > .modal-header,
+      :root[data-theme="snowblind"] .documentation-dialog > .modal-actions {
         background: var(--panel);
       }
 
-      :root[data-theme="light"] .help-topic p,
-      :root[data-theme="light"] .help-topic li,
-      :root[data-theme="light"] .backup-card pre {
+      :root[data-theme="snowblind"] .help-topic p,
+      :root[data-theme="snowblind"] .help-topic li,
+      :root[data-theme="snowblind"] .backup-card pre {
         color: var(--muted);
       }
 
-      :root[data-theme="light"] .node-badge,
-      :root[data-theme="light"] .primary-button {
+      :root[data-theme="snowblind"] .node-badge,
+      :root[data-theme="snowblind"] .primary-button {
         color: #ffffff;
       }
 
@@ -777,10 +716,10 @@
         color: var(--text);
       }
 
-      :root[data-theme="monochrome"] .quick-connect-bar input,
-      :root[data-theme="monochrome"] .field input,
-      :root[data-theme="monochrome"] .field select,
-      :root[data-theme="monochrome"] .sftp-path-input {
+      :root[data-theme="matrix"] .quick-connect-bar input,
+      :root[data-theme="matrix"] .field input,
+      :root[data-theme="matrix"] .field select,
+      :root[data-theme="matrix"] .sftp-path-input {
         background: #000000;
       }
 
@@ -800,7 +739,7 @@
         color: #04120f;
       }
 
-      :root[data-theme="monochrome"] .primary-button {
+      :root[data-theme="matrix"] .primary-button {
         color: #000000;
       }
 
@@ -833,7 +772,7 @@
         background: #0a111a;
       }
 
-      :root[data-theme="monochrome"] .tabs-row {
+      :root[data-theme="matrix"] .tabs-row {
         background: #000000;
       }
 
@@ -2094,7 +2033,7 @@
         box-shadow: 0 26px 90px rgba(0, 0, 0, 0.55);
       }
 
-      :root[data-theme="monochrome"] .vault-card {
+      :root[data-theme="matrix"] .vault-card {
         background: #000000;
       }
 
@@ -2453,6 +2392,7 @@
         .help-nav { position: sticky; z-index: 5; top: 0; grid-template-columns: repeat(2, minmax(0, 1fr)); border-right: 0; border-bottom: 1px solid var(--border); }
       }
     </style>
+    <link rel="stylesheet" href="./themes.css" />
   </head>
   <body>
     <div class="startup-skeleton" id="startup-skeleton" role="status" aria-live="polite">
@@ -2484,13 +2424,14 @@
 
           <nav class="server-tree" id="profile-tree" aria-label="Server folders"></nav>
 
-          <section class="asset-inventory" aria-labelledby="asset-heading">
-            <div class="asset-heading" id="asset-heading"><span>Asset Inventory</span><span class="asset-count" id="asset-count">0</span></div>
-            <div class="asset-list" id="asset-list"></div>
-          </section>
+
         </div>
 
         <div class="sidebar-footer">
+          <details class="asset-inventory">
+            <summary class="asset-heading" id="asset-heading"><span>Asset Inventory</span><span class="asset-count" id="asset-count">0</span></summary>
+            <div class="asset-list" id="asset-list"></div>
+          </details>
           <button class="lock-button" id="lock-button" type="button">Lock credential vault</button>
           <div class="sidebar-hint">Double-click a server to connect</div>
         </div>
@@ -2752,7 +2693,7 @@
           <div class="field"><label for="folder-defaults-icon">Folder / child icon</label><select id="folder-defaults-icon"><option value="">No override</option><option value="windows">Windows Server</option><option value="ubuntu">Ubuntu / Debian</option><option value="redhat">Red Hat / CentOS</option><option value="macos">macOS</option><option value="bare-metal">Bare Metal</option><option value="vmware">VMware</option><option value="hyperv">Hyper-V</option><option value="cisco">Cisco Switch</option><option value="fortinet">Fortinet Firewall</option><option value="router">Router</option><option value="database">Database</option><option value="web-server">Web Server</option><option value="server">Generic Server</option></select></div>
           <div class="field"><label for="folder-defaults-badge">Application badge</label><input id="folder-defaults-badge" maxlength="4" placeholder="ERP" /></div>
           <div class="field color-field"><label for="folder-defaults-color">Indicator color</label><input id="folder-defaults-color" type="color" value="#23d5ab" /></div>
-              <div class="field"><label for="folder-defaults-terminal-theme">Terminal scheme</label><select id="folder-defaults-terminal-theme"><option value="">Global default</option><option value="dark">CyberGrid Default</option><option value="dracula">Dracula</option><option value="solarized-dark">Solarized Dark</option><option value="monokai">Monokai</option><option value="light">CyberGrid Light</option><option value="monochrome">Monochrome</option><option value="custom">Custom colors</option></select></div>
+              <div class="field"><label for="folder-defaults-terminal-theme">Terminal scheme</label><select id="folder-defaults-terminal-theme"><option value="">Global default</option><option value="midnight">Midnight</option><option value="snowblind">Snowblind</option><option value="vampire">Vampire</option><option value="deep-sea">Deep Sea</option><option value="matrix">Matrix</option><option value="neon-synth">Neon Synth</option><option value="custom">Custom palette</option></select></div>
           <div class="field"><label for="folder-defaults-terminal-font">Terminal font</label><input id="folder-defaults-terminal-font" maxlength="200" placeholder="Global default" /></div>
           <div class="field"><label for="folder-defaults-terminal-size">Terminal font size</label><input id="folder-defaults-terminal-size" type="number" min="10" max="28" /></div>
           <div class="field"><label for="folder-defaults-line-height">Terminal line height</label><input id="folder-defaults-line-height" type="number" min="1" max="2" step="0.05" /></div>
@@ -2974,7 +2915,7 @@
               <h3>Appearance / Terminal / SSH</h3>
               <p>Global rendering and transport defaults apply to every open and future terminal session.</p>
               <div class="settings-grid">
-                <div class="field"><label for="theme-mode">Pre-made theme</label><select id="theme-mode"><option value="dark">CyberGrid Default</option><option value="dracula">Dracula</option><option value="solarized-dark">Solarized Dark</option><option value="monokai">Monokai</option><option value="light">CyberGrid Light</option><option value="monochrome">High-contrast monochrome</option><option value="custom">Custom palette</option></select></div>
+                <div class="field"><label for="theme-mode">Pre-made theme</label><select id="theme-mode"><option value="midnight">Midnight</option><option value="snowblind">Snowblind</option><option value="vampire">Vampire</option><option value="deep-sea">Deep Sea</option><option value="matrix">Matrix</option><option value="neon-synth">Neon Synth</option><option value="custom">Custom palette</option></select></div>
                 <div class="checkbox-field"><input id="terminal-cursor-blink" type="checkbox" /><label class="checkbox-label" for="terminal-cursor-blink">Blinking cursor</label></div>
                 <div class="field full-width"><label for="terminal-font-family">Terminal font family</label><input id="terminal-font-family" maxlength="200" /></div>
                 <div class="field"><label for="terminal-font-size">Font size</label><input id="terminal-font-size" type="number" min="10" max="28" step="1" required /></div>

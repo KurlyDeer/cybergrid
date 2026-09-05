@@ -25,6 +25,7 @@ const preferences = new PreferencesController(join(app.getPath("userData"), "pre
 let preferenceSaves = 0;
 let failNextPreferenceSave = false;
 let connects = 0;
+let blockDisconnect = false;
 const writes = [];
 const diagnosticRequests = [];
 const reportOpens = [];
@@ -56,6 +57,7 @@ for (const channel of Object.values(channels)) {
       setTimeout(() => event.sender.send(channels.sshStatus, { sessionId: id, status: "connected" }), 30);
       return id;
     }
+    if (channel === channels.sshDisconnect && blockDisconnect) return new Promise(() => {});
     if (channel === channels.sshSetLogging) return { sessionId: args[0], active: args[1], path: "mock-session.log" };
     return null;
   });
@@ -66,13 +68,24 @@ async function evaluate(code) {
   try { return await window.webContents.executeJavaScript(code, true); }
   catch(error) { console.error("Failed UI test step:", code); throw error; }
 }
+async function captureFrame(path) {
+  let image;
+  const listener = (_event, _dirty, frame) => { image = frame; };
+  window.webContents.on("paint", listener);
+  try {
+    window.webContents.invalidate();
+    await sleep(500);
+    assert(image, "Offscreen renderer produced a frame");
+    writeFileSync(path, image.toPNG());
+  } finally { window.webContents.removeListener("paint", listener); }
+}
 async function until(code) {
   for (let i = 0; i < 100; i++) { if (await evaluate(code)) return; await sleep(50); }
   throw new Error(`Timed out: ${code}`);
 }
 app.whenReady().then(async () => {
   const renderer = readFileSync(join(root, "src/renderer/renderer.ts"), "utf8");
-  buildSync({ stdin: { contents: renderer + "\nwindow.__terminalTest = { tabs, connectQuickSsh, createTerminalTab, closeTab, openSettingsModal, applyHealthStatus, updateBroadcastControls };", loader: "ts", resolveDir: join(root, "src/renderer") }, bundle: true, platform: "browser", format: "iife", outfile: join(root, "build/renderer/renderer-test.js") });
+  buildSync({ stdin: { contents: renderer + "\nwindow.__terminalTest = { tabs, connectQuickSsh, createTerminalTab, closeTab, openSettingsModal, applyHealthStatus, updateBroadcastControls, applySettings, currentSettings, queuedSshData, queuedSshStatus };", loader: "ts", resolveDir: join(root, "src/renderer") }, bundle: true, platform: "browser", format: "iife", outfile: join(root, "build/renderer/renderer-test.js") });
   const html = readFileSync(join(root, "build/renderer/index.html"), "utf8").replace('src="./startup.js"', 'src="./renderer-test.js"');
   writeFileSync(join(root, "build/renderer/renderer-test.html"), html);
   window = new BrowserWindow({ show: false, width: 1280, height: 850, webPreferences: { preload: join(root, "build/main/preload.js"), contextIsolation: true, nodeIntegration: false, backgroundThrottling: false, offscreen: true } });
@@ -91,12 +104,12 @@ app.whenReady().then(async () => {
     if(color) assert.equal(result.color,color);
     if(state==="online") assert.match(result.title,/8006.*12 ms/);
   }
-  await evaluate('window.__terminalTest.openSettingsModal(); document.getElementById("theme-mode").value="dracula"; document.getElementById("apply-settings").click()');
+  await evaluate('window.__terminalTest.openSettingsModal(); document.getElementById("theme-mode").value="vampire"; document.getElementById("apply-settings").click()');
   await until('!document.getElementById("settings-modal").open');
   assert.equal(preferenceSaves, 1);
   assert.equal(preferences.get().terminalLineHeight, 1.18);
-  assert.equal(await evaluate('document.documentElement.dataset.theme'), "dracula");
-  assert.equal((await new PreferencesController(join(app.getPath("userData"), "preferences.json")).load()).theme, "dracula");
+  assert.equal(await evaluate('document.documentElement.dataset.theme'), "vampire");
+  assert.equal((await new PreferencesController(join(app.getPath("userData"), "preferences.json")).load()).theme, "vampire");
   await evaluate('window.__terminalTest.openSettingsModal(); document.getElementById("terminal-line-height").value="1.185"; document.getElementById("apply-settings").click()');
   assert.equal(preferenceSaves, 1);
   assert.match(await evaluate('document.getElementById("settings-error").textContent'), /increments of 0.01/);
@@ -108,12 +121,12 @@ app.whenReady().then(async () => {
   failNextPreferenceSave = true;
   await evaluate('window.__terminalTest.openSettingsModal(); document.getElementById("theme-mode").value="light"; document.getElementById("apply-settings").click()');
   await until('document.getElementById("settings-error").textContent.includes("Simulated disk failure")');
-  assert.equal(await evaluate('document.documentElement.dataset.theme'), "dracula");
+  assert.equal(await evaluate('document.documentElement.dataset.theme'), "vampire");
   await evaluate('document.getElementById("settings-modal").close()');
   await sleep(300);
   window.webContents.invalidate();
   await sleep(100);
-  writeFileSync(join(root, "build/welcome-test.png"), (await window.webContents.capturePage()).toPNG());
+  await captureFrame(join(root, "build/welcome-test.png"));
   await evaluate('window.__terminalTest.connectQuickSsh({host:"test.invalid",port:22,username:"test",password:""})');
   await until('[...window.__terminalTest.tabs.values()].some(t=>t.kind==="ssh" && t.status==="connected")');
   await evaluate('window.testTab=[...window.__terminalTest.tabs.values()].find(t=>t.kind==="ssh"); window.testTerminal=window.testTab.terminal; window.testTab.terminal.write("hello-output\\r\\n"); window.testTab.setSwitchToolsOpen(true); window.testTab.switchToolsSelect.value="cisco"; window.testTab.switchToolsSelect.dispatchEvent(new Event("change"))');
@@ -123,7 +136,7 @@ app.whenReady().then(async () => {
   assert.equal(await evaluate('window.testTab.terminalSurfaceElement.getBoundingClientRect().right <= document.querySelector(".switch-tools-drawer").getBoundingClientRect().left + 1'), true);
   window.webContents.invalidate();
   await sleep(100);
-  writeFileSync(join(root, "build/session-tools-test.png"), (await window.webContents.capturePage()).toPNG());
+  await captureFrame(join(root, "build/session-tools-test.png"));
   await evaluate('window.testTab.sessionLogButton.click()');
   await until('window.testTab.sessionLogActive === true');
   await evaluate('window.testTab.sessionLogButton.click()');
@@ -144,7 +157,15 @@ app.whenReady().then(async () => {
   assert.equal(writes.some(({ data }) => data === " "), false);
   window.webContents.send(channels.sshStatus, { sessionId: "test-session-2", status: "disconnected" });
   await until('Boolean(window.testTab.reconnectKey)');
-  await evaluate('window.__terminalTest.closeTab(window.testTab.id)');
+  blockDisconnect = true;
+  await evaluate('window.disposeCount=0;const originalDispose=window.testTerminal.dispose.bind(window.testTerminal);window.testTerminal.dispose=()=>{window.disposeCount++;originalDispose()};window.__terminalTest.closeTab(window.testTab.id)');
+  assert.equal(await evaluate('window.disposeCount'), 1);
+  assert.equal(await evaluate('window.testTab.terminal === undefined'), true);
+  window.webContents.send(channels.sshData, {sessionId:"test-session-2",data:"late discarded output"});
+  window.webContents.send(channels.sshStatus, {sessionId:"test-session-2",status:"disconnected"});
+  await sleep(50);
+  assert.equal(await evaluate('window.__terminalTest.queuedSshData.has("test-session-2") || window.__terminalTest.queuedSshStatus.has("test-session-2")'),false);
+  blockDisconnect = false;
   assert.equal(await evaluate('window.__terminalTest.tabs.has(window.testTab.id)'), false);
   assert.equal(connects, 2);
   // Mixed terminal protocols, excluding inactive channels and local login prompts.
@@ -216,7 +237,8 @@ app.whenReady().then(async () => {
   window.webContents.sendInputEvent({type:"mouseDown",x:2,y:2,button:"left",clickCount:1});
   window.webContents.sendInputEvent({type:"mouseUp",x:2,y:2,button:"left",clickCount:1});
   await until('!document.getElementById("global-diagnostics").open');
-  console.log("PASS: diagnostics tabs/tooltips/safe output/responsiveness, reviewed bug report flow (no network), plus settings, themes, logos, broadcast and terminal regressions");
+  await require("./test-v138-ui.cjs")({window, channels, evaluate, until, sleep, root});
+  console.log("PASS: v1.3.8 themed updater modals, six themes, sidebar layout, immediate disposal, plus diagnostics/settings/broadcast/terminal regressions");
   window.destroy();
   app.exit(0);
 }).catch((error) => { console.error(error); app.exit(1); });

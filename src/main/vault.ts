@@ -1,3 +1,4 @@
+import { normalizeThemeName } from "../shared/themes";
 import {
   createCipheriv,
   createDecipheriv,
@@ -364,8 +365,7 @@ function optionalColor(value: unknown, field: string): string | undefined {
 function parseTerminalOverrides(value: unknown, field: string): TerminalAppearanceOverrides | undefined {
   if (value === undefined) return undefined;
   if (!isRecord(value)) throw new Error(`Vault field ${field} is invalid.`);
-  const theme = value.theme === "dark" || value.theme === "light" || value.theme === "monochrome" || value.theme === "custom"
-    ? value.theme : undefined;
+  const theme = normalizeThemeName(value.theme);
   const fontSize = value.fontSize === undefined ? undefined : Number(value.fontSize);
   const lineHeight = value.lineHeight === undefined ? undefined : Number(value.lineHeight);
   if (fontSize !== undefined && (!Number.isInteger(fontSize) || fontSize < 10 || fontSize > 28)) {

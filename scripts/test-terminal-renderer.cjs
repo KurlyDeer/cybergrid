@@ -28,7 +28,8 @@ const { build } = require("esbuild");
     if (scenario === "context-loss") loss();
     assert(loaded.at(-1) instanceof (scenario === "webgl" ? FakeWebgl : FakeCanvas));
     handle.dispose();
-    assert(disposed >= 1);
+    handle.dispose();
+    assert.equal(disposed, 1, "WebGL resources are released exactly once");
   }
   console.log("PASS: WebGL primary renderer, Canvas on activation failure, Canvas on GPU context loss, disposal");
 })().catch((error) => { console.error(error); process.exitCode = 1; });

@@ -33,6 +33,7 @@ interface RdpSession {
   bounds: RdpBounds;
   visible: boolean;
   hostReady: boolean;
+  geometryTimer?: ReturnType<typeof setTimeout>;
   closed: boolean;
 }
 
@@ -213,14 +214,22 @@ export class RdpController {
   setBounds(sessionId: string, bounds: RdpBounds): void {
     const session = this.sessions.get(sessionId);
     if (!session || session.closed) return;
+    if (session.bounds.x === bounds.x && session.bounds.y === bounds.y &&
+        session.bounds.width === bounds.width && session.bounds.height === bounds.height) return;
     session.bounds = bounds;
-    this.applyGeometry(session);
+    clearTimeout(session.geometryTimer);
+    session.geometryTimer = setTimeout(() => {
+      session.geometryTimer = undefined;
+      this.applyGeometry(session);
+    }, 150);
   }
 
   setVisible(sessionId: string, visible: boolean): void {
     const session = this.sessions.get(sessionId);
     if (!session || session.closed) return;
+    if (session.visible === visible) return;
     session.visible = visible;
+    clearTimeout(session.geometryTimer);
     this.applyGeometry(session);
   }
 
@@ -292,7 +301,8 @@ export class RdpController {
   }
 
   private applyGeometry(session: RdpSession): void {
-    if (!session.hostReady || !session.native || !session.windowHandle) return;
+    if (session.closed || !session.hostReady || !session.native || !session.windowHandle) return;
+    clearTimeout(session.geometryTimer);
     session.native.move(session.windowHandle, session.bounds);
     session.native.setVisible(session.windowHandle, session.visible);
   }
@@ -416,6 +426,7 @@ export class RdpController {
       session.sender.send(IPC_CHANNELS.rdpStatus, payload);
     }
     session.closed = true;
+    clearTimeout(session.geometryTimer);
     this.sessions.delete(session.id);
     if (terminate) {
       try {

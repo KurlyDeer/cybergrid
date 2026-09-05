@@ -85,6 +85,7 @@ async function bundleApplication() {
 
   await Promise.all([
     copyFile(join(sourceRoot, "renderer", "index.html"), join(rendererOutput, "index.html")),
+    copyFile(join(sourceRoot, "renderer", "styles", "themes.css"), join(rendererOutput, "themes.css")),
     copyFile(join(sourceRoot, "renderer", "diagnostics", "diagnostics.css"), join(rendererOutput, "diagnostics.css")),
     copyFile(join(sourceRoot, "renderer", "launcher.html"), join(rendererOutput, "launcher.html")),
     copyFile(join(sourceRoot, "renderer", "detached.html"), join(rendererOutput, "detached.html")),

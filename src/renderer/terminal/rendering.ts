@@ -10,6 +10,7 @@ export function installTerminalRenderer(terminal: Terminal): IDisposable {
   let canvas: CanvasAddon | undefined;
   const fallback = (): void => {
     contextLoss?.dispose();
+    contextLoss = undefined;
     webgl?.dispose();
     webgl = undefined;
     if (disposed || canvas) return;
@@ -30,9 +31,13 @@ export function installTerminalRenderer(terminal: Terminal): IDisposable {
     fallback();
   }
   return { dispose: () => {
+    if (disposed) return;
     disposed = true;
     contextLoss?.dispose();
     webgl?.dispose();
     canvas?.dispose();
+    contextLoss = undefined;
+    webgl = undefined;
+    canvas = undefined;
   } };
 }

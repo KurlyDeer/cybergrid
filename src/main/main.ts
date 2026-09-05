@@ -1,3 +1,6 @@
+import { pathToFileURL } from "node:url";
+import { normalizeThemeName } from "../shared/themes";
+import { isTrustedRenderer, type TrustedRenderer } from "./ipc-security";
 import {
   app,
   BrowserWindow,
@@ -272,6 +275,7 @@ async function requestApplicationQuit(parent = mainWindow): Promise<void> {
 }
 
 async function checkForUpdatesFromMenu(): Promise<void> {
+  showMainWindow();
   await updaterController.checkForUpdates(true);
 }
 
@@ -281,14 +285,7 @@ function installApplicationMenu(): void {
     quit: () => void requestApplicationQuit(),
     toggleFullscreen: toggleMainWindowFullscreen,
     exitFullscreen: exitMainWindowFullscreen,
-    checkForUpdates: () => void checkForUpdatesFromMenu().catch((error: unknown) => {
-      void showMainMessageBox({
-        type: "error",
-        title: "CyberGrid Update Check",
-        message: "CyberGrid could not check for updates.",
-        detail: errorStack(error),
-      });
-    }),
+    checkForUpdates: () => void checkForUpdatesFromMenu().catch((error) => console.error("Update check failed", error)),
     showAbout: () => void showMainMessageBox({
       type: "info",
       title: "About CyberGrid",
@@ -368,6 +365,11 @@ function hardenedWebPreferences(): WebPreferences {
   return {
     preload: applicationFile("main", "preload.js"),
     contextIsolation: true,
+    webSecurity: true,
+    allowRunningInsecureContent: false,
+    nodeIntegrationInSubFrames: false,
+    nodeIntegrationInWorker: false,
+    webviewTag: false,
     nodeIntegration: false,
     sandbox: true,
     enableRemoteModule: false,
@@ -568,7 +570,15 @@ function createMainWindow(): BrowserWindow {
   });
   window.on("enter-full-screen", () => syncFullscreenWindowChrome(window));
   window.on("leave-full-screen", () => syncFullscreenWindowChrome(window));
-  const refreshOwnedRdpWindows = (): void => rdpController?.refreshForWindow(window);
+  let rdpResizeTimer: ReturnType<typeof setTimeout> | undefined;
+  const refreshOwnedRdpWindows = (): void => {
+    clearTimeout(rdpResizeTimer);
+    rdpResizeTimer = setTimeout(() => {
+      rdpResizeTimer = undefined;
+      if (!window.isDestroyed()) rdpController?.refreshForWindow(window);
+    }, 150);
+  };
+  window.once("closed", () => clearTimeout(rdpResizeTimer));
   window.on("move", refreshOwnedRdpWindows);
   window.on("resize", refreshOwnedRdpWindows);
   window.on("restore", refreshOwnedRdpWindows);
@@ -750,11 +760,16 @@ function registerGlobalApplicationShortcuts(): void {
 }
 
 function isTrustedSender(event: IpcMainEvent | IpcMainInvokeEvent): boolean {
-  return Boolean(
-    (mainWindow && event.sender === mainWindow.webContents) ||
-    (quickLauncherWindow && event.sender === quickLauncherWindow.webContents) ||
-    [...detachedWindows.values()].some((entry) => event.sender === entry.window.webContents),
-  );
+  const renderers: TrustedRenderer[] = [];
+  const add = (window: BrowserWindow | null, page: string): void => {
+    if (window && !window.isDestroyed()) renderers.push({
+      contents: window.webContents, url: pathToFileURL(applicationFile("renderer", page)).href,
+    });
+  };
+  add(mainWindow, "index.html");
+  add(quickLauncherWindow, "launcher.html");
+  for (const entry of detachedWindows.values()) add(entry.window, "detached.html");
+  return isTrustedRenderer(event, renderers);
 }
 
 function assertTrustedSender(event: IpcMainInvokeEvent): void {
@@ -1650,11 +1665,8 @@ function normalizeTerminalOverrides(value: unknown): TerminalAppearanceOverrides
   if (value === undefined || value === null) return undefined;
   if (!isRecord(value)) throw new Error("Invalid terminal appearance override.");
   const result: TerminalAppearanceOverrides = {};
-  if (value.theme === "dark" || value.theme === "light" || value.theme === "monochrome" ||
-      value.theme === "dracula" || value.theme === "solarized-dark" || value.theme === "monokai" ||
-      value.theme === "custom") {
-    result.theme = value.theme;
-  }
+  const theme = normalizeThemeName(value.theme);
+  if (theme) result.theme = theme;
   result.fontFamily = readString(value.fontFamily, "Override font family", {
     maxLength: 200,
     singleLine: true,
@@ -1730,11 +1742,8 @@ function normalizePreferences(value: unknown): AppPreferences {
   if (!Number.isInteger(healthCheckIntervalSeconds) || healthCheckIntervalSeconds < 10 || healthCheckIntervalSeconds > 600) {
     throw new Error("TCP health interval must be between 10 and 600 seconds.");
   }
-  const theme = value.theme;
-  if (theme !== "dark" && theme !== "light" && theme !== "monochrome" && theme !== "dracula" &&
-      theme !== "solarized-dark" && theme !== "monokai" && theme !== "custom") {
-    throw new Error("Invalid terminal theme.");
-  }
+  const theme = normalizeThemeName(value.theme);
+  if (!theme) throw new Error("Invalid terminal theme.");
   const proxyMode = value.proxyMode;
   if (proxyMode !== "system" && proxyMode !== "direct" && proxyMode !== "manual") {
     throw new Error("Invalid proxy mode.");

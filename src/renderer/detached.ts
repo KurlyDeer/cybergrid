@@ -38,14 +38,21 @@ const fitAddon = new FitAddon();
 terminal.loadAddon(fitAddon);
 terminal.open(terminalHost);
 const rendererHandle = installTerminalRenderer(terminal);
-window.addEventListener("beforeunload", () => { rendererHandle.dispose(); terminal.dispose(); });
+const subscriptions: Array<() => void> = [];
+let disposed = false;
+let layoutFrame = 0;
 
 let descriptor: DetachedSessionDescriptor | undefined;
 const bufferedData: string[] = [];
+let bufferedLength = 0;
 
 function handleData(event: SshDataEvent | StreamDataEvent | SerialDataEvent | LocalTerminalDataEvent): void {
   if (descriptor?.sessionId === event.sessionId) terminal.write(event.data);
-  else if (!descriptor && bufferedData.join("").length < 1_000_000) bufferedData.push(event.data);
+  else if (!descriptor && bufferedLength < 1_000_000) {
+    const chunk = event.data.slice(0, 1_000_000 - bufferedLength);
+    bufferedData.push(chunk);
+    bufferedLength += chunk.length;
+  }
 }
 
 function handleStatus(event: SshStatusEvent | StreamStatusEvent | SerialStatusEvent | LocalTerminalStatusEvent | RdpStatusEvent): void {
@@ -62,16 +69,16 @@ function updateRdpBounds(): void {
   window.cybergrid.rdp.setVisible(descriptor.sessionId, true);
 }
 
-window.cybergrid.ssh.onData(handleData);
-window.cybergrid.ssh.onStatus(handleStatus);
-window.cybergrid.stream.onData(handleData);
-window.cybergrid.stream.onStatus(handleStatus);
-window.cybergrid.serial.onData(handleData);
-window.cybergrid.serial.onStatus(handleStatus);
-window.cybergrid.local.onData(handleData);
-window.cybergrid.local.onStatus(handleStatus);
-window.cybergrid.rdp.onStatus(handleStatus);
-window.cybergrid.system.onDetachedSession((session) => {
+subscriptions.push(window.cybergrid.ssh.onData(handleData));
+subscriptions.push(window.cybergrid.ssh.onStatus(handleStatus));
+subscriptions.push(window.cybergrid.stream.onData(handleData));
+subscriptions.push(window.cybergrid.stream.onStatus(handleStatus));
+subscriptions.push(window.cybergrid.serial.onData(handleData));
+subscriptions.push(window.cybergrid.serial.onStatus(handleStatus));
+subscriptions.push(window.cybergrid.local.onData(handleData));
+subscriptions.push(window.cybergrid.local.onStatus(handleStatus));
+subscriptions.push(window.cybergrid.rdp.onStatus(handleStatus));
+subscriptions.push(window.cybergrid.system.onDetachedSession((session) => {
   descriptor = session;
   document.title = `${session.label} — CyberGrid`;
   title.textContent = session.label;
@@ -79,7 +86,8 @@ window.cybergrid.system.onDetachedSession((session) => {
   status.textContent = "Connected";
   document.body.classList.toggle("rdp", session.protocol === "rdp");
   for (const chunk of bufferedData.splice(0)) terminal.write(chunk);
-  requestAnimationFrame(() => {
+  bufferedLength = 0;
+  layoutFrame = requestAnimationFrame(() => {
     if (session.protocol === "rdp") updateRdpBounds();
     else {
       fitAddon.fit();
@@ -88,7 +96,7 @@ window.cybergrid.system.onDetachedSession((session) => {
       if (session.protocol === "local") window.cybergrid.local.resize(session.sessionId, terminal.cols, terminal.rows);
     }
   });
-});
+}));
 
 terminal.onData((data) => {
   if (!descriptor) return;
@@ -112,4 +120,15 @@ const resizeObserver = new ResizeObserver(() => {
   else fitAddon.fit();
 });
 resizeObserver.observe(document.body);
+window.addEventListener("beforeunload", () => {
+  if (disposed) return;
+  disposed = true;
+  resizeObserver.disconnect();
+  cancelAnimationFrame(layoutFrame);
+  for (const unsubscribe of subscriptions.splice(0)) unsubscribe();
+  bufferedData.length = 0;
+  bufferedLength = 0;
+  rendererHandle.dispose();
+  terminal.dispose();
+});
 closeButton.addEventListener("click", () => window.close());

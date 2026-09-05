@@ -1,3 +1,4 @@
+import { normalizeThemeName } from "../shared/themes";
 import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -20,7 +21,7 @@ export const DEFAULT_APP_PREFERENCES: AppPreferences = {
   masterPasswordEnabled: false,
   autoLockMinutes: 15,
   clipboardClearSeconds: 30,
-  theme: "dark",
+  theme: "midnight",
   fontFamily: "Cascadia Mono, JetBrains Mono, Consolas, monospace",
   fontSize: 14,
   terminalLineHeight: 1.18,
@@ -94,10 +95,7 @@ function parseStoredPreferences(value: unknown): AppPreferences {
       Number(preferences.clipboardClearSeconds) >= 0 && Number(preferences.clipboardClearSeconds) <= 300
       ? Number(preferences.clipboardClearSeconds)
       : DEFAULT_APP_PREFERENCES.clipboardClearSeconds,
-    theme: preferences.theme === "light" || preferences.theme === "monochrome" || preferences.theme === "dracula" ||
-      preferences.theme === "solarized-dark" || preferences.theme === "monokai" || preferences.theme === "custom"
-      ? preferences.theme
-      : "dark",
+    theme: normalizeThemeName(preferences.theme) ?? "midnight",
     fontFamily: storedString(
       preferences.fontFamily,
       DEFAULT_APP_PREFERENCES.fontFamily,

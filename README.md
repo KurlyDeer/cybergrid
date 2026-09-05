@@ -14,6 +14,15 @@
 
 CyberGrid consolidates the daily tools of a senior systems administrator into one focused, high-density desktop workspace. Its compact mRemote-style connection tree, edge-to-edge session tabs, encrypted connection management, file transfer, discovery, IPAM, diagnostics, automation, and operational documentation are designed for fast keyboard-driven administration without requiring a central cloud service.
 
+## Version 1.3.8 — Themed UI & Resource Hardening
+
+- **In-app updater dialogs:** update availability, restart, up-to-date, development-build and interactive error messages follow the active palette. Passive update notices disappear after three seconds. Native file pickers, exit confirmations and emergency crash dialogs remain native.
+- **Six presets:** Midnight, Snowblind, Vampire, Deep Sea, Matrix and Neon Synth, plus a separate custom palette. Older saved names migrate automatically (including Monokai → Neon Synth); fonts and custom colors are retained.
+- **Docked sidebar footer:** collapsible Asset Inventory and Vault Lock stay below the independently scrolling connection tree.
+- **Lifecycle and IPC hardening:** only known top-level local pages can invoke the typed preload bridge. Terminal/GPU resources are disposed before disconnect IPC completes; detached listeners are removed, late closed-session events are discarded, and pre-attachment queues are bounded. RDP geometry changes coalesce over 150 ms.
+
+See [the v1.3.8 audit notes](docs/AUDIT-v1.3.8.md) for tests, scope and remaining limitations. CyberGrid uses vanilla TypeScript—not React—and this update adds no UI framework.
+
 ## Why CyberGrid
 
 Traditional administrator workflows often span mRemoteNG for connection trees, PuTTY for SSH, separate SFTP and serial clients, browser bookmarks, spreadsheets for IP allocation, and scripts for repetitive operations. CyberGrid provides one local-first workspace for those responsibilities:

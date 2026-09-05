@@ -35,7 +35,7 @@ function load(file) {
     for(const height of [0.5,1.18,3]) {
       await preferences.save({...defaults,terminalLineHeight:height,theme:"dracula"});
       const loaded=await new PreferencesController(path).load();
-      assert.equal(loaded.terminalLineHeight,height); assert.equal(loaded.theme,"dracula");
+      assert.equal(loaded.terminalLineHeight,height); assert.equal(loaded.theme,"vampire");
     }
     const old=JSON.parse(await readFile(path,"utf8")); old.version=3; old.preferences.healthCheckIntervalSeconds=30;
     await writeFile(path,JSON.stringify(old));
