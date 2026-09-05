@@ -3,6 +3,7 @@ import { createServer, type Server } from "node:net";
 import type { WebContents } from "electron";
 import { AuditController, type AuditSessionContext } from "./audit";
 import { saveConfigBackup } from "./backup/config-backup";
+import { SessionLog } from "./session-log";
 import {
   IPC_CHANNELS,
   type SftpDirectoryListing,
@@ -29,8 +30,12 @@ interface SshSession {
   sftpPromise?: Promise<SFTPWrapper>;
   forwardServer?: Server;
   closed: boolean;
-  history: string;
+  history: string[];
+  historyLength: number;
   modelProbeStarted: boolean;
+  displayName: string;
+  log?: SessionLog;
+  logStarting?: Promise<SessionLog>;
 }
 
 let ssh2ModulePromise: Promise<typeof import("ssh2")> | undefined;
@@ -43,6 +48,7 @@ function loadSsh2(): Promise<typeof import("ssh2")> {
 export class SshController {
   private readonly sessions = new Map<string, SshSession>();
   private readonly observedSenders = new WeakSet<WebContents>();
+  private readonly pendingLogs = new Set<Promise<void>>();
 
   constructor(
     private readonly audit: AuditController,
@@ -64,8 +70,10 @@ export class SshController {
       client,
       sender,
       closed: false,
-      history: "",
+      history: [],
+      historyLength: 0,
       modelProbeStarted: false,
+      displayName: auditContext.displayName,
     };
 
     this.sessions.set(sessionId, session);
@@ -102,6 +110,9 @@ export class SshController {
           });
           stream.on("close", () => {
             this.closeSession(session, "disconnected", "Remote shell closed.");
+          });
+          stream.on("end", () => {
+            this.closeSession(session, "disconnected", "Remote shell ended.");
           });
 
           this.emitStatus(session, "connected", `Connected to ${config.host}.`);
@@ -198,6 +209,33 @@ export class SshController {
     this.getOpenSession(sessionId).stream?.write(data);
   }
 
+  async setLogging(sessionId: string, enabled: boolean, directory: string, sender: WebContents) {
+    const session = this.getOpenSession(sessionId);
+    if (session.sender !== sender) throw new Error("Session belongs to another window.");
+    if (session.logStarting) await session.logStarting;
+    if (enabled && !session.log) {
+      session.logStarting = SessionLog.start(directory, session.displayName, (error) => {
+        if (!session.sender.isDestroyed()) session.sender.send(IPC_CHANNELS.sshLogStatus, { sessionId, active: false, error });
+        session.log = undefined;
+      });
+      try {
+        const log = await session.logStarting;
+        if (session.closed) { await log.stop(); throw new Error("SSH session closed while starting the log."); }
+        session.log = log;
+      } finally { session.logStarting = undefined; }
+    }
+    if (!enabled) {
+      const log = session.log;
+      session.log = undefined;
+      await log?.stop();
+    }
+    return { sessionId, active: Boolean(session.log), path: session.log?.path };
+  }
+
+  async flushLogs(): Promise<void> {
+    await Promise.allSettled([...this.pendingLogs]);
+  }
+
   resize(sessionId: string, cols: number, rows: number): void {
     this.getOpenSession(sessionId).stream?.setWindow(rows, cols, 0, 0);
   }
@@ -206,7 +244,7 @@ export class SshController {
     const session = this.sessions.get(sessionId);
     if (!session || session.closed) return false;
     session.sender = sender;
-    if (session.history) sender.send(IPC_CHANNELS.sshData, { sessionId, data: session.history });
+    if (session.historyLength) sender.send(IPC_CHANNELS.sshData, { sessionId, data: session.history.join("") });
     this.emitStatus(session, session.stream ? "connected" : "connecting", "Session moved to a detached window.");
     return true;
   }
@@ -521,7 +559,7 @@ export class SshController {
   private async detectSwitchModel(session: SshSession): Promise<void> {
     if (session.modelProbeStarted || session.closed) return;
     session.modelProbeStarted = true;
-    const bannerIdentity = this.parseSwitchIdentity(session.history);
+    const bannerIdentity = this.parseSwitchIdentity(session.history.join(""));
     if (bannerIdentity) {
       this.emitSwitchModel(session, bannerIdentity.vendor, bannerIdentity.model);
       return;
@@ -583,9 +621,24 @@ export class SshController {
   }
 
   private emitData(session: SshSession, data: string | Buffer): void {
+    session.log?.write(data);
     this.audit.recordOutput(session.id, data);
     const text = Buffer.isBuffer(data) ? data.toString("utf8") : data;
-    session.history = `${session.history}${text}`.slice(-2_000_000);
+    const tail = session.history.length - 1;
+    if (tail >= 0 && session.history[tail].length + text.length <= 16_384) session.history[tail] += text;
+    else session.history.push(text);
+    session.historyLength += text.length;
+    while (session.historyLength > 2_000_000) {
+      const excess = session.historyLength - 2_000_000;
+      const first = session.history[0];
+      if (first.length <= excess) {
+        session.history.shift();
+        session.historyLength -= first.length;
+      } else {
+        session.history[0] = first.slice(excess);
+        session.historyLength -= excess;
+      }
+    }
     if (!session.closed && !session.sender.isDestroyed()) {
       session.sender.send(IPC_CHANNELS.sshData, {
         sessionId: session.id,
@@ -641,6 +694,13 @@ export class SshController {
     }
 
     session.closed = true;
+    const pendingLog = (async () => {
+      const log = session.log ?? await session.logStarting?.catch(() => undefined);
+      session.log = undefined;
+      await log?.stop();
+    })();
+    this.pendingLogs.add(pendingLog);
+    void pendingLog.finally(() => this.pendingLogs.delete(pendingLog));
     this.sessions.delete(session.id);
     this.emitStatus(session, status, message);
     this.audit.endSession(session.id, `${status}: ${message}`);

@@ -62,6 +62,9 @@ const IPC_CHANNELS: typeof import("../shared/ipc").IPC_CHANNELS = {
   sshData: "cybergrid:ssh:data",
   sshStatus: "cybergrid:ssh:status",
   sshModelDetected: "cybergrid:ssh:model-detected",
+  sshSetLogging: "cybergrid:ssh:set-logging",
+  sshLogStatus: "cybergrid:ssh:log-status",
+  openProjectLink: "cybergrid:system:open-project-link",
   sftpList: "cybergrid:sftp:list",
   sftpUpload: "cybergrid:sftp:upload",
   sftpDownload: "cybergrid:sftp:download",
@@ -196,6 +199,12 @@ const api: CyberGridApi = {
     },
     quickBackup: (sessionId, profileId) =>
       ipcRenderer.invoke(IPC_CHANNELS.sshQuickBackup, sessionId, profileId),
+    setLogging: (sessionId, enabled) => ipcRenderer.invoke(IPC_CHANNELS.sshSetLogging, sessionId, enabled),
+    onLogStatus: (listener) => {
+      const handler = (_event: IpcRendererEvent, payload: import("../shared/ipc").SessionLogStatus) => listener(payload);
+      ipcRenderer.on(IPC_CHANNELS.sshLogStatus, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.sshLogStatus, handler);
+    },
     onData: (listener) => {
       const handler = (_event: IpcRendererEvent, payload: SshDataEvent) => listener(payload);
       ipcRenderer.on(IPC_CHANNELS.sshData, handler);
@@ -424,6 +433,7 @@ const api: CyberGridApi = {
     selectPrivateKey: () => ipcRenderer.invoke(IPC_CHANNELS.selectPrivateKey),
     selectBackupDirectory: (currentPath?: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.selectBackupDirectory, currentPath),
+    openProjectLink: (destination) => ipcRenderer.invoke(IPC_CHANNELS.openProjectLink, destination),
     captureScreenshot: (request: ScreenshotRequest) => ipcRenderer.invoke(IPC_CHANNELS.sessionCaptureScreenshot, request),
     loadWorkspace: () => ipcRenderer.invoke(IPC_CHANNELS.workspaceLoad),
     saveWorkspace: (snapshot: WorkspaceSnapshot) => ipcRenderer.invoke(IPC_CHANNELS.workspaceSave, snapshot),

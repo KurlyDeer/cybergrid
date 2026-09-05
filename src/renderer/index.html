@@ -2389,7 +2389,20 @@
       .switch-tools-header { position: sticky; z-index: 1; top: 0; display: flex; min-height: 36px; align-items: center; justify-content: space-between; padding: 6px 8px; border-bottom: 1px solid var(--border); background: var(--panel); }
       .switch-tools-header strong { font-size: 11px; }
       .switch-tools-body { display: grid; min-height: 0; gap: 12px; padding: 10px; overflow-y: auto; }
-      .switch-model-badge { position: absolute; z-index: 8; top: 5px; left: 6px; max-width: min(340px, 55%); overflow: hidden; padding: 3px 7px; border: 1px solid color-mix(in srgb, var(--accent) 38%, var(--border)); border-radius: 3px; background: color-mix(in srgb, var(--panel) 94%, transparent); color: var(--muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; pointer-events: none; }
+      .welcome-pane { overflow: auto; }
+      .welcome-page { width: min(100%, 980px); margin: auto; padding: clamp(20px, 5vw, 64px); }
+      .welcome-heading { max-width: 650px; }
+      .welcome-eyebrow { margin-top: 22px; color: var(--accent); font-size: 10px; letter-spacing: .16em; }
+      .welcome-page h1 { margin: 12px 0; font-size: clamp(26px, 3vw, 42px); font-weight: 600; letter-spacing: -.04em; }
+      .welcome-subtitle { font-size: 17px; }
+      .welcome-page p { color: var(--muted); line-height: 1.65; }
+      .welcome-actions { display: flex; flex-wrap: wrap; gap: 10px; margin: 28px 0 36px; }
+      .welcome-actions button { min-height: 38px; padding: 8px 14px; }
+      .welcome-features { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 22px; }
+      .welcome-features article { border-top: 1px solid var(--border); padding-top: 16px; font-size: 12px; }
+      .welcome-features h2 { font-size: 14px; font-weight: 600; }
+      .welcome-features kbd { color: var(--accent); font-size: 11px; }
+      .welcome-features span { color: var(--muted); font-size: 11px; }
       .switch-tools-model { margin: 0; padding: 6px 7px; border: 1px solid var(--border); border-radius: 4px; color: var(--accent); font-size: 10px; font-weight: 700; }
       .switch-tools-device-os { display: grid; gap: 4px; }
       .switch-tools-device-os label { color: var(--muted); font-size: 9px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
@@ -2950,6 +2963,7 @@
               <div class="checkbox-field"><input id="confirm-exit-active-sessions" type="checkbox" /><label class="checkbox-label" for="confirm-exit-active-sessions">Confirm on exit with active sessions</label></div>
               <div class="checkbox-field"><input id="compact-tree-view" type="checkbox" /><label class="checkbox-label" for="compact-tree-view">Compact Tree View (22px rows, full server names)</label></div>
               <div class="checkbox-field"><input id="single-instance" type="checkbox" checked disabled /><label class="checkbox-label" for="single-instance">Enforce a single application instance</label></div>
+              <div class="field full-width"><label for="backup-directory">Backup Directory Path</label><div class="path-picker"><input id="backup-directory" maxlength="2048" placeholder="Documents/CyberGrid_Backups" /><button class="secondary-button" id="browse-backup-directory" type="button">Browse...</button></div><span class="field-hint">Automated switch snapshots are written here as timestamped .cfg files. Save changes to apply.</span></div>
             </section>
             <section class="settings-panel" data-settings-panel="terminal" hidden>
               <h3>Appearance / Terminal / SSH</h3>
@@ -3015,7 +3029,6 @@
               <div class="settings-grid">
                 <div class="field"><label for="health-check-interval">Ping interval (seconds)</label><input id="health-check-interval" type="number" min="10" max="600" /></div>
                 <div class="field"><label for="tool-powershell-path">PowerShell</label><input id="tool-powershell-path" maxlength="2048" placeholder="powershell.exe" /></div>
-                <div class="field full-width"><label for="backup-directory">Backup directory</label><div class="path-picker"><input id="backup-directory" maxlength="2048" placeholder="%USERPROFILE%\\Documents\\CyberGrid_Backups" /><button class="secondary-button" id="browse-backup-directory" type="button">Browse</button></div><span class="field-hint">Automated switch snapshots are written here as timestamped .cfg files.</span></div>
                 <div class="field full-width"><label for="tool-wireshark-path">Wireshark executable</label><input id="tool-wireshark-path" maxlength="2048" /></div>
                 <div class="field full-width"><label for="tool-winscp-path">WinSCP executable</label><input id="tool-winscp-path" maxlength="2048" /></div>
                 <div class="field full-width"><label for="tool-nmap-path">Nmap executable</label><input id="tool-nmap-path" maxlength="2048" /></div>

@@ -6,6 +6,7 @@ import {
   ipcMain,
   Menu,
   session,
+  shell,
   type MessageBoxOptions,
   type IpcMainEvent,
   type IpcMainInvokeEvent,
@@ -2209,6 +2210,22 @@ function registerIpcHandlers(): void {
     );
   });
 
+  ipcMain.handle(IPC_CHANNELS.sshSetLogging, async (event, sessionId: unknown, enabled: unknown) => {
+    assertTrustedSender(event);
+    if (typeof enabled !== "boolean") throw new Error("Invalid session log setting.");
+    return (await getSshController()).setLogging(
+      readUuid(sessionId, "SSH session ID"), enabled, join(app.getPath("documents"), "CyberGrid_Logs"), event.sender,
+    );
+  });
+
+  ipcMain.handle(IPC_CHANNELS.openProjectLink, async (event, destination: unknown) => {
+    assertTrustedSender(event);
+    if (destination !== "repository" && destination !== "documentation") throw new Error("Unknown project link.");
+    await shell.openExternal(destination === "repository"
+      ? "https://github.com/KurlyDeer/cybergrid"
+      : "https://github.com/KurlyDeer/cybergrid#readme");
+  });
+
   ipcMain.handle(IPC_CHANNELS.profileConnect, async (event, profileId: unknown, credentials: unknown) => {
     assertTrustedSender(event);
     return connectProfile(
@@ -2941,12 +2958,12 @@ function registerIpcHandlers(): void {
     const defaultPath = requestedPath && isAbsolute(requestedPath)
       ? requestedPath
       : requirePreferences().get().backupDirectory;
-    const result = await dialog.showOpenDialog(mainWindow, {
+    const result = dialog.showOpenDialogSync(mainWindow, {
       title: "Select CyberGrid configuration backup directory",
       defaultPath,
       properties: ["openDirectory", "createDirectory"],
     });
-    return result.canceled ? null : (result.filePaths[0] ?? null);
+    return result?.[0] ?? null;
   });
 
   ipcMain.on(IPC_CHANNELS.sshWrite, (event, request: unknown) => {
@@ -3160,7 +3177,7 @@ app.on("before-quit", (event) => {
   if (!auditLogsFlushed && !flushingAuditLogs) {
     flushingAuditLogs = true;
     event.preventDefault();
-    void auditController.flush().finally(() => {
+    void Promise.allSettled([auditController.flush(), sshController?.flushLogs()]).finally(() => {
       auditLogsFlushed = true;
       app.quit();
     });

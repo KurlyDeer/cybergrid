@@ -1,6 +1,7 @@
 import { Terminal, type ITheme } from "xterm";
 import { FitAddon } from "xterm-addon-fit";
-import { WebglAddon } from "xterm-addon-webgl";
+import { installTerminalRenderer } from "./terminal/rendering";
+import { createWelcomeContent } from "./components/welcome";
 import { parseConnectionTarget } from "../shared/connection";
 
 type XtermTerminal = Terminal;
@@ -131,7 +132,14 @@ interface WorkspaceTab {
   quickBackupButton?: HTMLButtonElement;
   quickBackupStatus?: HTMLSpanElement;
   switchCommandButtons?: HTMLButtonElement[];
-  switchModelBadge?: HTMLSpanElement;
+  rendererHandle?: import("xterm").IDisposable;
+  reconnectKey?: import("xterm").IDisposable;
+  reconnect?: () => Promise<void>;
+  reconnecting?: boolean;
+  skipReconnectSpace?: boolean;
+  sessionLogButton?: HTMLButtonElement;
+  sessionLogStatus?: HTMLParagraphElement;
+  sessionLogActive?: boolean;
   switchToolsModel?: HTMLParagraphElement;
   sshPasswordRetry?: (password: string) => Promise<void>;
   sshAuthRetryPrompting?: boolean;
@@ -1272,6 +1280,8 @@ function removeDetachedTabView(tab: WorkspaceTab): void {
   if (tab.streamSessionId) streamSessions.delete(tab.streamSessionId);
   if (tab.serialSessionId) serialSessions.delete(tab.serialSessionId);
   if (tab.localSessionId) localSessions.delete(tab.localSessionId);
+  tab.rendererHandle?.dispose();
+  tab.reconnectKey?.dispose();
   tab.terminal?.dispose();
   tab.tabElement.remove();
   tab.paneElement.remove();
@@ -1285,6 +1295,20 @@ function removeDetachedTabView(tab: WorkspaceTab): void {
   updateBroadcastControls();
   renderWorkspaceLayout();
   scheduleWorkspaceSave();
+}
+
+function createWelcomeTab(): WorkspaceTab {
+  const tab = createWorkspaceTab("welcome", "Welcome");
+  tab.paneElement.classList.add("welcome-pane");
+  tab.paneElement.append(createWelcomeContent({
+    connect: () => openServerModal(),
+    openLink: (destination) => {
+      void window.cybergrid.system.openProjectLink(destination).catch((error: unknown) => {
+        connectionState.textContent = `Could not open browser: ${errorMessage(error)}`;
+      });
+    },
+  }));
+  return tab;
 }
 
 function createTerminalTab(
@@ -1312,26 +1336,25 @@ function createTerminalTab(
     scrollOnUserInput: true,
     smoothScrollDuration: 0,
     fastScrollSensitivity: 5,
-    allowTransparency: true,
+    allowTransparency: false,
     theme: terminalTheme(terminalSettings),
   });
   const fitAddon = new FitAddon();
   terminal.loadAddon(fitAddon);
   terminal.open(terminalSurface);
-  try {
-    const webglAddon = new WebglAddon();
-    terminal.loadAddon(webglAddon);
-    webglAddon.onContextLoss(() => webglAddon.dispose());
-  } catch {
-    // Canvas rendering remains available when WebGL is unsupported or blocked.
-  }
+  tab.rendererHandle = installTerminalRenderer(terminal);
   tab.terminal = terminal;
   tab.fitAddon = fitAddon;
   terminal.onData((data) => {
+    if (tab.skipReconnectSpace) {
+      tab.skipReconnectSpace = false;
+      if (data === " ") return;
+    }
     if (tab.localInputHandler) {
       tab.localInputHandler(data);
       return;
     }
+    if (tab.reconnectKey || tab.reconnecting) return;
     if (broadcastMode && activeTabId === tab.id && isBroadcastCapable(tab)) {
       for (const target of selectedBroadcastTabs()) writeTerminalInput(target, data);
       return;
@@ -1448,6 +1471,7 @@ function selectedBroadcastTabs(): WorkspaceTab[] {
 }
 
 function writeTerminalInput(tab: WorkspaceTab, data: string): void {
+  if (tab.kind === "ssh" && tab.status !== "connected") return;
   if (tab.kind === "ssh" && tab.sessionId) window.cybergrid.ssh.write(tab.sessionId, data);
   else if ((tab.kind === "telnet" || tab.kind === "raw") && tab.streamSessionId) {
     window.cybergrid.stream.write(tab.streamSessionId, data);
@@ -1632,6 +1656,8 @@ async function closeTab(id: string): Promise<void> {
   const tabOrder = [...tabs.keys()];
   const closedIndex = tabOrder.indexOf(id);
   if (tab.reconnectTimer !== undefined) window.clearTimeout(tab.reconnectTimer);
+  tab.reconnectKey?.dispose();
+  tab.rendererHandle?.dispose();
   tab.localPromptCancel?.();
   tabs.delete(id);
   recentTerminalTabIds = recentTerminalTabIds.filter((tabId) => tabId !== id);
@@ -1751,6 +1777,14 @@ function updateTabStatus(tab: WorkspaceTab, status: WorkspaceStatus, message?: s
   tab.statusElement.classList.toggle("connected", status === "connected" || status === "running" || status === "ready");
   tab.statusElement.classList.toggle("error", status === "error");
   if (tab.quickBackupButton) tab.quickBackupButton.disabled = status !== "connected";
+  if (tab.sessionLogButton) {
+    tab.sessionLogButton.disabled = status !== "connected";
+    if (status === "disconnected" || status === "error") {
+      tab.sessionLogActive = false;
+      tab.sessionLogButton.textContent = "Start Session Log";
+      tab.sessionLogButton.setAttribute("aria-pressed", "false");
+    }
+  }
   for (const button of tab.switchCommandButtons ?? []) {
     button.disabled = status !== "connected" && status !== "running" && status !== "ready";
   }
@@ -1775,6 +1809,7 @@ function scheduleAutoReconnect(tab: WorkspaceTab): void {
   tab.terminal?.writeln("\r\n\x1b[33mNetwork drop detected. Reconnecting in 2 seconds...\x1b[0m");
   tab.reconnectTimer = window.setTimeout(() => {
     tab.reconnectTimer = undefined;
+    if (tab.kind === "ssh") { void reconnectSshTab(tab); return; }
     if (!tabs.has(tab.id) || !tab.duplicate) return;
     const reconnect = tab.duplicate;
     void closeTab(tab.id).then(reconnect).catch((error: unknown) => {
@@ -1786,6 +1821,45 @@ function scheduleAutoReconnect(tab: WorkspaceTab): void {
 function updateSshTabStatus(tab: WorkspaceTab, event: SshStatusEvent): void {
   if (event.status === "connected") tab.sshAuthRetryCount = 0;
   updateTabStatus(tab, event.status, event.message);
+  if (event.status === "disconnected" || event.status === "error") armSshReconnect(tab);
+}
+
+function armSshReconnect(tab: WorkspaceTab): void {
+  if (!tabs.has(tab.id) || !tab.terminal || !tab.reconnect || tab.reconnectKey || tab.sshAuthRetryPrompting) return;
+  tab.terminal.write("\r\n\x1b[33mSession closed. Press [Space] to reconnect...\x1b[0m\r\n");
+  tab.reconnectKey = tab.terminal.onKey(({ domEvent }) => {
+    if (domEvent.code !== "Space" || domEvent.ctrlKey || domEvent.altKey || domEvent.metaKey || domEvent.repeat) return;
+    domEvent.preventDefault();
+    tab.skipReconnectSpace = true;
+    void reconnectSshTab(tab);
+  });
+}
+
+async function reconnectSshTab(tab: WorkspaceTab): Promise<void> {
+  if (!tabs.has(tab.id) || !tab.reconnect || tab.reconnecting) return;
+  tab.reconnecting = true;
+  tab.reconnectKey?.dispose();
+  tab.reconnectKey = undefined;
+  if (tab.reconnectTimer !== undefined) window.clearTimeout(tab.reconnectTimer);
+  tab.reconnectTimer = undefined;
+  if (tab.sessionId) sshSessions.delete(tab.sessionId);
+  tab.sessionId = undefined;
+  tab.sftp = undefined;
+  tab.postConnectStarted = false;
+  tab.sshAuthRetryCount = 0;
+  tab.terminal?.reset();
+  if (tab.switchToolsModel) tab.switchToolsModel.textContent = "Model: Detecting...";
+  setTabConnecting(tab, "reconnecting SSH...");
+  try { await tab.reconnect(); }
+  catch (error) {
+    if (tabs.has(tab.id)) {
+      handleConnectionFailure(tab, error);
+      armSshReconnect(tab);
+    }
+  } finally {
+    tab.reconnecting = false;
+    tab.terminal?.focus();
+  }
 }
 
 function updateRdpTabStatus(tab: WorkspaceTab, event: RdpStatusEvent): void {
@@ -1818,19 +1892,25 @@ function replayBufferedData(tab: WorkspaceTab, sessionId: string, queue: Map<str
 }
 
 function attachSshSession(tab: WorkspaceTab, sessionId: string): void {
+  if (!tabs.has(tab.id)) {
+    void window.cybergrid.ssh.disconnect(sessionId);
+    queuedSshData.delete(sessionId);
+    queuedSshStatus.delete(sessionId);
+    return;
+  }
   if (tab.sessionId && tab.sessionId !== sessionId) sshSessions.delete(tab.sessionId);
   tab.sessionId = sessionId;
   sshSessions.set(sessionId, tab);
   replayBufferedData(tab, sessionId, queuedSshData);
   const status = queuedSshStatus.get(sessionId);
-  if (status) updateSshTabStatus(tab, status);
+  if (status) handleSshStatus(status);
   queuedSshStatus.delete(sessionId);
   const model = queuedSwitchModels.get(sessionId);
   if (model) applySwitchModel(tab, model);
   queuedSwitchModels.delete(sessionId);
   tab.fitAddon?.fit();
   if (tab.terminal) window.cybergrid.ssh.resize(sessionId, tab.terminal.cols, tab.terminal.rows);
-  if (tab.quickBackupButton) tab.quickBackupButton.disabled = false;
+  if (tab.quickBackupButton) tab.quickBackupButton.disabled = tab.status !== "connected";
   updateBroadcastControls();
 }
 
@@ -1974,6 +2054,7 @@ async function retrySshPassword(tab: WorkspaceTab, event: SshStatusEvent): Promi
   const attempts = tab.sshAuthRetryCount ?? 0;
   if (maximum > 0 && attempts >= maximum) {
     updateTabStatus(tab, "error", `SSH authentication failed after ${maximum} password retries.`);
+    armSshReconnect(tab);
     return;
   }
   sshSessions.delete(event.sessionId);
@@ -1998,16 +2079,12 @@ async function retrySshPassword(tab: WorkspaceTab, event: SshStatusEvent): Promi
     handleConnectionFailure(tab, error);
   } finally {
     tab.sshAuthRetryPrompting = false;
+    if (tab.status === "error" || tab.status === "disconnected") armSshReconnect(tab);
   }
 }
 
 function applySwitchModel(tab: WorkspaceTab, event: SwitchModelEvent): void {
   const label = `Model: ${event.model}`;
-  if (tab.switchModelBadge) {
-    tab.switchModelBadge.textContent = label;
-    tab.switchModelBadge.hidden = false;
-    tab.switchModelBadge.title = `${event.vendor.toUpperCase()} hardware detected automatically`;
-  }
   if (tab.switchToolsModel) {
     tab.switchToolsModel.textContent = label;
     tab.switchToolsModel.title = `${event.vendor.toUpperCase()} hardware detected automatically`;
@@ -2047,16 +2124,8 @@ function handleWebStatus(event: WebStatusEvent): void {
 
 function installSwitchToolsDrawer(tab: WorkspaceTab, profile?: ServerProfileSummary): void {
   if (!tab.terminal || tab.kind === "welcome") return;
-  const supportedTerminal = tab.kind === "ssh" || tab.kind === "telnet" || tab.kind === "raw" || tab.kind === "serial";
+  const supportedTerminal = tab.kind === "ssh" || tab.kind === "telnet" || tab.kind === "raw" || tab.kind === "serial" || tab.kind === "local";
   if (!supportedTerminal) return;
-
-  if (tab.kind === "ssh") {
-    const modelBadge = createTextElement("span", "switch-model-badge", "Model: Detecting...") as HTMLSpanElement;
-    modelBadge.hidden = true;
-    modelBadge.title = "Switch model is detected automatically after SSH connects";
-    tab.switchModelBadge = modelBadge;
-    (tab.terminalSurfaceElement ?? tab.paneElement).append(modelBadge);
-  }
 
   const toggle = document.createElement("button");
   toggle.className = "switch-tools-toggle";
@@ -2160,6 +2229,56 @@ function installSwitchToolsDrawer(tab: WorkspaceTab, profile?: ServerProfileSumm
   close.addEventListener("click", () => setOpen(false));
 
   body.append(model, osField);
+  const outputSection = accordion("Session Output", true);
+  const copyAll = document.createElement("button");
+  copyAll.type = "button";
+  copyAll.textContent = "Copy All Output";
+  copyAll.title = "Copy the active terminal buffer, including up to 10,000 scrollback lines. Output may contain secrets.";
+  copyAll.addEventListener("click", async () => {
+    const terminal = tab.terminal;
+    if (!terminal) return;
+    // Wait for xterm's pending write queue before reading the buffer.
+    await new Promise<void>((resolve) => terminal.write("", resolve));
+    const buffer = terminal.buffer.active;
+    let output = "";
+    for (let index = 0; index < buffer.length; index += 1) {
+      const line = buffer.getLine(index);
+      if (index > 0 && !line?.isWrapped) output += "\n";
+      output += line?.translateToString(!buffer.getLine(index + 1)?.isWrapped) ?? "";
+    }
+    try {
+      await navigator.clipboard.writeText(output.replace(/\n+$/, ""));
+      status.textContent = "Terminal output copied to clipboard.";
+    } catch (error) { status.textContent = `Copy failed: ${errorMessage(error)}`; }
+  });
+  outputSection.content.append(copyAll);
+  if (tab.kind === "ssh") {
+    const logButton = document.createElement("button");
+    logButton.type = "button";
+    logButton.textContent = "Start Session Log";
+    logButton.disabled = true;
+    logButton.setAttribute("aria-pressed", "false");
+    logButton.title = "Record incoming SSH output to Documents/CyberGrid_Logs. Logs are plain text and may contain sensitive data.";
+    const logStatus = createTextElement("p", "switch-tools-status", "Opt-in raw output logs may contain secrets. Logging stops when this session closes.") as HTMLParagraphElement;
+    tab.sessionLogButton = logButton;
+    tab.sessionLogStatus = logStatus;
+    logButton.addEventListener("click", async () => {
+      if (!tab.sessionId) return;
+      const sessionId = tab.sessionId;
+      logButton.disabled = true;
+      try {
+        const result = await window.cybergrid.ssh.setLogging(sessionId, !tab.sessionLogActive);
+        if (tab.sessionId !== sessionId) return;
+        tab.sessionLogActive = result.active && tab.status === "connected";
+        logButton.textContent = tab.sessionLogActive ? "Stop Session Log" : "Start Session Log";
+        logButton.setAttribute("aria-pressed", String(tab.sessionLogActive));
+        logStatus.textContent = result.active ? `Recording raw SSH output:\n${result.path}` : "Session log saved and closed.";
+      } catch (error) { logStatus.textContent = errorMessage(error); }
+      finally { logButton.disabled = tab.status !== "connected"; }
+    });
+    outputSection.content.append(logButton, logStatus);
+  }
+  body.append(outputSection.section);
   const backupSection = accordion("📁 Backups", true);
   if (profile?.protocol === "ssh" && profile.category === "network") {
     const backupButton = document.createElement("button");
@@ -2197,11 +2316,17 @@ function installSwitchToolsDrawer(tab: WorkspaceTab, profile?: ServerProfileSumm
   const toolsHost = createTextElement("div", "switch-tools-dynamic", "") as HTMLDivElement;
   const vendorCommands: Record<Exclude<SwitchDeviceOs, "auto" | "generic">, ReadonlyArray<{ command: string; tooltip: string }>> = {
     cisco: [
-      { command: "show ip int brief", tooltip: "Summarize Cisco interface addresses and state" },
-      { command: "show running-config", tooltip: "Display the active Cisco IOS configuration" },
-      { command: "show vlan", tooltip: "List Cisco VLANs and port membership" },
-      { command: "show log", tooltip: "Display Cisco IOS log entries" },
+      { command: "show ip route", tooltip: "Display the IPv4 routing table" },
+      { command: "show arp", tooltip: "Display IP to MAC address mappings" },
+      { command: "show ip interface brief", tooltip: "Summarize interface addresses and state" },
       { command: "show mac address-table", tooltip: "Display learned MAC addresses and switch ports" },
+      { command: "show vlan", tooltip: "List VLANs and port membership" },
+      { command: "show cdp neighbors", tooltip: "List directly connected Cisco Discovery Protocol neighbors" },
+      { command: "show etherchannel summary", tooltip: "Summarize port-channel bundles and member state" },
+      { command: "show logging", tooltip: "Display buffered Cisco IOS log messages" },
+      { command: "show tech-support", tooltip: "Collect extensive diagnostics; may take time and expose sensitive configuration" },
+      { command: "show version", tooltip: "Display hardware model, software version, and uptime" },
+      { command: "show running-config", tooltip: "Display the active Cisco IOS configuration" },
     ],
     fortinet: [
       { command: "get system status", tooltip: "Display FortiOS version, serial number, and system status" },
@@ -2223,8 +2348,14 @@ function installSwitchToolsDrawer(tab: WorkspaceTab, profile?: ServerProfileSumm
     commandButtons = [];
     const selected = osSelect.value as SwitchDeviceOs;
     const deviceOs = selected === "auto" ? tab.detectedSwitchVendor ?? "generic" : selected;
-    if (deviceOs !== "generic" && deviceOs !== "auto") {
-      const commands = accordion(deviceOs === "cisco" ? "Cisco IOS Commands" : deviceOs === "fortinet" ? "FortiOS Commands" : "HP ProCurve Commands", true);
+    if (deviceOs === "cisco") {
+      for (const [label, start, end] of [["Routing", 0, 3], ["Switching", 3, 7], ["Diagnostics", 7, 10], ["Configuration", 10, 11]] as const) {
+        const category = accordion(label, true);
+        addCommandButtons(category.content, vendorCommands.cisco.slice(start, end));
+        toolsHost.append(category.section);
+      }
+    } else if (deviceOs !== "generic" && deviceOs !== "auto") {
+      const commands = accordion(deviceOs === "fortinet" ? "FortiOS Commands" : "HP ProCurve Commands", true);
       addCommandButtons(commands.content, vendorCommands[deviceOs]);
       toolsHost.append(commands.section);
     } else {
@@ -2341,15 +2472,24 @@ async function connectSavedProfile(profile: ServerProfileSummary, allowDuplicate
   if (!allowDuplicate && focusOpenConnectionTab(profile.id, endpointKey)) return;
   const tab = createTabForProfile(profile);
   tab.connectionKey = endpointKey;
+  let credentials: ProfileConnectionCredentials | undefined;
   if (profile.protocol === "ssh") {
     tab.sshPasswordRetry = async (password) => {
       const username = tab.context.username || profile.username;
+      credentials = { username, password };
       await attachProfileResult(tab, await window.cybergrid.profiles.connect(profile.id, { username, password }));
+    };
+    tab.reconnect = async () => {
+      // No decrypted vault password is cached: profiles.connect reads the vault again.
+      if (!credentials && (!profile.username || (!profile.hasPassword && !profile.privateKeyPath))) {
+        credentials = await promptForSshCredentials(tab, profile.username, !profile.hasPassword && !profile.privateKeyPath);
+      }
+      if (tabs.has(tab.id)) await attachProfileResult(tab, await window.cybergrid.profiles.connect(profile.id, credentials));
     };
   }
   setTabConnecting(tab, `opening ${profile.protocol.toUpperCase()} profile ${profile.name} from the encrypted vault...`);
   try {
-    const credentials = profile.protocol === "ssh" && (
+    credentials = profile.protocol === "ssh" && (
       !profile.username || (!profile.hasPassword && !profile.privateKeyPath)
     )
       ? await promptForSshCredentials(tab, profile.username, !profile.hasPassword && !profile.privateKeyPath)
@@ -2357,6 +2497,7 @@ async function connectSavedProfile(profile: ServerProfileSummary, allowDuplicate
     await attachProfileResult(tab, await window.cybergrid.profiles.connect(profile.id, credentials));
   } catch (error) {
     handleConnectionFailure(tab, error);
+    armSshReconnect(tab);
   }
 }
 
@@ -2372,6 +2513,15 @@ async function connectQuickSsh(config: SshConnectionConfig, allowDuplicate = fal
     config.password = password;
     attachSshSession(tab, await window.cybergrid.ssh.connect({ ...config, password }));
   };
+  tab.reconnect = async () => {
+    if (!config.username || (config.password === undefined && !config.privateKey)) {
+      const credentials = await promptForSshCredentials(tab, config.username, config.password === undefined && !config.privateKey);
+      if (credentials.username) config.username = credentials.username;
+      if (credentials.password !== undefined) config.password = credentials.password;
+      tab.context.username = config.username;
+    }
+    if (tabs.has(tab.id)) attachSshSession(tab, await window.cybergrid.ssh.connect({ ...config }));
+  };
   setTabConnecting(tab, `connecting to ${config.username}@${config.host}:${config.port}...`);
   try {
     const credentials = !config.username || (config.password === undefined && !config.privateKey)
@@ -2384,7 +2534,7 @@ async function connectQuickSsh(config: SshConnectionConfig, allowDuplicate = fal
     if (credentials?.password !== undefined) config.password = credentials.password;
     attachSshSession(tab, await window.cybergrid.ssh.connect({ ...config }));
   }
-  catch (error) { handleConnectionFailure(tab, error); }
+  catch (error) { handleConnectionFailure(tab, error); armSshReconnect(tab); }
 }
 
 async function connectQuickRdp(config: RdpConnectionConfig, allowDuplicate = false): Promise<void> {
@@ -5715,6 +5865,14 @@ window.addEventListener("blur", closeServerContextMenu);
 window.cybergrid.ssh.onData(handleSshData);
 window.cybergrid.ssh.onStatus(handleSshStatus);
 window.cybergrid.ssh.onModelDetected(handleSwitchModel);
+window.cybergrid.ssh.onLogStatus((event) => {
+  const tab = sshSessions.get(event.sessionId);
+  if (!tab?.sessionLogButton) return;
+  tab.sessionLogActive = event.active;
+  tab.sessionLogButton.textContent = event.active ? "Stop Session Log" : "Start Session Log";
+  tab.sessionLogButton.setAttribute("aria-pressed", String(event.active));
+  if (tab.sessionLogStatus) tab.sessionLogStatus.textContent = event.error ?? event.path ?? "Session log closed.";
+});
 window.cybergrid.sftp.onProgress(handleSftpProgress);
 window.cybergrid.rdp.onStatus(handleRdpStatus);
 window.cybergrid.stream.onData(handleStreamData);
@@ -5811,11 +5969,7 @@ async function initializeApplication(): Promise<void> {
     currentSettings = { ...DEFAULT_SETTINGS };
   }
   applySettings(currentSettings);
-  const welcomeTab = createTerminalTab("Welcome", "welcome");
-  welcomeTab.terminal?.writeln("\x1b[36mCyberGrid\x1b[0m");
-  welcomeTab.terminal?.writeln("SSH, SFTP, RDP, VNC, Telnet, RAW TCP, serial, local shells, and web management in one workspace.\r\n");
-  welcomeTab.terminal?.writeln("Press Ctrl+K to search saved servers. Use Grid 2x2 to tile up to four terminal sessions.");
-  welcomeTab.terminal?.writeln("Right-click a saved server for ping, traceroute, DNS, port checks, and tray favorites.");
+  createWelcomeTab();
   updateSftpAvailability();
   updateLayoutControls();
   await initializeVault();

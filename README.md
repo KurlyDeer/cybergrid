@@ -29,11 +29,21 @@ CyberGrid does not transmit vault data to a hosted CyberGrid service and include
 
 The v1.3.0 identity uses a restrained navy, slate, and white grid monogram across the application shell, vault screen, executable, installer, and shortcuts. The source-of-truth vector lives at `src/assets/cybergrid-mark.svg`; `scripts/generate-brand-assets.ps1` produces the Windows PNG and multi-resolution ICO resources.
 
-## Version 1.3.0 Architecture
+## Version 1.3.5 — Terminal Workflow
 
-- **True native RDP docking:** CyberGrid discovers the `TscShellContainerClass` HWND, assigns the Electron window through `GWLP_HWNDPARENT`, strips native chrome, translates tab client coordinates to screen coordinates, and updates the owned window after every move or resize.
+- **GPU-first terminals:** WebGL renders both main-window and detached terminals, with an explicit Canvas fallback when WebGL fails or loses its context. Terminal input flows directly over IPC; this application uses vanilla TypeScript, not React. Actual latency still depends on network, host, and GPU performance.
+- **Reconnect in place:** closed SSH tabs retain their output. Press **Space** to clear the screen and reconnect in the same tab. Saved profiles are resolved through the vault again; ad-hoc credentials remain session-local. Close the tab to cancel.
+- **Session Tools → Session Output:** use **Start Session Log** to record received SSH bytes to `Documents/CyberGrid_Logs/*.log`. Stop flushes and closes the file; disconnect and application exit also flush it. Logging is opt-in for each session. These files are unencrypted and can contain sensitive output—protect, retain, and delete them according to your organization's policy.
+- **Copy All Output:** copies the active xterm buffer, including retained scrollback (up to 10,000 lines), preserving wrapped lines. It does not recover output that has already scrolled out of the buffer.
+- **Cisco macros:** Routing, Switching, Diagnostics, and Configuration groups provide interface, route, VLAN, neighbor, logging, and support commands. Model information stays in Session Tools, never over terminal text.
+- **Backup location:** choose **Tools → Settings → General → Backup Directory Path → Browse...**, then save. The default is `Documents/CyberGrid_Backups`; one-click switch snapshots use the configured directory.
+- **Welcome dashboard:** a lightweight landing page with New Connection, repository, and public documentation links replaces the idle Welcome terminal.
+
+## Architecture
+
+- **Native RDP docking:** CyberGrid tracks the spawned mstsc PID, finds its `TscShellContainerClass` HWND, strips native chrome, uses Win32 `SetParent`, and updates the docked viewport on resize. Behavior depends on Windows and Remote Desktop client versions.
 - **Reliable embedded web consoles:** the isolated Web Console partition accepts appliance self-signed HTTPS certificates while the main application, updater, and unrelated Electron content retain normal certificate validation.
-- **Per-user runtime storage:** the vault, preferences, workspace, RDP runtime files, audit transcripts, and configuration backups are rooted under Electron `userData` (`%APPDATA%\CyberGrid` on Windows), avoiding installation-directory writes and VirtualStore redirects.
+- **Per-user runtime storage:** vault, preferences, workspace, RDP runtime files, and automatic audit transcripts live under Electron `userData` (`%APPDATA%\CyberGrid` on Windows). Config backups use the selected backup folder, and opt-in session logs use Documents. Runtime data is never written into the installation directory.
 - **Minimal connection editor:** saved connections expose only name, endpoint, protocol, domain, username, password, and an optional port override. Existing advanced metadata remains intact when a connection is edited.
 - **Centralized Global Options:** startup, exit protection, terminal rendering, SSH keep-alives and password retries, RDP Smart Sizing, color depth, sound redirection, vault protection, proxy settings, and external-tool paths live in one tabbed modal.
 - **Intentional tab behavior:** ordinary opens reuse a matching profile or endpoint tab; the tab context menu remains the explicit path for duplicate sessions.
@@ -44,7 +54,7 @@ The v1.3.0 identity uses a restrained navy, slate, and white grid monogram acros
 
 | Area | Capabilities |
 | --- | --- |
-| Multi-protocol sessions | True HWND-owned Windows RDP with Smart Sizing, SSH/SFTP with opt-in legacy switch KEX and Oakley DH compatibility, embedded VNC, serial/COM, Telnet, RAW TCP, self-signed-appliance-aware isolated web consoles, and local PowerShell/CMD/WSL terminals |
+| Multi-protocol sessions | Native HWND-docked Windows RDP with Smart Sizing, SSH/SFTP with opt-in legacy switch KEX and Oakley DH compatibility, embedded VNC, serial/COM, Telnet, RAW TCP, self-signed-appliance-aware isolated web consoles, and local PowerShell/CMD/WSL terminals |
 | Connection management | High-density mRemote-style tree, essential-only connection editor, multi-tier groups, favorites, fuzzy search, endpoint tab de-duplication, explicit duplicate tabs, multi-select bulk actions, connection duplication, custom icons, and folder inheritance |
 | Global options | Central startup and exit behavior, terminal fonts/colors/line height, SSH keep-alive and retry policy, RDP sizing/color/audio defaults, vault auto-lock, proxy configuration, and external-tool mappings |
 | Encrypted vault | Zero-telemetry AES-256-GCM local encryption, scrypt key derivation, optional master password, OS-protected automatic key, auto-lock, TOTP generation, and environment-variable credential tokens |
@@ -58,28 +68,28 @@ The v1.3.0 identity uses a restrained navy, slate, and white grid monogram acros
 
 ## Install CyberGrid on Windows
 
-CyberGrid v1.3.0 produces two x64 Windows packages in `dist/`:
+CyberGrid v1.3.5 produces two x64 Windows packages in `dist/`:
 
-- `CyberGrid-1.3.0-setup-x64.exe` — guided NSIS installer with selectable installation directory, desktop shortcut, Start menu shortcut, and uninstaller.
-- `CyberGrid-1.3.0-portable-x64.exe` — self-contained portable executable.
+- `CyberGrid-1.3.5-setup-x64.exe` — guided NSIS installer with selectable installation directory, desktop shortcut, Start menu shortcut, and uninstaller.
+- `CyberGrid-1.3.5-portable-x64.exe` — self-contained portable executable.
 
 Download the preferred package from the repository's [Releases page](https://github.com/KurlyDeer/cybergrid/releases). For the installer, run the setup executable and follow the wizard. For the portable build, place the executable in a user-writable tools directory and launch it directly.
 
 ### Windows SmartScreen
 
-CyberGrid v1.3.0 packages may display a Windows SmartScreen **Unknown Publisher** warning until the project has an established code-signing reputation. Download CyberGrid only from this repository's Releases page, verify its SHA-256 checksum, and then select **More info → Run anyway** if you trust the verified package. Never bypass SmartScreen for an executable from an unverified mirror or unexpected message attachment.
+CyberGrid v1.3.5 packages may display a Windows SmartScreen **Unknown Publisher** warning until the project has an established code-signing reputation. Download CyberGrid only from this repository's Releases page, verify its SHA-256 checksum, and then select **More info → Run anyway** if you trust the verified package. Never bypass SmartScreen for an executable from an unverified mirror or unexpected message attachment.
 
 ### Verify a release download
 
 Calculate the installer checksum in PowerShell and compare the complete value with the SHA-256 value published in the corresponding GitHub release notes:
 
 ```powershell
-Get-FileHash -LiteralPath ".\CyberGrid-1.3.0-setup-x64.exe" -Algorithm SHA256
+Get-FileHash -LiteralPath ".\CyberGrid-1.3.5-setup-x64.exe" -Algorithm SHA256
 ```
 
 For an additional reputation check, upload the verified installer to [VirusTotal](https://www.virustotal.com/gui/home/upload) if your organization's policy permits public malware-analysis submissions. A detection result is supplementary evidence, not a replacement for matching the release checksum and confirming the download source. Do not upload private or internally customized builds.
 
-The first launch creates local application data under Electron's per-user `userData` location. On Windows this is normally `%APPDATA%\CyberGrid`. The vault, preferences, workspace snapshot, logs, backups, security key material, and temporary RDP host/configuration files remain there. No runtime database or configuration is written to the installation directory.
+The first launch creates local application data under Electron's per-user `userData` location. On Windows this is normally `%APPDATA%\CyberGrid`. The vault, preferences, workspace snapshot, automatic audit logs, security key material, and temporary RDP files remain there. Optional logs and configuration backups use the Documents locations described above. No runtime database or configuration is written to the installation directory.
 
 Installed builds check the repository's published release metadata after startup without delaying the initial window. When a newer release is available, CyberGrid downloads it in the background and presents an in-app restart prompt after checksum verification completes.
 
@@ -94,7 +104,7 @@ Installed builds check the repository's published release metadata after startup
 
 ### Requirements
 
-- Windows 10/11 x64 for the complete v1.3.0 desktop feature set and native HWND-owned RDP integration.
+- Windows 10/11 x64 for the complete v1.3.5 desktop feature set and native HWND-docked RDP integration.
 - Node.js 22 LTS and npm.
 - Git.
 - Native build prerequisites supported by Electron Builder if a prebuilt native dependency is unavailable.
@@ -114,6 +124,12 @@ Use `npm ci` instead of `npm install` for a lockfile-exact CI or release build.
 ```powershell
 # Static TypeScript verification
 npm run typecheck
+
+# Terminal/log regression tests (UI test uses mock IPC, no real credentials)
+node scripts/test-session-log.cjs
+node scripts/test-terminal-renderer.cjs
+# Run after npm run build; rebuild again before packaging to remove test assets
+npx electron scripts/test-terminal-ui.cjs
 
 # Clean and bundle the main, preload, and renderer entrypoints
 npm run build

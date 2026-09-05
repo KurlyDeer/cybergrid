@@ -9,6 +9,9 @@ export const IPC_CHANNELS = {
   sshData: "cybergrid:ssh:data",
   sshStatus: "cybergrid:ssh:status",
   sshModelDetected: "cybergrid:ssh:model-detected",
+  sshSetLogging: "cybergrid:ssh:set-logging",
+  sshLogStatus: "cybergrid:ssh:log-status",
+  openProjectLink: "cybergrid:system:open-project-link",
   sftpList: "cybergrid:sftp:list",
   sftpUpload: "cybergrid:sftp:upload",
   sftpDownload: "cybergrid:sftp:download",
@@ -944,6 +947,13 @@ export interface DiagnosticResult {
 
 export type Unsubscribe = () => void;
 
+export interface SessionLogStatus {
+  sessionId: string;
+  active: boolean;
+  path?: string;
+  error?: string;
+}
+
 export interface CyberGridApi {
   profiles: {
     connect(profileId: string, credentials?: ProfileConnectionCredentials): Promise<ProfileConnectionResult>;
@@ -956,6 +966,8 @@ export interface CyberGridApi {
     write(sessionId: string, data: string): void;
     resize(sessionId: string, cols: number, rows: number): void;
     quickBackup(sessionId: string, profileId: string): Promise<SwitchBackupResult>;
+    setLogging(sessionId: string, enabled: boolean): Promise<SessionLogStatus>;
+    onLogStatus(listener: (event: SessionLogStatus) => void): Unsubscribe;
     onData(listener: (event: SshDataEvent) => void): Unsubscribe;
     onStatus(listener: (event: SshStatusEvent) => void): Unsubscribe;
     onModelDetected(listener: (event: SwitchModelEvent) => void): Unsubscribe;
@@ -1083,6 +1095,7 @@ export interface CyberGridApi {
     whenReady(): Promise<void>;
     selectPrivateKey(): Promise<string | null>;
     selectBackupDirectory(currentPath?: string): Promise<string | null>;
+    openProjectLink(destination: "repository" | "documentation"): Promise<void>;
     onVaultLocked(listener: (reason: string) => void): Unsubscribe;
     onTrayQuickConnect(listener: (profileId: string) => void): Unsubscribe;
     captureScreenshot(request: ScreenshotRequest): Promise<ScreenshotResult>;

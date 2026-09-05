@@ -1,6 +1,6 @@
 import { Terminal } from "xterm";
 import { FitAddon } from "xterm-addon-fit";
-import { WebglAddon } from "xterm-addon-webgl";
+import { installTerminalRenderer } from "./terminal/rendering";
 import type {
   CyberGridApi,
   DetachedSessionDescriptor,
@@ -30,19 +30,15 @@ const terminal = new Terminal({
   fontSize: 14,
   lineHeight: 1.18,
   scrollback: 10_000,
-  allowTransparency: true,
+  allowTransparency: false,
+  smoothScrollDuration: 0,
   theme: { background: "#080d14", foreground: "#d7e2ef", cursor: "#23d5ab" },
 });
 const fitAddon = new FitAddon();
 terminal.loadAddon(fitAddon);
 terminal.open(terminalHost);
-try {
-  const webglAddon = new WebglAddon();
-  terminal.loadAddon(webglAddon);
-  webglAddon.onContextLoss(() => webglAddon.dispose());
-} catch {
-  // The canvas renderer is the safe fallback for blocked or unavailable WebGL.
-}
+const rendererHandle = installTerminalRenderer(terminal);
+window.addEventListener("beforeunload", () => { rendererHandle.dispose(); terminal.dispose(); });
 
 let descriptor: DetachedSessionDescriptor | undefined;
 const bufferedData: string[] = [];
