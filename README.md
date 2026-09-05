@@ -25,9 +25,34 @@ Traditional administrator workflows often span mRemoteNG for connection trees, P
 - Discovery, health badges, diagnostics, and CMDB fields beside the connections they describe.
 - Local storage and OS-protected automatic unlock, with an optional user-managed master password.
 
-CyberGrid does not transmit vault data to a hosted CyberGrid service and includes no product telemetry. Connections, preferences, workspaces, audit transcripts, and vault files remain on the workstation unless an operator explicitly exports or transfers them.
+CyberGrid does not transmit vault data to a hosted CyberGrid service and includes no automatic product telemetry. Connections, preferences, workspaces, audit transcripts, and vault files remain on the workstation unless an operator explicitly exports or transfers them. **Help → Report a Bug** is opt-in: Send Report opens a reviewed, redacted diagnostic excerpt in a public GitHub issue draft. Nothing is posted automatically.
 
 The v1.3.6 identity uses a sharp isometric hexagon with deep navy (`#0F2027`), teal (`#20B2AA`), and transparent channels. `src/assets/logo.svg` is the artwork source for the application, Welcome and vault screens, tray, window icons, executable, and installer. Every clean build runs `scripts/generate-brand-assets.cjs` to regenerate `build/icon.ico` (16, 24, 32, 48, 64, 128, and 256 pixels) and `build/icon.png` directly from that SVG.
+
+## Version 1.3.7 — Diagnostics & Community
+
+Open **Tools → Global Diagnostics** without saving a connection or unlocking a vault. The left-hand Network, Security, and Hardware tabs contain:
+
+| Tool | Behavior | Limits |
+| --- | --- | --- |
+| TCP Port Bouncer | Measures one TCP handshake and closes immediately; reports error codes such as `ECONNREFUSED` or `ETIMEDOUT` | 2-second deadline including name resolution; not a port forwarder or authentication test |
+| Native DNS Query | Uses a per-request `dns.promises.Resolver`, optional DNS server IP, and `resolveAny` | Bypasses OS name-resolution cache, not upstream DNS cache; ANY may be restricted or incomplete; 5-second deadline |
+| SSL / TLS Inspector | Retrieves subject, issuer, validity, SANs, trust status, and fingerprint; highlights expiration within 30 days | Accepts untrusted certificates for this inspection only, sends no application credentials, and closes after inspection; 5-second deadline |
+| MAC OUI Lookup | Accepts colon, hyphen, dotted, and plain MAC formats; performs an offline lookup | Small Cisco/Dell/HP/Apple subset; unknown, randomized, and multicast addresses are identified honestly, not guessed |
+
+Each tool's **?** button exposes keyboard-accessible **What it does**, **When to use it**, and **Why it helps** notes. Checks are on demand, cancellable, and limited to one per application window and four across the app. Results stay in memory in that window. Only test systems you are authorized to administer.
+
+### Reviewed bug reports
+
+Use **Help → Report a Bug**, optionally describe the problem, inspect the outgoing preview, then click **Send Report**. A browser opens the GitHub draft; you still need to sign in and submit the issue yourself. The report includes app version, OS/system version, process memory use, and recent main-process errors. It does not collect terminal transcripts or read vault credentials.
+
+The error buffer is capped at 50 lines and held in memory for the current app process. Common secret patterns, IP addresses, and personal user paths are redacted before buffering and again before reporting. Redaction is best-effort: review all content for confidential information. The draft is carried in a URL and may be retained by GitHub, your browser/history, or organizational network tooling. Closing the modal sends nothing.
+
+Windows limits Electron browser-launch URLs to 2081 characters. CyberGrid keeps the outgoing URL below 2000 characters, labels shortened excerpts, and provides **Copy Full Report** for the full redacted content. Review it before pasting; the clipboard may persist in OS history. [Electron browser-launch limits](https://www.electronjs.org/docs/latest/api/shell#shellopenexternalurl-options), [Node DNS resolver behavior](https://nodejs.org/api/dns.html#class-dnspromisesresolver).
+
+The offline OUI subset is drawn from the [IEEE MA-L registry](https://standards-oui.ieee.org/oui/oui.csv), checked on 2026-09-05. An OUI indicates an assignment, not a device's authenticity or exact model.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, tests, security expectations, and the PR workflow. GitHub bug and feature forms and a PR checklist are included in `.github/`.
 
 ## Version 1.3.6 — Settings, Branding & Live Health
 
@@ -74,23 +99,23 @@ The v1.3.6 identity uses a sharp isometric hexagon with deep navy (`#0F2027`), t
 
 ## Install CyberGrid on Windows
 
-CyberGrid v1.3.6 produces two x64 Windows packages in `dist/`:
+CyberGrid v1.3.7 produces two x64 Windows packages in `dist/`:
 
-- `CyberGrid-1.3.6-setup-x64.exe` — guided NSIS installer with selectable installation directory, desktop shortcut, Start menu shortcut, and uninstaller.
-- `CyberGrid-1.3.6-portable-x64.exe` — self-contained portable executable.
+- `CyberGrid-1.3.7-setup-x64.exe` — guided NSIS installer with selectable installation directory, desktop shortcut, Start menu shortcut, and uninstaller.
+- `CyberGrid-1.3.7-portable-x64.exe` — self-contained portable executable.
 
 Download the preferred package from the repository's [Releases page](https://github.com/KurlyDeer/cybergrid/releases). For the installer, run the setup executable and follow the wizard. For the portable build, place the executable in a user-writable tools directory and launch it directly.
 
 ### Windows SmartScreen
 
-CyberGrid v1.3.6 packages may display a Windows SmartScreen **Unknown Publisher** warning until the project has an established code-signing reputation. Download CyberGrid only from this repository's Releases page, verify its SHA-256 checksum, and then select **More info → Run anyway** if you trust the verified package. Never bypass SmartScreen for an executable from an unverified mirror or unexpected message attachment.
+CyberGrid v1.3.7 packages may display a Windows SmartScreen **Unknown Publisher** warning until the project has an established code-signing reputation. Download CyberGrid only from this repository's Releases page, verify its SHA-256 checksum, and then select **More info → Run anyway** if you trust the verified package. Never bypass SmartScreen for an executable from an unverified mirror or unexpected message attachment.
 
 ### Verify a release download
 
 Calculate the installer checksum in PowerShell and compare the complete value with the SHA-256 value published in the corresponding GitHub release notes:
 
 ```powershell
-Get-FileHash -LiteralPath ".\CyberGrid-1.3.6-setup-x64.exe" -Algorithm SHA256
+Get-FileHash -LiteralPath ".\CyberGrid-1.3.7-setup-x64.exe" -Algorithm SHA256
 ```
 
 For an additional reputation check, upload the verified installer to [VirusTotal](https://www.virustotal.com/gui/home/upload) if your organization's policy permits public malware-analysis submissions. A detection result is supplementary evidence, not a replacement for matching the release checksum and confirming the download source. Do not upload private or internally customized builds.
@@ -110,7 +135,7 @@ Installed builds check the repository's published release metadata after startup
 
 ### Requirements
 
-- Windows 10/11 x64 for the complete v1.3.6 desktop feature set and native HWND-docked RDP integration.
+- Windows 10/11 x64 for the complete v1.3.7 desktop feature set and native HWND-docked RDP integration.
 - Node.js 22 LTS and npm.
 - Git.
 - Native build prerequisites supported by Electron Builder if a prebuilt native dependency is unavailable.
@@ -135,6 +160,7 @@ npm run typecheck
 node scripts/test-session-log.cjs
 node scripts/test-terminal-renderer.cjs
 node scripts/test-health-preferences.cjs
+node scripts/test-diagnostics-reports.cjs
 # Run after npm run build; rebuild again before packaging to remove test assets
 npx electron scripts/test-terminal-ui.cjs
 
@@ -218,6 +244,7 @@ Do not commit `.env`, private keys, database files, vault exports, logs, or pack
 ## Contributing
 
 Contributions should be small, reviewable, and safe for administrators to run on production workstations.
+Start with the complete [contributor guide](CONTRIBUTING.md) and use the repository's issue/PR templates.
 
 1. Open an issue describing the problem, intended behavior, and platform impact.
 2. Fork the repository and create a focused branch.

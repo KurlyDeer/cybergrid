@@ -16,6 +16,7 @@ import {
 } from "electron";
 import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { lookup } from "node:dns/promises";
+import { release as osRelease } from "node:os";
 import { basename, isAbsolute, join, posix, resolve, sep } from "node:path";
 import {
   IPC_CHANNELS,
@@ -67,6 +68,8 @@ import { parseConnectionTarget } from "../shared/connection";
 import { AuditController, type AuditSessionContext } from "./audit";
 import type { AutoUnlockController } from "./auto-unlock";
 import { launchExternalDiagnostic, runDiagnostic } from "./diagnostics";
+import { runGlobalDiagnostic } from "./diagnostics/suite";
+import { BugReporter, RollingErrorBuffer } from "./bug-report";
 import { launchExternalTool, runConnectionTasks } from "./enterprise";
 import { HealthController } from "./health";
 import { discoverInventory } from "./inventory-sync";
@@ -86,11 +89,23 @@ import type { VaultController } from "./vault";
 import type { VncController } from "./vnc";
 import { WebController } from "./web";
 
+const recentErrors = new RollingErrorBuffer();
+recentErrors.install();
+const bugReporter = new BugReporter(recentErrors, () => ({
+  version: app.getVersion(), systemVersion: process.getSystemVersion(), osRelease: osRelease(),
+  platform: process.platform, arch: process.arch, memory: process.memoryUsage(),
+}));
+const activeDiagnostics = new Map<number, AbortController>();
+app.on("web-contents-created", (_event, contents) => {
+  const id = contents.id;
+  contents.once("destroyed", () => bugReporter.clear(id));
+});
 let displayingFatalError = false;
 
 function errorStack(reason: unknown): string {
   if (reason instanceof Error) return reason.stack ?? `${reason.name}: ${reason.message}`;
-  return typeof reason === "string" ? reason : JSON.stringify(reason, null, 2) || String(reason);
+  try { return typeof reason === "string" ? reason : JSON.stringify(reason, null, 2) || String(reason); }
+  catch { return "Non-serializable unhandled error (see recent error buffer)."; }
 }
 
 function reportFatalError(source: string, reason: unknown): void {
@@ -2178,6 +2193,33 @@ async function connectProfile(
 }
 
 function registerIpcHandlers(): void {
+  const assertDiagnosticSender = (event: IpcMainInvokeEvent): void => {
+    assertTrustedSender(event);
+    if (event.senderFrame !== event.sender.mainFrame) throw new Error("Only the application main frame may use this tool.");
+  };
+  ipcMain.handle(IPC_CHANNELS.diagnosticsGlobal, async (event, request: unknown) => {
+    assertDiagnosticSender(event);
+    if (activeDiagnostics.has(event.sender.id) || activeDiagnostics.size >= 4) throw new Error("A diagnostic is already running. Wait or cancel it first.");
+    const controller = new AbortController();
+    const id = event.sender.id;
+    const cancel = (): void => controller.abort();
+    activeDiagnostics.set(id, controller);
+    event.sender.once("destroyed", cancel);
+    try { return await runGlobalDiagnostic(request, controller.signal); }
+    finally { activeDiagnostics.delete(id); event.sender.removeListener("destroyed", cancel); }
+  });
+  ipcMain.handle(IPC_CHANNELS.diagnosticsCancel, (event) => {
+    assertDiagnosticSender(event);
+    activeDiagnostics.get(event.sender.id)?.abort();
+  });
+  ipcMain.handle(IPC_CHANNELS.bugReportPreview, (event, description: unknown) => {
+    assertDiagnosticSender(event);
+    return bugReporter.preview(event.sender.id, description);
+  });
+  ipcMain.handle(IPC_CHANNELS.bugReportSend, async (event, previewId: unknown) => {
+    assertDiagnosticSender(event);
+    await bugReporter.send(event.sender.id, previewId, url => shell.openExternal(url));
+  });
   ipcMain.handle(IPC_CHANNELS.sshConnect, async (event, config: unknown) => {
     assertTrustedSender(event);
     const normalized = normalizeConnectionConfig(config);

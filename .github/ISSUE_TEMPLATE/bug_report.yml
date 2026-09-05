@@ -1,0 +1,39 @@
+name: Bug report
+description: Report a reproducible CyberGrid problem.
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve CyberGrid. Issues are public: never include vaults,
+        passwords, private keys, customer information, or unredacted logs. For a security
+        vulnerability, use GitHub's private vulnerability reporting when available,
+        not a public issue.
+  - type: input
+    id: version
+    attributes:
+      label: CyberGrid Version
+      placeholder: "e.g. 1.3.7 (installer or portable)"
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS
+      placeholder: "Windows version/build and architecture"
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce
+      description: Include what you expected and what actually happened. Use sanitized example endpoints.
+      placeholder: "1. Open CyberGrid..."
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Optional, reviewed and redacted error output only. Do not attach credential vaults or session transcripts containing secrets.
+      render: log

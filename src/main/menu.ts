@@ -54,6 +54,7 @@ export function installCyberGridMenu(actions: CyberGridMenuActions): void {
       label: "Tools",
       submenu: [
         { label: "Options / Settings...", accelerator: "CommandOrControl+,", click: command("settings") },
+        { label: "Global Diagnostics...", click: command("global-diagnostics") },
         { type: "separator" },
         { label: "External Tools Launcher", click: command("external-tools") },
         { label: "Subnet IPAM Scanner...", click: command("subnet-scanner") },
@@ -79,6 +80,7 @@ export function installCyberGridMenu(actions: CyberGridMenuActions): void {
       label: "Help",
       submenu: [
         { label: "Documentation", accelerator: "F1", click: command("help") },
+        { label: "Report a Bug...", click: command("report-bug") },
         { label: "Keyboard Shortcuts", accelerator: "CommandOrControl+/", click: command("shortcuts") },
         { type: "separator" },
         { label: "Check for Updates...", click: actions.checkForUpdates },

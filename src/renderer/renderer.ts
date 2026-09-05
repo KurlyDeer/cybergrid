@@ -2,6 +2,7 @@ import { Terminal, type ITheme } from "xterm";
 import { FitAddon } from "xterm-addon-fit";
 import { installTerminalRenderer } from "./terminal/rendering";
 import { createWelcomeContent } from "./components/welcome";
+import { createDiagnosticsPanels } from "./diagnostics/panels";
 import { parseConnectionTarget } from "../shared/connection";
 
 type XtermTerminal = Terminal;
@@ -1604,6 +1605,7 @@ function updateLayoutControls(): void {
 }
 
 function renderWorkspaceLayout(): void {
+  const diagnosticsOpen = Boolean(document.querySelector("#global-diagnostics[open], #bug-report[open]"));
   const active = activeTabId ? tabs.get(activeTabId) : undefined;
   if (layoutMode === "grid" && !active?.terminal) layoutMode = "single";
   updateLayoutControls();
@@ -1618,10 +1620,10 @@ function renderWorkspaceLayout(): void {
     candidate.paneElement.classList.toggle("tiled-pane", layoutMode === "grid" && isVisible);
     candidate.paneElement.classList.toggle("primary-pane", layoutMode === "grid" && isActive);
     if (candidate.webSessionId) {
-      window.cybergrid.web.setVisible(candidate.webSessionId, layoutMode === "single" && isActive);
+      window.cybergrid.web.setVisible(candidate.webSessionId, layoutMode === "single" && isActive && !diagnosticsOpen);
     }
     if (candidate.rdpSessionId) {
-      window.cybergrid.rdp.setVisible(candidate.rdpSessionId, layoutMode === "single" && isActive);
+      window.cybergrid.rdp.setVisible(candidate.rdpSessionId, layoutMode === "single" && isActive && !diagnosticsOpen);
     }
   }
   requestAnimationFrame(() => {
@@ -1931,7 +1933,7 @@ function attachRdpSession(tab: WorkspaceTab, sessionId: string): void {
   const status = queuedRdpStatus.get(sessionId);
   if (status) updateRdpTabStatus(tab, status);
   queuedRdpStatus.delete(sessionId);
-  window.cybergrid.rdp.setVisible(sessionId, activeTabId === tab.id);
+  window.cybergrid.rdp.setVisible(sessionId, activeTabId === tab.id && !document.querySelector("#global-diagnostics[open], #bug-report[open]"));
   requestAnimationFrame(() => updateRdpBounds(tab));
 }
 
@@ -2020,7 +2022,7 @@ function attachWebSession(tab: WorkspaceTab, sessionId: string): void {
   const status = queuedWebStatus.get(sessionId);
   if (status) updateTabStatus(tab, status.status, status.message);
   queuedWebStatus.delete(sessionId);
-  window.cybergrid.web.setVisible(sessionId, activeTabId === tab.id);
+  window.cybergrid.web.setVisible(sessionId, activeTabId === tab.id && !document.querySelector("#global-diagnostics[open], #bug-report[open]"));
   requestAnimationFrame(() => updateWebBounds(tab));
 }
 
@@ -4917,7 +4919,14 @@ function runSelectedPortScan(): void {
   void executeProfileDiagnostic(profile, "port");
 }
 
+let diagnosticsPanels: ReturnType<typeof createDiagnosticsPanels> | undefined;
 async function handleAppMenuCommand(command: AppMenuCommand): Promise<void> {
+  if (command === "global-diagnostics" || command === "report-bug") {
+    diagnosticsPanels ??= createDiagnosticsPanels(window.cybergrid, renderWorkspaceLayout);
+    if (command === "global-diagnostics") diagnosticsPanels.openDiagnostics();
+    else diagnosticsPanels.openBugReport();
+    return;
+  }
   const requiresUnlockedVault = new Set<AppMenuCommand>([
     "new-connection", "new-folder", "duplicate-connection", "delete-selection", "lock-vault",
     "import-export", "command-palette", "external-tools", "enterprise", "credential-profiles",

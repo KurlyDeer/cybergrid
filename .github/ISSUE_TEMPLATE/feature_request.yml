@@ -1,0 +1,18 @@
+name: Feature request
+description: Propose an improvement for systems administration workflows.
+title: "[Feature]: "
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem Statement
+      description: Which workflow is difficult today, and who is affected? Do not include confidential infrastructure details.
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed Solution
+      description: Describe the desired behavior, alternatives, and compatibility or security considerations.
+    validations:
+      required: true

@@ -1,3 +1,5 @@
+import type { BugReportPreview, GlobalDiagnosticRequest, GlobalDiagnosticResult } from "./diagnostics";
+
 export const IPC_CHANNELS = {
   appReady: "cybergrid:app:ready",
   sshConnect: "cybergrid:ssh:connect",
@@ -67,6 +69,10 @@ export const IPC_CHANNELS = {
   preferencesActivity: "cybergrid:preferences:activity",
   selectBackupDirectory: "cybergrid:dialog:select-backup-directory",
   diagnosticsRun: "cybergrid:diagnostics:run",
+  diagnosticsGlobal: "cybergrid:diagnostics:global",
+  diagnosticsCancel: "cybergrid:diagnostics:cancel",
+  bugReportPreview: "cybergrid:report:preview",
+  bugReportSend: "cybergrid:report:send",
   diagnosticsLaunch: "cybergrid:diagnostics:launch",
   vaultLocked: "cybergrid:app:vault-locked",
   trayQuickConnect: "cybergrid:app:tray-quick-connect",
@@ -251,6 +257,8 @@ export type ServerAuthType = "none" | "password" | "privateKey";
 export type CredentialProfileAuthType = Exclude<ServerAuthType, "none">;
 
 export type AppMenuCommand =
+  | "global-diagnostics"
+  | "report-bug"
   | "new-connection"
   | "new-folder"
   | "duplicate-connection"
@@ -1074,6 +1082,8 @@ export interface CyberGridApi {
     activity(): void;
   };
   diagnostics: {
+    global(request: GlobalDiagnosticRequest): Promise<GlobalDiagnosticResult>;
+    cancel(): Promise<void>;
     run(profileId: string, kind: DiagnosticKind): Promise<DiagnosticResult>;
     launch(profileId: string, action: ExternalDiagnosticKind): Promise<ExternalDiagnosticLaunchResult>;
   };
@@ -1094,6 +1104,8 @@ export interface CyberGridApi {
     exportConnections(request: MigrationRequest): Promise<MigrationExportResult>;
   };
   system: {
+    previewBugReport(description: string): Promise<BugReportPreview>;
+    sendBugReport(previewId: string): Promise<void>;
     whenReady(): Promise<void>;
     selectPrivateKey(): Promise<string | null>;
     selectBackupDirectory(currentPath?: string): Promise<string | null>;

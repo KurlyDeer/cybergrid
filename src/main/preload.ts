@@ -120,6 +120,10 @@ const IPC_CHANNELS: typeof import("../shared/ipc").IPC_CHANNELS = {
   preferencesActivity: "cybergrid:preferences:activity",
   selectBackupDirectory: "cybergrid:dialog:select-backup-directory",
   diagnosticsRun: "cybergrid:diagnostics:run",
+  diagnosticsGlobal: "cybergrid:diagnostics:global",
+  diagnosticsCancel: "cybergrid:diagnostics:cancel",
+  bugReportPreview: "cybergrid:report:preview",
+  bugReportSend: "cybergrid:report:send",
   diagnosticsLaunch: "cybergrid:diagnostics:launch",
   vaultLocked: "cybergrid:app:vault-locked",
   trayQuickConnect: "cybergrid:app:tray-quick-connect",
@@ -386,6 +390,8 @@ const api: CyberGridApi = {
     activity: () => ipcRenderer.send(IPC_CHANNELS.preferencesActivity),
   },
   diagnostics: {
+    global: (request) => ipcRenderer.invoke(IPC_CHANNELS.diagnosticsGlobal, request),
+    cancel: () => ipcRenderer.invoke(IPC_CHANNELS.diagnosticsCancel),
     run: (profileId, kind: DiagnosticKind) =>
       ipcRenderer.invoke(IPC_CHANNELS.diagnosticsRun, profileId, kind),
     launch: (profileId, action: ExternalDiagnosticKind) =>
@@ -429,6 +435,8 @@ const api: CyberGridApi = {
       ipcRenderer.invoke(IPC_CHANNELS.migrationExport, request),
   },
   system: {
+    previewBugReport: (description) => ipcRenderer.invoke(IPC_CHANNELS.bugReportPreview, description),
+    sendBugReport: (previewId) => ipcRenderer.invoke(IPC_CHANNELS.bugReportSend, previewId),
     whenReady: () => ipcRenderer.invoke(IPC_CHANNELS.appReady),
     selectPrivateKey: () => ipcRenderer.invoke(IPC_CHANNELS.selectPrivateKey),
     selectBackupDirectory: (currentPath?: string) =>
