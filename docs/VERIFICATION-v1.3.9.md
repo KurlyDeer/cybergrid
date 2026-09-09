@@ -31,6 +31,8 @@ Coverage includes default/custom IPv4 and IPv6 RDP addresses, serialized polling
 
 For this release, typecheck, all listed regressions, the clean build and Windows packaging passed. Native helper execution was also checked from the packaged `app.asar`. Packaged main/preload/renderer/worker/style bytes matched the local build, test fixtures were absent from the archive, and updater SHA-512 metadata matched the installer. Installer and portable SHA-256 hashes are published with the GitHub release.
 
+The release audit also patched the transitive `js-yaml` dependency from 4.3.1 to 4.3.2 for [GHSA-2883-xcg3-v3hh](https://github.com/advisories/GHSA-2883-xcg3-v3hh), a YAML merge-source CPU exhaustion issue published in the advisory database on September 8, 2026. `npm audit` then reported zero known vulnerabilities. This is a point-in-time dependency check, not a claim that the application has no security defects. GitHub may take time to reconcile older alerts for `fast-uri` and `@xmldom/xmldom`, which are already patched in this lockfile.
+
 ## Safety and remaining limits
 
 - No production vault, credentials or remote hosts are used in these tests. DNS flushing and Nmap execution use fixtures; TCP tests use loopback only. No network sweep is run automatically during verification.
