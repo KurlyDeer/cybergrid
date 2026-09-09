@@ -27,6 +27,14 @@ async function bundleApplication() {
   await Promise.all([
     build({
       ...common,
+      entryPoints: [join(sourceRoot, "main", "rdp", "native-worker.ts")],
+      external: ["koffi"],
+      format: "cjs",
+      outfile: join(outputRoot, "main", "rdp-native-worker.js"),
+      platform: "node",
+    }),
+    build({
+      ...common,
       entryPoints: [join(sourceRoot, "main", "main.ts")],
       external: [
         "electron",

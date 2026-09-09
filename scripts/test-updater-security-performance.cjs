@@ -56,10 +56,10 @@ const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
   assert.equal(normalizeThemeName("toString"),undefined);
 
   let moves=0;const sender={isDestroyed:()=>true};
-  const {RdpController}=await load("src/main/rdp.ts",{electron:{BrowserWindow:{fromWebContents:()=>null}}});
+  const {RdpController}=await load("src/main/rdp.ts",{electron:{BrowserWindow:{fromWebContents:()=>({isDestroyed:()=>false})}}});
   const rdp=new RdpController("unused-fixture");
   const session={id:"fixture",sender,hostReady:true,closed:false,visible:true,windowHandle:1,
-    bounds:{x:0,y:0,width:1,height:1},native:{move:()=>{moves++},setVisible(){}}};
+    bounds:{x:0,y:0,width:1,height:1},native:{request:async()=>{moves++;return {ok:true}}}};
   rdp.sessions.set(session.id,session);
   for(let width=100;width<200;width++)rdp.setBounds(session.id,{x:0,y:0,width,height:100});
   assert.equal(moves,0);await sleep(190);assert.equal(moves,1);assert.equal(session.bounds.width,199);

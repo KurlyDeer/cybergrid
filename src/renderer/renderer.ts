@@ -98,12 +98,13 @@ type NoVncRfbConstructor = new (
   options?: { credentials?: { password?: string } },
 ) => NoVncRfbInstance;
 
-type WorkspaceTabKind = ConnectionProtocol | "welcome";
+type WorkspaceTabKind = ConnectionProtocol | "welcome" | "diagnostic";
 type WorkspaceStatus = SshConnectionStatus | RdpConnectionStatus | "idle" | "loading" | "ready" | "opening";
 type SwitchDeviceOs = "auto" | "cisco" | "fortinet" | "hp" | "generic";
 
 interface WorkspaceTab {
   id: string;
+  cleanup?: () => void;
   kind: WorkspaceTabKind;
   label: string;
   context: SessionVariableContext;
@@ -1062,7 +1063,7 @@ function openShortcuts(): void {
 
 const PROTOCOL_LABELS: Record<WorkspaceTabKind, string> = {
   ssh: "SSH", rdp: "RDP", telnet: "TEL", raw: "RAW", vnc: "VNC",
-  http: "WEB", https: "WEB", serial: "COM", local: "LOC", welcome: "CG",
+  http: "WEB", https: "WEB", serial: "COM", local: "LOC", welcome: "CG", diagnostic: "NET",
 };
 
 function currentWorkspaceSnapshot(): WorkspaceSnapshot {
@@ -1285,7 +1286,7 @@ function createWelcomeTab(): WorkspaceTab {
 
 function createTerminalTab(
   label: string,
-  kind: "ssh" | "telnet" | "raw" | "serial" | "local" | "welcome" = "ssh",
+  kind: "ssh" | "telnet" | "raw" | "serial" | "local" | "welcome" | "diagnostic" = "ssh",
   context?: Partial<SessionVariableContext>,
   appearance?: TerminalAppearanceOverrides,
   profile?: ServerProfileSummary,
@@ -1639,6 +1640,8 @@ async function closeTab(id: string): Promise<void> {
   const closedIndex = tabOrder.indexOf(id);
   if (tab.reconnectTimer !== undefined) window.clearTimeout(tab.reconnectTimer);
   tab.reconnectKey?.dispose();
+  tab.cleanup?.();
+  tab.cleanup = undefined;
   tab.localPromptCancel?.();
   tab.localPromptCancel = undefined;
   tab.localInputHandler = undefined;
@@ -3680,6 +3683,32 @@ async function duplicateConnection(profileId: string, group?: string): Promise<v
   }
 }
 
+async function executeContextTool(profile: ServerProfileSummary, action: import("../shared/ipc").ContextToolAction): Promise<void> {
+  closeServerContextMenu();
+  const jobId = crypto.randomUUID();
+  const title = action === "nmap-subnet" ? `Nmap /24 · ${profile.host}` : "Flush DNS · Local";
+  const tab = createTerminalTab(title, "diagnostic");
+  tab.terminal!.options.disableStdin = true;
+  tab.terminal!.writeln(action === "nmap-subnet"
+    ? `Resolving ${profile.host} and running Nmap host discovery on its /24 subnet...`
+    : "Flushing the local Windows DNS cache...");
+  tab.cleanup = () => { void window.cybergrid.diagnostics.cancelContext(jobId).catch(() => undefined); };
+  const cancel = document.createElement("button");
+  cancel.className = "diagnostic-cancel secondary-button";
+  cancel.type = "button"; cancel.textContent = "Cancel diagnostic";
+  cancel.addEventListener("click", () => { cancel.disabled = true; tab.cleanup?.(); });
+  tab.paneElement.prepend(cancel);
+  updateTabStatus(tab, "loading");
+  try {
+    const result = await window.cybergrid.diagnostics.context(profile.id, action, jobId);
+    if (!tabs.has(tab.id)) return;
+    tab.terminal?.writeln(result.output.replace(/\r?\n/g, "\r\n"));
+    updateTabStatus(tab, result.success ? "ready" : "error", result.summary);
+  } catch (error) {
+    if (tabs.has(tab.id)) { tab.terminal?.writeln(errorMessage(error)); updateTabStatus(tab, "error", "Diagnostic failed"); }
+  } finally { tab.cleanup = undefined; cancel.remove(); }
+}
+
 function openServerContextMenu(event: MouseEvent, profile: ServerProfileSummary): void {
   event.preventDefault();
   event.stopPropagation();
@@ -3729,7 +3758,9 @@ function openServerContextMenu(event: MouseEvent, profile: ServerProfileSummary)
   appendContextSeparator();
   addAction("Ping test (single)", () => void executeProfileDiagnostic(profile, "ping"), nonNetwork);
   addAction("DNS lookup", () => void executeProfileDiagnostic(profile, "dns"), nonNetwork);
-  addAction(`Port check (${profile.port})`, () => void executeProfileDiagnostic(profile, "port"), nonNetwork);
+  addAction("Check TCP Port Status", () => void executeProfileDiagnostic(profile, "port"), nonNetwork);
+  addAction("Flush DNS (Local)", () => void executeContextTool(profile, "flush-dns"));
+  addAction("Nmap Subnet Scan", () => void executeContextTool(profile, "nmap-subnet"), nonNetwork);
   positionContextMenu(event.clientX, event.clientY, Math.min(620, 360 + externalTools.length * 34));
 }
 
@@ -3912,9 +3943,10 @@ function renderProfiles(): void {
     list.append(row);
   };
 
-  const renderFolder = (node: ProfileFolderNode, parent: HTMLElement): void => {
+  const renderFolder = (node: ProfileFolderNode, parent: HTMLElement, depth = 0): void => {
     const section = document.createElement("section");
     section.className = "server-group";
+    section.style.setProperty("--tree-depth", String(Math.min(depth, 12)));
     section.classList.toggle("collapsed", collapsedGroups.has(node.path));
     const defaults = folderDefaults.find((item) => item.path === node.path);
     const folder = document.createElement("button");
@@ -3924,6 +3956,7 @@ function renderProfiles(): void {
     folder.classList.toggle("selected", selectedTreeKeys.has(treeKey));
     folder.type = "button";
     folder.dataset.treeKey = treeKey;
+    folder.title = node.path;
     folder.style.setProperty("--node-color", defaults?.indicatorColor ?? "var(--accent)");
     folder.setAttribute("aria-expanded", String(!collapsedGroups.has(node.path)));
     folder.append(
@@ -3973,7 +4006,7 @@ function renderProfiles(): void {
     const list = document.createElement("div");
     list.className = "server-list";
     for (const profile of [...node.profiles].sort((left, right) => left.name.localeCompare(right.name))) renderProfile(profile, list);
-    for (const child of [...node.children.values()].sort((left, right) => left.name.localeCompare(right.name))) renderFolder(child, list);
+    for (const child of [...node.children.values()].sort((left, right) => left.name.localeCompare(right.name))) renderFolder(child, list, depth + 1);
     section.append(folder, list);
     parent.append(section);
   };

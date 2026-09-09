@@ -14,6 +14,18 @@
 
 CyberGrid consolidates the daily tools of a senior systems administrator into one focused, high-density desktop workspace. Its compact mRemote-style connection tree, edge-to-edge session tabs, encrypted connection management, file transfer, discovery, IPAM, diagnostics, automation, and operational documentation are designed for fast keyboard-driven administration without requiring a central cloud service.
 
+## Version 1.3.9 — RDP Responsiveness & Context Tools
+
+- **Isolated RDP native host:** each RDP session lazily starts a killable Electron utility process for Win32 calls. The main process polls asynchronously every 250 ms, with one outstanding probe and a 10-second attachment deadline. A blocked native call can no longer monopolize Electron's JavaScript event loop. Credential Manager and process termination commands are asynchronous too.
+- **Docking repaint:** PID-matched `UIMainClass`, `OPWindowClass`, or `TscShellContainerClass` windows receive child styles, frame-change/no-activate/asynchronous positioning flags, a one-pixel width nudge, and explicit redraw requests. Resizes still coalesce over 150 ms. This is a Windows compatibility workaround—not a guarantee across all RDP clients, GPU drivers, or mixed-DPI monitors.
+- **Clean default address:** port 3389 is omitted from both the mstsc `/v:` argument and generated RDP file. Explicit custom ports and bracketed IPv6 addresses are retained. Existing Windows MRU entries are not rewritten.
+- **Nested tree badges:** full-width folder rows keep counts aligned at the same right edge, while indentation applies to the content and long names truncate. Hover a folder to see its full path.
+- **Saved connection context tools:** **Check TCP Port Status** reports Up/Down and handshake latency, with a two-second deadline. **Flush DNS (Local)** runs Windows `ipconfig /flushdns`. **Nmap Subnet Scan** finds Nmap in PATH, resolves the endpoint to IPv4, and runs host discovery (`-sn`) on its /24 in a read-only terminal tab. IPv6 subnet scans are not supported.
+
+Context commands never invoke a shell or elevate privileges automatically. Nmap must be installed separately and visible in PATH when CyberGrid starts. The /24 is derived from the selected IPv4 address, not your interface netmask; run discovery only on networks you are authorized to scan. Nmap results can be incomplete when hosts filter discovery probes. Cancel the job or close its tab to stop it; output is capped at 128 KiB, execution at 60 seconds, and concurrent context jobs at four. DNS flushing affects the local workstation, not the selected remote host.
+
+See [v1.3.9 verification notes](docs/VERIFICATION-v1.3.9.md) for regression coverage and live RDP limitations.
+
 ## Version 1.3.8 — Themed UI & Resource Hardening
 
 - **In-app updater dialogs:** update availability, restart, up-to-date, development-build and interactive error messages follow the active palette. Passive update notices disappear after three seconds. Native file pickers, exit confirmations and emergency crash dialogs remain native.

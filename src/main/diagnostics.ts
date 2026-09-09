@@ -130,22 +130,25 @@ async function dnsLookup(host: string): Promise<CommandResult> {
   }
 }
 
-function portCheck(host: string, port: number): Promise<CommandResult> {
+export function portCheck(host: string, port: number): Promise<CommandResult> {
   return new Promise((resolve) => {
     const socket = new Socket();
     let settled = false;
-    const finish = (success: boolean, output: string): void => {
+    const started = Date.now();
+    const finish = (success: boolean, detail: string): void => {
       if (settled) return;
       settled = true;
-      socket.removeAllListeners();
+      clearTimeout(deadline);
       socket.destroy();
-      resolve({ success, output });
+      resolve({ success, output: `${success ? "Up" : "Down"} — ${host}:${port}\n${detail}` });
     };
+    const deadline = setTimeout(() => finish(false, "ETIMEDOUT after 2000 ms"), 2_000);
     socket.setTimeout(2_000);
-    socket.once("connect", () => finish(true, `${host}:${port} accepted a TCP connection.`));
-    socket.once("timeout", () => finish(false, `${host}:${port} timed out after 2000 ms.`));
-    socket.once("error", (error) => finish(false, `${host}:${port} ${error.message}`));
-    socket.connect(port, host);
+    socket.once("connect", () => finish(true, `TCP connection accepted in ${Date.now() - started} ms.`));
+    socket.once("timeout", () => finish(false, "ETIMEDOUT after 2000 ms"));
+    socket.on("error", (error: NodeJS.ErrnoException) => finish(false, error.code ?? error.message));
+    try { socket.connect(port, host); }
+    catch (error) { finish(false, error instanceof Error ? error.message : "Invalid TCP target."); }
   });
 }
 
@@ -183,7 +186,7 @@ export async function runDiagnostic(
     profileId,
     kind,
     success: result.success,
-    summary: `${labels[kind]} ${result.success ? "succeeded" : "failed"} in ${durationMs} ms`,
+    summary: `${labels[kind]} ${kind === "port" ? (result.success ? "Up" : "Down") : (result.success ? "succeeded" : "failed")} in ${durationMs} ms`,
     output: result.output,
     durationMs,
     checkedAt: new Date().toISOString(),

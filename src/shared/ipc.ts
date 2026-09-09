@@ -70,6 +70,8 @@ export const IPC_CHANNELS = {
   selectBackupDirectory: "cybergrid:dialog:select-backup-directory",
   diagnosticsRun: "cybergrid:diagnostics:run",
   diagnosticsGlobal: "cybergrid:diagnostics:global",
+  diagnosticsContext: "cybergrid:diagnostics:context",
+  diagnosticsContextCancel: "cybergrid:diagnostics:context-cancel",
   diagnosticsCancel: "cybergrid:diagnostics:cancel",
   bugReportPreview: "cybergrid:report:preview",
   bugReportSend: "cybergrid:report:send",
@@ -931,6 +933,8 @@ export interface DetachSessionRequest {
 
 export interface DetachedSessionDescriptor extends Omit<DetachSessionRequest, "screenX" | "screenY"> {}
 
+export type ContextToolAction = "flush-dns" | "nmap-subnet";
+export interface ContextToolResult { success: boolean; summary: string; output: string }
 export type DiagnosticKind = "ping" | "traceroute" | "dns" | "port";
 export type ExternalDiagnosticKind = "continuous-ping" | "traceroute" | "wireshark";
 
@@ -1076,6 +1080,8 @@ export interface CyberGridApi {
     activity(): void;
   };
   diagnostics: {
+    context(profileId: string, action: ContextToolAction, jobId: string): Promise<ContextToolResult>;
+    cancelContext(jobId: string): Promise<void>;
     global(request: GlobalDiagnosticRequest): Promise<GlobalDiagnosticResult>;
     cancel(): Promise<void>;
     run(profileId: string, kind: DiagnosticKind): Promise<DiagnosticResult>;

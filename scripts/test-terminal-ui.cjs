@@ -29,6 +29,9 @@ let blockDisconnect = false;
 const writes = [];
 const diagnosticRequests = [];
 const reportOpens = [];
+const contextRequests = [];
+const contextCancels = [];
+const pendingContexts = new Map();
 const { RollingErrorBuffer, BugReporter } = loadSource("src/main/bug-report.ts");
 const testErrorBuffer = new RollingErrorBuffer();
 testErrorBuffer.capture("Synthetic report fixture: no real user logs.");
@@ -41,6 +44,15 @@ for (const channel of Object.values(channels)) {
     if (channel === channels.diagnosticsGlobal) {
       diagnosticRequests.push(args[0]);
       return {kind:args[0].kind,success:true,summary:"Fixture complete",durationMs:12,rows:[{label:"Fixture",value:'<img src=x onerror="window.injected=true">'},{label:"Expiry",value:"12 days remaining",warning:true}]};
+    }
+    if (channel === channels.diagnosticsContext) {
+      contextRequests.push(args);
+      return new Promise(resolve => { pendingContexts.set(args[2], resolve); });
+    }
+    if (channel === channels.diagnosticsContextCancel) {
+      contextCancels.push(args[0]);
+      pendingContexts.get(args[0])?.({success:false,summary:"Cancelled",output:"Cancelled."});
+      pendingContexts.delete(args[0]); return null;
     }
     if (channel === channels.preferencesGet) return preferences.get();
     if (channel === channels.preferencesUpdate) {
@@ -85,7 +97,7 @@ async function until(code) {
 }
 app.whenReady().then(async () => {
   const renderer = readFileSync(join(root, "src/renderer/renderer.ts"), "utf8");
-  buildSync({ stdin: { contents: renderer + "\nwindow.__terminalTest = { tabs, connectQuickSsh, createTerminalTab, closeTab, openSettingsModal, applyHealthStatus, updateBroadcastControls, applySettings, currentSettings, queuedSshData, queuedSshStatus };", loader: "ts", resolveDir: join(root, "src/renderer") }, bundle: true, platform: "browser", format: "iife", outfile: join(root, "build/renderer/renderer-test.js") });
+  buildSync({ stdin: { contents: renderer + "\nwindow.__terminalTest = { tabs, connectQuickSsh, createTerminalTab, closeTab, openSettingsModal, applyHealthStatus, updateBroadcastControls, applySettings, currentSettings, queuedSshData, queuedSshStatus, openServerContextMenu, executeContextTool, setProfiles: profiles => { savedProfiles=profiles; renderProfiles(); } };", loader: "ts", resolveDir: join(root, "src/renderer") }, bundle: true, platform: "browser", format: "iife", outfile: join(root, "build/renderer/renderer-test.js") });
   const html = readFileSync(join(root, "build/renderer/index.html"), "utf8").replace('src="./startup.js"', 'src="./renderer-test.js"');
   writeFileSync(join(root, "build/renderer/renderer-test.html"), html);
   window = new BrowserWindow({ show: false, width: 1280, height: 850, webPreferences: { preload: join(root, "build/main/preload.js"), contextIsolation: true, nodeIntegration: false, backgroundThrottling: false, offscreen: true } });
@@ -238,7 +250,8 @@ app.whenReady().then(async () => {
   window.webContents.sendInputEvent({type:"mouseUp",x:2,y:2,button:"left",clickCount:1});
   await until('!document.getElementById("global-diagnostics").open');
   await require("./test-v138-ui.cjs")({window, channels, evaluate, until, sleep, root});
-  console.log("PASS: v1.3.8 themed updater modals, six themes, sidebar layout, immediate disposal, plus diagnostics/settings/broadcast/terminal regressions");
+  await require("./test-v139-ui.cjs")({window,evaluate,until,sleep,root,contextRequests,contextCancels,pendingContexts,captureFrame});
+  console.log("PASS: v1.3.9 nested badges/context tools plus updater, themes, lifecycle, diagnostics, settings, broadcast and terminal regressions");
   window.destroy();
   app.exit(0);
 }).catch((error) => { console.error(error); app.exit(1); });

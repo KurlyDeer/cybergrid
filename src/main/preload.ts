@@ -121,6 +121,8 @@ const IPC_CHANNELS: typeof import("../shared/ipc").IPC_CHANNELS = {
   selectBackupDirectory: "cybergrid:dialog:select-backup-directory",
   diagnosticsRun: "cybergrid:diagnostics:run",
   diagnosticsGlobal: "cybergrid:diagnostics:global",
+  diagnosticsContext: "cybergrid:diagnostics:context",
+  diagnosticsContextCancel: "cybergrid:diagnostics:context-cancel",
   diagnosticsCancel: "cybergrid:diagnostics:cancel",
   bugReportPreview: "cybergrid:report:preview",
   bugReportSend: "cybergrid:report:send",
@@ -390,6 +392,8 @@ const api: CyberGridApi = {
     activity: () => ipcRenderer.send(IPC_CHANNELS.preferencesActivity),
   },
   diagnostics: {
+    context: (profileId, action, jobId) => ipcRenderer.invoke(IPC_CHANNELS.diagnosticsContext, profileId, action, jobId),
+    cancelContext: (jobId) => ipcRenderer.invoke(IPC_CHANNELS.diagnosticsContextCancel, jobId),
     global: (request) => ipcRenderer.invoke(IPC_CHANNELS.diagnosticsGlobal, request),
     cancel: () => ipcRenderer.invoke(IPC_CHANNELS.diagnosticsCancel),
     run: (profileId, kind: DiagnosticKind) =>

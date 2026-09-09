@@ -1,3 +1,4 @@
+import { runContextTool } from "./diagnostics/context-tools";
 import { pathToFileURL } from "node:url";
 import { normalizeThemeName } from "../shared/themes";
 import { isTrustedRenderer, type TrustedRenderer } from "./ipc-security";
@@ -478,6 +479,7 @@ async function saveWorkspaceSnapshot(value: unknown): Promise<void> {
 const rendererRestartHistory = new Map<number, number[]>();
 
 app.on("child-process-gone", (_event, details) => {
+  if (details.reason === "clean-exit" || (details.reason === "killed" && details.serviceName === "CyberGrid RDP Window Host")) return;
   console.error("[CyberGrid child process terminated]", {
     type: details.type,
     reason: details.reason,
@@ -1993,6 +1995,7 @@ function lockApplication(reason: string, notifyRenderer: boolean): void {
   if (autoLockTimer) clearTimeout(autoLockTimer);
   autoLockTimer = undefined;
   scannerController?.cancelAll();
+  for (const controller of activeContextTools.values()) controller.abort();
   healthController.stop();
   sshController?.disconnectAll(reason);
   streamController.disconnectAll();
@@ -2201,7 +2204,29 @@ async function connectProfile(
   }
 }
 
+const activeContextTools = new Map<string, AbortController>();
+
 function registerIpcHandlers(): void {
+  ipcMain.handle(IPC_CHANNELS.diagnosticsContext, async (event, profileId: unknown, action: unknown, jobId: unknown) => {
+    assertTrustedSender(event);
+    if (action !== "flush-dns" && action !== "nmap-subnet") throw new Error("Unsupported context tool.");
+    const id = readUuid(profileId, "server profile ID");
+    const key = `${event.sender.id}:${readUuid(jobId, "diagnostic job ID")}`;
+    if (activeContextTools.size >= 4 || activeContextTools.has(key)) throw new Error("A diagnostic is already running. Wait or cancel it.");
+    const profile = requireVault().getConnectionProfile(id);
+    if (action === "nmap-subnet" && (profile.protocol === "serial" || profile.protocol === "local")) throw new Error("This profile has no network target.");
+    const target = action === "nmap-subnet" ? parseConnectionTarget(resolveEnvironmentTokens(profile.host, "Diagnostic host") as string).host : "";
+    const controller = new AbortController();
+    const cancel = (): void => controller.abort();
+    activeContextTools.set(key, controller);
+    event.sender.once("destroyed", cancel);
+    try { return await runContextTool(action, target, controller.signal); }
+    finally { activeContextTools.delete(key); event.sender.removeListener("destroyed", cancel); }
+  });
+  ipcMain.handle(IPC_CHANNELS.diagnosticsContextCancel, (event, jobId: unknown) => {
+    assertTrustedSender(event);
+    activeContextTools.get(`${event.sender.id}:${readUuid(jobId, "diagnostic job ID")}`)?.abort();
+  });
   const assertDiagnosticSender = (event: IpcMainInvokeEvent): void => {
     assertTrustedSender(event);
     if (event.senderFrame !== event.sender.mainFrame) throw new Error("Only the application main frame may use this tool.");
@@ -2860,8 +2885,8 @@ function registerIpcHandlers(): void {
     assertTrustedSender(event);
     const id = readUuid(profileId, "server profile ID");
     const profile = requireVault().getConnectionProfile(id);
-    if (profile.protocol === "serial") {
-      throw new Error("Network diagnostics are unavailable for serial profiles.");
+    if (profile.protocol === "serial" || profile.protocol === "local") {
+      throw new Error("Network diagnostics are unavailable for serial or local profiles.");
     }
     const target = parseConnectionTarget(resolveEnvironmentTokens(profile.host, "Diagnostic host") as string);
     return runDiagnostic(
@@ -3232,7 +3257,7 @@ app.on("before-quit", (event) => {
   if (!auditLogsFlushed && !flushingAuditLogs) {
     flushingAuditLogs = true;
     event.preventDefault();
-    void Promise.allSettled([auditController.flush(), sshController?.flushLogs()]).finally(() => {
+    void Promise.allSettled([auditController.flush(), sshController?.flushLogs(), rdpController?.flush()]).finally(() => {
       auditLogsFlushed = true;
       app.quit();
     });
