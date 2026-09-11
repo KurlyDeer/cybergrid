@@ -6,7 +6,7 @@ import { promisify } from "node:util";
 import { BrowserWindow, type WebContents } from "electron";
 import { IPC_CHANNELS, type RdpBounds, type RdpConnectionConfig, type RdpConnectionStatus, type RdpStatusEvent } from "../shared/ipc";
 import { RdpNativeHost } from "./rdp/native-host";
-import { pollForRdpWindow, rdpAddress } from "./rdp/native-protocol";
+import { pollForRdpWindow, rdpAddress, RDP_WATCH_INTERVAL_MS } from "./rdp/native-protocol";
 
 const runFile = promisify(execFile);
 
@@ -14,7 +14,12 @@ interface RdpSession {
   id: string;
   sender: WebContents;
   configurationPath: string;
-  hostProcess?: ChildProcess;
+  launcher?: ChildProcess;
+  launched: boolean;
+  windowHandle?: string;
+  claimPending?: Promise<boolean>;
+  watchTimer?: ReturnType<typeof setInterval>;
+  watchBusy?: boolean;
   credentialTarget?: string;
   cmdkeyPath: string;
   credentialsPending?: Promise<void>;
@@ -32,6 +37,7 @@ interface RdpSession {
 
 export class RdpController {
   private readonly sessions = new Map<string, RdpSession>();
+  private readonly claimedWindows = new Set<string>();
   private readonly observedSenders = new WeakSet<WebContents>();
   private readonly pendingCleanup = new Set<Promise<void>>();
 
@@ -54,7 +60,7 @@ export class RdpController {
     await writeFile(configurationPath, this.createConfiguration(config), { encoding: "utf16le", mode: 0o600 });
     const session: RdpSession = { id, sender, configurationPath, cmdkeyPath,
       bounds: { x: 0, y: 0, width: 1, height: 1 }, visible: false, hostReady: false,
-      closed: false, abort: new AbortController() };
+      launched: false, closed: false, abort: new AbortController() };
     this.sessions.set(id, session);
     if (!this.observedSenders.has(sender)) {
       this.observedSenders.add(sender);
@@ -63,19 +69,19 @@ export class RdpController {
     try {
       if (sender.isDestroyed() || parent.isDestroyed()) throw new Error("RDP launch cancelled: window closed.");
       this.emitStatus(session, "launching", `Opening Windows Remote Desktop for ${config.host}...`);
+      session.native = new RdpNativeHost((error) => this.closeSession(session, "error", error.message, true));
+      await session.native.request({ op: "prepare", host: config.host, port: config.port,
+        marker: BigInt("0x" + id.replaceAll("-", "").slice(0, 15)).toString() });
+      if (session.closed) throw new Error("RDP launch cancelled.");
       session.credentialsPending = this.prepareCredential(session, config);
       await session.credentialsPending;
       if (session.closed) throw new Error("RDP launch cancelled.");
       const child = spawn(mstscPath, [configurationPath, `/v:${rdpAddress(config.host, config.port)}`],
         { windowsHide: false, stdio: "ignore" });
-      session.hostProcess = child;
-      child.once("error", () => this.closeSession(session, "error", "Windows RDP could not start.", false));
-      child.once("exit", (code) => {
-        if (session.closed) return;
-        const normal = session.hostReady && (code === 0 || code === null);
-        this.closeSession(session, normal ? "closed" : "error",
-          normal ? "RDP session closed." : `Windows RDP exited with code ${code}.`, false);
-      });
+      session.launcher = child;
+      session.launched = true;
+      // mstsc may hand off to another process. Launcher exit/close never owns tab state.
+      child.once("error", () => this.closeSession(session, "error", "Windows RDP could not start.", true));
       void this.attachNativeWindow(session).catch((error: unknown) =>
         this.closeSession(session, "error", error instanceof Error ? error.message : "RDP docking failed.", true));
     } catch (error) {
@@ -134,19 +140,50 @@ export class RdpController {
   async flush(): Promise<void> { await Promise.allSettled([...this.pendingCleanup]); }
 
   private async attachNativeWindow(session: RdpSession): Promise<void> {
-    const processId = session.hostProcess?.pid;
-    if (!processId) throw new Error("Windows RDP did not provide a process identifier.");
-    session.native = new RdpNativeHost((error) => this.closeSession(session, "error", error.message, true));
-    await pollForRdpWindow(async () => {
-      if (session.closed || !session.native) return false;
-      const result = await session.native.request({ op: "find", processId });
-      return result.found === true;
-    }, session.abort.signal);
+    await pollForRdpWindow(() => this.claimWindow(session), session.abort.signal);
     if (session.closed) return;
     session.hostReady = true;
     session.parentDirty = true;
     await this.drainGeometry(session);
-    if (!session.closed) this.emitStatus(session, "running", "RDP window docked in the active tab.");
+    if (!session.closed) {
+      this.emitStatus(session, "running", "RDP window docked in the active tab.");
+      session.watchTimer = setInterval(() => { void this.checkWindow(session); }, RDP_WATCH_INTERVAL_MS);
+    }
+  }
+
+  private claimWindow(session: RdpSession): Promise<boolean> {
+    if (session.claimPending) return session.claimPending;
+    const pending = this.findAndClaimWindow(session);
+    session.claimPending = pending;
+    const clear = (): void => { if (session.claimPending === pending) session.claimPending = undefined; };
+    void pending.then(clear, clear);
+    return pending;
+  }
+
+  private async findAndClaimWindow(session: RdpSession): Promise<boolean> {
+    if (!session.native || session.windowHandle) return Boolean(session.windowHandle);
+    const result = await session.native.request({ op: "find", excluded: [...this.claimedWindows] });
+    const handle = result.windowHandle;
+    if (!result.found || !handle || this.claimedWindows.has(handle)) return false;
+    // Reservations are serialized in Electron, across all per-session helpers.
+    this.claimedWindows.add(handle);
+    try {
+      const claim = await session.native.request({ op: "claim", handle });
+      if (!claim.claimed) { this.claimedWindows.delete(handle); return false; }
+      session.windowHandle = handle;
+      return true;
+    } catch (error) { this.claimedWindows.delete(handle); throw error; }
+  }
+
+  private async checkWindow(session: RdpSession): Promise<void> {
+    if (session.closed || !session.native || session.watchBusy || session.geometryBusy) return;
+    session.watchBusy = true;
+    try {
+      const result = await session.native.request({ op: "watch" });
+      if (!session.closed && result.alive === false) this.closeSession(session, "closed", "RDP window closed.", false);
+    } catch (error) {
+      if (!session.closed) this.closeSession(session, "error", error instanceof Error ? error.message : "RDP window check failed.", true);
+    } finally { session.watchBusy = false; }
   }
 
   private nativeHandle(window: BrowserWindow): string {
@@ -159,8 +196,11 @@ export class RdpController {
   private applyGeometry(session: RdpSession): void {
     clearTimeout(session.geometryTimer);
     session.geometryDirty = true;
-    void this.drainGeometry(session).catch((error: unknown) =>
-      this.closeSession(session, "error", error instanceof Error ? error.message : "RDP resize failed.", true));
+    void this.drainGeometry(session).catch((error: unknown) => {
+      const gone = error instanceof Error && error.message === "The RDP window is no longer available.";
+      this.closeSession(session, gone ? "closed" : "error",
+        gone ? "RDP window closed." : error instanceof Error ? error.message : "RDP resize failed.", !gone);
+    });
   }
 
   private async drainGeometry(session: RdpSession): Promise<void> {
@@ -230,17 +270,15 @@ export class RdpController {
     } catch { throw new Error("Windows Credential Manager rejected the RDP credentials."); }
   }
 
-  private async terminateProcess(session: RdpSession): Promise<void> {
-    const pid = session.hostProcess?.pid;
-    if (!pid || session.hostProcess?.exitCode !== null) return;
-    if (process.env.SystemRoot) {
-      try {
-        await runFile(join(process.env.SystemRoot, "System32", "taskkill.exe"), ["/PID", String(pid), "/T", "/F"],
-          { windowsHide: true, timeout: 5_000, maxBuffer: 64 * 1024 });
-        return;
-      } catch { /* Fall back only to the exact process spawned by this session. */ }
+  private async closeNativeWindow(session: RdpSession): Promise<void> {
+    if (!session.native || !session.launched) return;
+    if (!session.windowHandle) {
+      // A cancelled launch can still hand off a window. Briefly reap only a new,
+      // matching, unclaimed window; never kill a process by a stale/recycled PID.
+      await pollForRdpWindow(() => this.claimWindow(session), new AbortController().signal, 250, 2_000)
+        .catch(() => undefined);
     }
-    try { session.hostProcess?.kill("SIGKILL"); } catch { /* Already exited. */ }
+    if (session.windowHandle) await session.native.request({ op: "close" });
   }
 
   private disconnectForSender(sender: WebContents): void {
@@ -259,11 +297,18 @@ export class RdpController {
     session.closed = true;
     session.abort.abort();
     clearTimeout(session.geometryTimer);
-    session.native?.dispose();
+    clearInterval(session.watchTimer);
     this.sessions.delete(session.id);
     const cleanup = (async () => {
       await session.credentialsPending?.catch(() => undefined);
-      if (terminate) await this.terminateProcess(session);
+      try {
+        if (terminate) await this.closeNativeWindow(session);
+      } catch { console.warn("RDP window close could not be confirmed; review Windows Remote Desktop."); }
+      finally {
+        session.native?.dispose();
+        if (session.windowHandle) this.claimedWindows.delete(session.windowHandle);
+        session.launcher?.unref();
+      }
       if (session.credentialTarget) {
         try {
           await runFile(session.cmdkeyPath, [`/delete:${session.credentialTarget}`],

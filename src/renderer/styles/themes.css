@@ -79,21 +79,27 @@
 .update-toast[data-update-status] { padding: 10px 12px; box-shadow: 0 4px 16px #00000033; }
 .update-toast > p { margin: 0; color: var(--text); font-size: 12px; }
 
-/* Keep every row full-width. Indent content, not nested boxes, so the badge's
-   row-relative right edge is the same sidebar edge at every tree depth. */
+/* Indent only the flexible content; the badge stays in normal layout flow. */
 html[data-compact-tree] .server-tree .server-group {
   width: 100%; min-width: 0; max-width: 100%; margin: 0; border-left: 0;
 }
 .server-tree .server-list { width: 100%; min-width: 0; margin: 0; padding: 0; }
 .server-tree .server-group > .folder-header {
-  position: relative; width: 100%; min-width: 0; box-sizing: border-box;
-  padding-left: calc(4px + var(--tree-depth, 0) * 10px); padding-right: 66px;
-  grid-template-columns: 10px minmax(0, 1fr);
+  position: static; display: flex; justify-content: space-between; align-items: center;
+  width: 100%; min-width: 0; box-sizing: border-box; gap: 6px;
+  padding: 1px 12px 1px 4px;
 }
+.server-tree .folder-content {
+  display: flex; flex: 1 1 0; min-width: 0; max-width: 100%; align-items: center; gap: 4px;
+  padding-left: min(calc(var(--tree-depth, 0) * 10px), 45%);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.server-tree .folder-content > .folder-chevron { flex: 0 0 10px; }
+.server-tree .folder-content > .folder-name { flex: 1 1 0; }
 .server-tree .folder-name { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .server-tree .folder-header > .folder-count.folder-count-badge {
-  position: absolute; right: 12px; top: 50%; transform: translateY(-50%);
-  max-width: 50px; padding: 1px 5px; line-height: 14px; overflow: hidden; text-overflow: ellipsis;
+  position: static; inset: auto; transform: none; flex: 0 0 auto;
+  min-width: 20px; max-width: none; padding: 1px 5px; line-height: 14px;
 }
 .server-tree .server-group > .server-list > .server-row {
   width: 100%; min-width: 0; box-sizing: border-box; padding-left: calc(12px + var(--tree-depth, 0) * 10px);

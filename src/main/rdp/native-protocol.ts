@@ -1,14 +1,32 @@
 import type { RdpBounds } from "../../shared/ipc";
 
 export type NativeOperation =
-  | { op: "find"; processId: number }
+  | { op: "prepare"; host: string; port?: number; marker: string }
+  | { op: "find"; excluded: string[] }
+  | { op: "claim"; handle: string }
+  | { op: "watch" }
+  | { op: "close" }
   | { op: "dock"; parent: string; bounds: RdpBounds; visible: boolean }
   | { op: "geometry"; bounds: RdpBounds; visible: boolean };
 export type NativeRequest = NativeOperation & { id: number };
-export interface NativeReply { id: number; ok: boolean; found?: boolean; windowClass?: string; error?: string }
+export interface NativeReply {
+  id: number; ok: boolean; found?: boolean; windowHandle?: string;
+  claimed?: boolean; alive?: boolean; windowClass?: string; error?: string;
+}
 
 export const RDP_POLL_INTERVAL_MS = 250;
 export const RDP_ATTACH_TIMEOUT_MS = 10_000;
+export const RDP_WATCH_INTERVAL_MS = 2_000;
+
+/** Match an endpoint token, not an arbitrary substring (10.0.0.5 must not match .50). */
+export function matchesRdpTitle(title: string, host: string, port = 3389): boolean {
+  const target = host.replace(/^\[|\]$/g, "").replace(/\.$/, "").toLowerCase();
+  if (!target) return false;
+  const escaped = target.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = new RegExp(`(?:^|[^a-z0-9._:%-])\\[?${escaped}\\]?(?::(\\d+))?(?=$|[^a-z0-9._:%-])`, "i");
+  const match = pattern.exec(title);
+  return Boolean(match && (match[1] ? Number(match[1]) === port : port === 3389));
+}
 
 /** One in-flight native request per polling loop; the deadline also covers a stuck call. */
 export function pollForRdpWindow(probe: () => Promise<boolean>, signal: AbortSignal,

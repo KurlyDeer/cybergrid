@@ -1,8 +1,10 @@
 // Koffi is loaded lazily inside the utility process, never by the app entrypoint.
 import type { RdpBounds } from "../../shared/ipc";
+import { matchesRdpTitle } from "./native-protocol";
 
 export const FRAME_FLAGS = 0x0020 | 0x0010 | 0x4000 | 0x0004; // FRAMECHANGED | NOACTIVATE | ASYNCWINDOWPOS | NOZORDER
-export const RDP_WINDOW_CLASSES = ["UIMainClass", "OPWindowClass", "TscShellContainerClass"] as const;
+export const RDP_WINDOW_CLASS = "TscShellContainerClass";
+const OWNER_PROPERTY = "CyberGrid.Rdp.WindowOwner";
 
 export async function loadBindings() {
   const koffi = await import("koffi");
@@ -12,7 +14,10 @@ export async function loadBindings() {
   const hwnd = koffi.pointer("HWND", koffi.opaque());
   const callback = koffi.proto("__stdcall", "EnumWindowsProc", "bool", [hwnd, "intptr_t"]);
   const enumWindows = user32.func("__stdcall", "EnumWindows", "bool", [koffi.pointer(callback), "intptr_t"]);
-  const getPid = user32.func("__stdcall", "GetWindowThreadProcessId", "uint32_t", [hwnd, "uint32_t *"]);
+  const getTitle = user32.func("__stdcall", "GetWindowTextW", "int", [hwnd, "void *", "int"]);
+  const getProperty = user32.func("__stdcall", "GetPropW", hwnd, [hwnd, "str16"]);
+  const setProperty = user32.func("__stdcall", "SetPropW", "bool", [hwnd, "str16", hwnd]);
+  const post = user32.func("__stdcall", "PostMessageW", "bool", [hwnd, "uint32_t", "uintptr_t", "intptr_t"]);
   const getClass = user32.func("__stdcall", "GetClassNameA", "int", [hwnd, "char *", "int"]);
   const getStyle = user32.func("__stdcall", "GetWindowLongPtrA", "intptr_t", [hwnd, "int"]);
   const setStyle = user32.func("__stdcall", "SetWindowLongPtrA", "intptr_t", [hwnd, "int", "intptr_t"]);
@@ -26,10 +31,30 @@ export async function loadBindings() {
   const setError = kernel32.func("__stdcall", "SetLastError", "void", ["uint32_t"]);
   const getError = kernel32.func("__stdcall", "GetLastError", "uint32_t", []);
   let target: unknown;
-  let targetPid = 0;
-  const pidFor = (handle: unknown): number => { const value = Buffer.alloc(4); getPid(handle, value); return value.readUInt32LE(); };
+  let expectedHost = "";
+  let expectedPort = 3389;
+  let marker = 0n;
+  let prepared = false;
+  let claimed = false;
+  const baseline = new Set<string>();
+  const handleKey = (handle: unknown): string => String(handle);
+  const classFor = (handle: unknown): string => {
+    const buffer = Buffer.alloc(256);
+    const length = Number(getClass(handle, buffer, buffer.length));
+    return buffer.toString("utf8", 0, Math.max(0, Math.min(length, buffer.length)));
+  };
+  const titleFor = (handle: unknown): string => {
+    const buffer = Buffer.alloc(8192);
+    const length = Number(getTitle(handle, buffer, buffer.length / 2));
+    return buffer.toString("utf16le", 0, Math.max(0, Math.min(length * 2, buffer.length)));
+  };
+  const owned = (): boolean => Boolean(target && claimed && isWindow(target) &&
+    classFor(target) === RDP_WINDOW_CLASS && getProperty(target, OWNER_PROPERTY) === marker);
+  const available = (handle: unknown): boolean => Boolean(isWindow(handle) && isVisible(handle) &&
+    !baseline.has(handleKey(handle)) && classFor(handle) === RDP_WINDOW_CLASS &&
+    !getProperty(handle, OWNER_PROPERTY) && matchesRdpTitle(titleFor(handle), expectedHost, expectedPort));
   const ensureTarget = (): void => {
-    if (!target || !isWindow(target) || pidFor(target) !== targetPid) throw new Error("The RDP window is no longer available.");
+    if (!owned()) throw new Error("The RDP window is no longer available.");
   };
   const position = (bounds: RdpBounds, visible: boolean, nudge: boolean): void => {
     const width = Math.max(1, Math.round(bounds.width));
@@ -45,21 +70,39 @@ export async function loadBindings() {
     if (visible) { redraw(target, null, null, 0x0001 | 0x0080 | 0x0400); update(target); }
   };
   return {
-    find(processId: number): { found: boolean; windowClass?: string } {
-      let rank: number = RDP_WINDOW_CLASSES.length;
-      let selected: unknown;
-      let windowClass: string | undefined;
+    prepare(host: string, port: number | undefined, token: bigint): void {
+      if (prepared) throw new Error("RDP window search is already prepared.");
+      expectedHost = host; expectedPort = port ?? 3389; marker = token;
+      if (!host || marker <= 0n) throw new Error("Invalid RDP window search.");
+      // Never steal a window that was already open before this launch.
       enumWindows((candidate: unknown) => {
-        if (pidFor(candidate) !== processId || !isVisible(candidate)) return true;
-        const buffer = Buffer.alloc(256);
-        const length = Number(getClass(candidate, buffer, buffer.length));
-        const name = buffer.toString("utf8", 0, Math.max(0, length));
-        const index = (RDP_WINDOW_CLASSES as readonly string[]).indexOf(name);
-        if (index >= 0 && index < rank) { rank = index; selected = candidate; windowClass = name; }
+        if (classFor(candidate) === RDP_WINDOW_CLASS) baseline.add(handleKey(candidate));
         return true;
       }, 0);
-      if (selected) { target = selected; targetPid = processId; }
-      return { found: Boolean(selected), windowClass };
+      prepared = true;
+    },
+    find(excluded: string[]): { found: boolean; windowHandle?: string; windowClass?: string } {
+      if (!prepared) throw new Error("RDP search was not prepared.");
+      const skipped = new Set(excluded);
+      let selected: unknown;
+      enumWindows((candidate: unknown) => {
+        if (!skipped.has(handleKey(candidate)) && available(candidate)) { selected = candidate; return false; }
+        return true;
+      }, 0);
+      target = selected;
+      return { found: Boolean(selected), windowHandle: selected ? handleKey(selected) : undefined,
+        windowClass: selected ? RDP_WINDOW_CLASS : undefined };
+    },
+    claim(handle: string): boolean {
+      if (!target || handleKey(target) !== handle || !available(target)) return false;
+      if (!setProperty(target, OWNER_PROPERTY, marker)) throw new Error("Windows rejected RDP window ownership.");
+      claimed = true;
+      return owned();
+    },
+    alive(): boolean { return owned(); },
+    close(): void {
+      // Post to the verified HWND, never to a stale launcher PID or every mstsc process.
+      if (owned() && !post(target, 0x0010, 0, 0)) throw new Error("Windows rejected the RDP close request.");
     },
     dock(parent: bigint, bounds: RdpBounds, visible: boolean): void {
       ensureTarget();

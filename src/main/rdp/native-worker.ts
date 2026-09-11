@@ -12,7 +12,11 @@ async function handle(data: NativeRequest): Promise<void> {
     bindings ??= loadBindings();
     const native = await bindings;
     switch (data.op) {
-      case "find": Object.assign(reply, native.find(data.processId)); break;
+      case "prepare": native.prepare(data.host, data.port, BigInt(data.marker)); break;
+      case "find": Object.assign(reply, native.find(data.excluded)); break;
+      case "claim": reply.claimed = native.claim(data.handle); break;
+      case "watch": reply.alive = native.alive(); break;
+      case "close": native.close(); break;
       case "dock": native.dock(BigInt(data.parent), data.bounds, data.visible); break;
       case "geometry": native.geometry(data.bounds, data.visible); break;
       default: throw new Error("Unknown RDP native operation.");

@@ -100,7 +100,7 @@ type NoVncRfbConstructor = new (
 
 type WorkspaceTabKind = ConnectionProtocol | "welcome" | "diagnostic";
 type WorkspaceStatus = SshConnectionStatus | RdpConnectionStatus | "idle" | "loading" | "ready" | "opening";
-type SwitchDeviceOs = "auto" | "cisco" | "fortinet" | "hp" | "generic";
+type SwitchDeviceOs = "auto" | "cisco" | "fortinet" | "paloalto" | "windows" | "hp" | "generic";
 
 interface WorkspaceTab {
   id: string;
@@ -1856,10 +1856,12 @@ async function reconnectSshTab(tab: WorkspaceTab): Promise<void> {
 }
 
 function updateRdpTabStatus(tab: WorkspaceTab, event: RdpStatusEvent): void {
+  if (!tabs.has(tab.id)) return;
+  if (event.status === "closed") { void closeTab(tab.id); return; }
   updateTabStatus(tab, event.status, event.message);
   if (tab.rdpMessageElement) tab.rdpMessageElement.textContent = event.message ?? event.status;
   tab.rdpViewportElement?.classList.toggle("embedded", event.status === "running");
-  if (tab.rdpSessionId && (event.status === "closed" || event.status === "error")) {
+  if (tab.rdpSessionId && event.status === "error") {
     window.cybergrid.rdp.setVisible(tab.rdpSessionId, false);
   }
 }
@@ -1908,11 +1910,18 @@ function attachSshSession(tab: WorkspaceTab, sessionId: string): void {
 }
 
 function attachRdpSession(tab: WorkspaceTab, sessionId: string): void {
+  if (!tabs.has(tab.id)) {
+    retireSession(sessionId);
+    queuedRdpStatus.delete(sessionId);
+    void window.cybergrid.rdp.disconnect(sessionId).catch(() => undefined);
+    return;
+  }
   tab.rdpSessionId = sessionId;
   rdpSessions.set(sessionId, tab);
   const status = queuedRdpStatus.get(sessionId);
   if (status) updateRdpTabStatus(tab, status);
   queuedRdpStatus.delete(sessionId);
+  if (!tabs.has(tab.id)) return;
   window.cybergrid.rdp.setVisible(sessionId, activeTabId === tab.id && !document.querySelector("#global-diagnostics[open], #bug-report[open], #global-modal[open]"));
   requestAnimationFrame(() => updateRdpBounds(tab));
 }
@@ -2166,6 +2175,9 @@ function installSwitchToolsDrawer(tab: WorkspaceTab, profile?: ServerProfileSumm
     ["auto", "Auto-Detect"],
     ["cisco", "Cisco IOS"],
     ["fortinet", "FortiOS"],
+    ["paloalto", "Palo Alto PAN-OS"],
+    ["windows", "Windows Server"],
+    ["hp", "HP ProCurve"],
     ["generic", "Linux / Generic"],
   ] as const) {
     const option = document.createElement("option");
@@ -2334,7 +2346,17 @@ function installSwitchToolsDrawer(tab: WorkspaceTab, profile?: ServerProfileSumm
       { command: "get system status", tooltip: "Display FortiOS version, serial number, and system status" },
       { command: "show full-configuration", tooltip: "Display the complete FortiOS configuration" },
       { command: "get hardware status", tooltip: "Display Fortinet hardware and sensor information" },
-      { command: "diagnose sys top", tooltip: "Display live FortiOS process and resource usage" },
+      { command: "diagnose sys top", tooltip: "Display live FortiOS process and resource usage; press q to stop" },
+      { command: "get router info routing-table all", tooltip: "FortiOS: display the routing table (PAN-OS uses show routing table)" },
+    ],
+    windows: [
+      { command: "ipconfig /all", tooltip: "Windows CMD or PowerShell: display all adapter and DNS configuration" },
+      { command: "netstat -ano", tooltip: "Windows CMD or PowerShell: list connections, listening ports and process IDs" },
+      { command: "Get-Process", tooltip: "PowerShell only: list running processes and resource use" },
+    ],
+    paloalto: [
+      { command: "show routing table", tooltip: "PAN-OS operational mode: display the firewall routing table" },
+      { command: "show system info", tooltip: "PAN-OS operational mode: display platform and software details" },
     ],
     hp: [
       { command: "show interfaces brief", tooltip: "Summarize HP ProCurve interface state" },
@@ -2357,7 +2379,8 @@ function installSwitchToolsDrawer(tab: WorkspaceTab, profile?: ServerProfileSumm
         toolsHost.append(category.section);
       }
     } else if (deviceOs !== "generic" && deviceOs !== "auto") {
-      const commands = accordion(deviceOs === "fortinet" ? "FortiOS Commands" : "HP ProCurve Commands", true);
+      const headings = { fortinet: "FortiOS Commands", paloalto: "Palo Alto Commands", windows: "Windows Server Commands", hp: "HP ProCurve Commands" };
+      const commands = accordion(headings[deviceOs], true);
       addCommandButtons(commands.content, vendorCommands[deviceOs]);
       toolsHost.append(commands.section);
     } else {
@@ -3959,11 +3982,12 @@ function renderProfiles(): void {
     folder.title = node.path;
     folder.style.setProperty("--node-color", defaults?.indicatorColor ?? "var(--accent)");
     folder.setAttribute("aria-expanded", String(!collapsedGroups.has(node.path)));
-    folder.append(
+    const folderContent = createTextElement("span", "folder-content", "");
+    folderContent.append(
       createTextElement("span", "folder-chevron", collapsedGroups.has(node.path) ? ">" : "v"),
       createTextElement("span", "folder-name", `${defaults?.icon ? `${DEVICE_ICON_LABELS[defaults.icon]} · ` : ""}${node.name}`),
-      createTextElement("span", "folder-count folder-count-badge", String(count(node))),
     );
+    folder.append(folderContent, createTextElement("span", "folder-count folder-count-badge", String(count(node))));
     folder.addEventListener("click", (event) => selectTreeItem(treeKey, event));
     folder.addEventListener("dblclick", () => {
       if (collapsedGroups.has(node.path)) collapsedGroups.delete(node.path); else collapsedGroups.add(node.path);

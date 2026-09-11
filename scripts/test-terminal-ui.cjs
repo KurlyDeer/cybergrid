@@ -97,7 +97,7 @@ async function until(code) {
 }
 app.whenReady().then(async () => {
   const renderer = readFileSync(join(root, "src/renderer/renderer.ts"), "utf8");
-  buildSync({ stdin: { contents: renderer + "\nwindow.__terminalTest = { tabs, connectQuickSsh, createTerminalTab, closeTab, openSettingsModal, applyHealthStatus, updateBroadcastControls, applySettings, currentSettings, queuedSshData, queuedSshStatus, openServerContextMenu, executeContextTool, setProfiles: profiles => { savedProfiles=profiles; renderProfiles(); } };", loader: "ts", resolveDir: join(root, "src/renderer") }, bundle: true, platform: "browser", format: "iife", outfile: join(root, "build/renderer/renderer-test.js") });
+  buildSync({ stdin: { contents: renderer + "\nwindow.__terminalTest = { tabs, connectQuickSsh, createTerminalTab, closeTab, openSettingsModal, applyHealthStatus, updateBroadcastControls, applySettings, currentSettings, queuedSshData, queuedSshStatus, createRdpTab, attachRdpSession, handleRdpStatus, queuedRdpStatus, rdpSessions, openServerContextMenu, executeContextTool, setProfiles: profiles => { savedProfiles=profiles; renderProfiles(); } };", loader: "ts", resolveDir: join(root, "src/renderer") }, bundle: true, platform: "browser", format: "iife", outfile: join(root, "build/renderer/renderer-test.js") });
   const html = readFileSync(join(root, "build/renderer/index.html"), "utf8").replace('src="./startup.js"', 'src="./renderer-test.js"');
   writeFileSync(join(root, "build/renderer/renderer-test.html"), html);
   window = new BrowserWindow({ show: false, width: 1280, height: 850, webPreferences: { preload: join(root, "build/main/preload.js"), contextIsolation: true, nodeIntegration: false, backgroundThrottling: false, offscreen: true } });
@@ -251,7 +251,8 @@ app.whenReady().then(async () => {
   await until('!document.getElementById("global-diagnostics").open');
   await require("./test-v138-ui.cjs")({window, channels, evaluate, until, sleep, root});
   await require("./test-v139-ui.cjs")({window,evaluate,until,sleep,root,contextRequests,contextCancels,pendingContexts,captureFrame});
-  console.log("PASS: v1.3.9 nested badges/context tools plus updater, themes, lifecycle, diagnostics, settings, broadcast and terminal regressions");
+  await require("./test-v1310-ui.cjs")({window,evaluate,until,sleep,root,writes,captureFrame});
+  console.log("PASS: v1.3.10 RDP lifecycle, Flexbox badges and vendor macros plus earlier UI regressions");
   window.destroy();
   app.exit(0);
 }).catch((error) => { console.error(error); app.exit(1); });

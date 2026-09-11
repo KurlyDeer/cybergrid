@@ -14,6 +14,16 @@
 
 CyberGrid consolidates the daily tools of a senior systems administrator into one focused, high-density desktop workspace. Its compact mRemote-style connection tree, edge-to-edge session tabs, encrypted connection management, file transfer, discovery, IPAM, diagnostics, automation, and operational documentation are designed for fast keyboard-driven administration without requiring a central cloud service.
 
+## Version 1.3.10 — RDP Window Lifecycle & Flexbox Tree
+
+- **Window-based RDP attachment:** discover new `TscShellContainerClass` windows whose Unicode title contains the requested hostname/IP as a complete endpoint token. Launcher PID changes and immediate launcher exits no longer end the session. Default and custom RDP port formatting is preserved.
+- **Window lifecycle:** after docking, a two-second check verifies `IsWindow`, class, and a per-session window ownership marker. Closing the RDP window removes its tab cleanly; late attachment/status messages cannot revive a closed tab. Native calls remain isolated in a utility process, with a 250 ms attachment poll and 10-second deadline.
+- **Safe window selection:** snapshot pre-existing RDP windows before launch, reserve handles across concurrent tabs, and reject recycled handles. Programmatic closure posts `WM_CLOSE` to the claimed window instead of killing a stale launcher PID. Windows may require its normal disconnect confirmation.
+- **Flexbox folder rows:** the icon/name share a shrinking content region and the count badge stays in normal flow. Deep indentation is capped to preserve readable names; badges and sidebar scrolling were tested at 25 levels with three-digit counts.
+- **Expanded Session Tools:** choose Windows Server for `ipconfig /all`, `netstat -ano`, and PowerShell's `Get-Process`; FortiOS for `get system status` and `diagnose sys top`; or Palo Alto PAN-OS for `show routing table`. These are explicit terminal commands, not commands injected into an RDP desktop.
+
+CyberGrid uses vanilla TypeScript rather than React. This update fixes lifecycle ownership and late-event handling, not React rendering. See [v1.3.10 verification notes](docs/VERIFICATION-v1.3.10.md) for coverage and compatibility limits. Live authenticated RDP rendering still requires workstation validation; window titles, elevation, GPU and DPI behavior vary across Windows environments.
+
 ## Version 1.3.9 — RDP Responsiveness & Context Tools
 
 - **Isolated RDP native host:** each RDP session lazily starts a killable Electron utility process for Win32 calls. The main process polls asynchronously every 250 ms, with one outstanding probe and a 10-second attachment deadline. A blocked native call can no longer monopolize Electron's JavaScript event loop. Credential Manager and process termination commands are asynchronous too.
@@ -93,7 +103,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, tests, security expectations, 
 
 ## Architecture
 
-- **Native RDP docking:** CyberGrid tracks the spawned mstsc PID, finds its `TscShellContainerClass` HWND, strips native chrome, uses Win32 `SetParent`, and updates the docked viewport on resize. Behavior depends on Windows and Remote Desktop client versions.
+- **Native RDP docking:** CyberGrid discovers a new `TscShellContainerClass` HWND by endpoint title, claims the window, strips native chrome, uses Win32 `SetParent`, and updates its viewport on resize. The window—not the initial launcher PID—owns the session lifecycle. Behavior depends on Windows and Remote Desktop client versions.
 - **Reliable embedded web consoles:** the isolated Web Console partition accepts appliance self-signed HTTPS certificates while the main application, updater, and unrelated Electron content retain normal certificate validation.
 - **Per-user runtime storage:** vault, preferences, workspace, RDP runtime files, and automatic audit transcripts live under Electron `userData` (`%APPDATA%\CyberGrid` on Windows). Config backups use the selected backup folder, and opt-in session logs use Documents. Runtime data is never written into the installation directory.
 - **Minimal connection editor:** saved connections expose only name, endpoint, protocol, domain, username, password, and an optional port override. Existing advanced metadata remains intact when a connection is edited.
@@ -156,7 +166,7 @@ Installed builds check the repository's published release metadata after startup
 
 ### Requirements
 
-- Windows 10/11 x64 for the complete v1.3.7 desktop feature set and native HWND-docked RDP integration.
+- Windows 10/11 x64 for the complete desktop feature set and native HWND-docked RDP integration.
 - Node.js 22 LTS and npm.
 - Git.
 - Native build prerequisites supported by Electron Builder if a prebuilt native dependency is unavailable.
@@ -226,7 +236,8 @@ flowchart LR
   PRELOAD --> IPC["Validated Electron IPC"]
   IPC --> MAIN["Main-process controllers"]
   MAIN --> PROTOCOLS["SSH / SFTP / Serial / Telnet\nVNC / Web / Local shells"]
-  MAIN --> RDP["Owned native mstsc HWND\nGWLP_HWNDPARENT + SetWindowPos"]
+  MAIN --> RDP["Isolated RDP utility process\nTitle/class discovery + HWND lifecycle"]
+  RDP --> HWND["Claimed mstsc window\nSetParent + SetWindowPos + repaint"]
   MAIN --> VAULT["AES-256-GCM vault\nin userData"]
   MAIN --> OPS["Discovery / diagnostics / health\naudit / tasks / sync"]
   VAULT --> OSKEY["Optional master password\nor OS safeStorage key"]

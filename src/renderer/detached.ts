@@ -58,6 +58,7 @@ function handleData(event: SshDataEvent | StreamDataEvent | SerialDataEvent | Lo
 function handleStatus(event: SshStatusEvent | StreamStatusEvent | SerialStatusEvent | LocalTerminalStatusEvent | RdpStatusEvent): void {
   if (descriptor?.sessionId !== event.sessionId) return;
   status.textContent = event.message || event.status;
+  if (descriptor.protocol === "rdp" && event.status === "closed") window.close();
 }
 
 function updateRdpBounds(): void {
